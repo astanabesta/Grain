@@ -60,6 +60,25 @@ not exercised on a device. It is checked in a desktop browser against Chromium's
 fake capture device. If a device-specific failure shows up, the app renders the
 error and user agent on screen instead of a black rectangle.
 
+## The pipeline
+
+RAW in -> recipe -> JPEG out.
+
+- **Input**: a photo (any JPEG/PNG), a live camera stream, or a **raw file**.
+  `engine/raw.js` decodes uncompressed TIFF/DNG (8- and 16-bit, RGB or CFA with
+  a bilinear demosaic) and applies only the camera's `AsShotNeutral` — the
+  camera's own balance, not a look. DNGs using lossless-JPEG compression and
+  Fujifilm `.RAF` are **refused with a message**, because decoding them badly
+  would be worse than saying no: export a 16-bit TIFF instead.
+- **Recipe**: 213 recipes — 12 curated plus 201 from the
+  [open-fuji-recipes](https://github.com/matthieurobin/open-fuji-recipes) corpus.
+- **Render**: `engine/gl.js` is a WebGL2 fragment shader that does the pointwise
+  recipe maths at frame rate, with the 33^3 Fujifilm LUT as a 3D texture so the
+  sampler does the interpolation. `engine/color.js` is the CPU engine and runs
+  whenever WebGL2 is unavailable.
+- **Output**: JPEG. Stills come from `ImageCapture.takePhoto()` at sensor
+  resolution, not from the preview buffer.
+
 ## Signing
 
 CI signs the release APK with a throwaway key generated per build, so the APK is
