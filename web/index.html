@@ -1128,6 +1128,28 @@ pre.recipe {
 </svg>
 
 <script>
+// A phone has no devtools. If anything throws before the UI is up, say so on
+// screen instead of leaving a black rectangle. Installed before the engine so
+// it also catches engine-level failures.
+function __rcFatal(err) {
+  try {
+    var box = document.getElementById('fatal');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'fatal';
+      box.style.cssText = 'position:fixed;inset:0;z-index:9999;padding:32px 22px;'
+        + 'background:#0a0a0c;color:#ffb4b4;font:13px/1.5 ui-monospace,monospace;'
+        + 'white-space:pre-wrap;overflow:auto';
+      document.body.appendChild(box);
+    }
+    box.textContent = 'Recipe Cam failed to start\n\n'
+      + (err && (err.stack || err.message) || String(err))
+      + '\n\nDevice: ' + navigator.userAgent;
+  } catch (e) { /* nothing left to do */ }
+}
+window.addEventListener('error', function (e) { __rcFatal(e.error || e.message); });
+window.addEventListener('unhandledrejection', function (e) { __rcFatal(e.reason); });
+
 /* ══════════════ ENGINE (inlined) ══════════════ */
 // recipes.js — Fujifilm film-simulation profiles + recipe data
 //
@@ -2061,6 +2083,9 @@ const IMAGE_DATA = "data:image/jpeg;base64,/9j/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHB
     busy: false,
     guide: null,
     dpr: 1,
+    camState: 'idle',      // idle | starting | live | denied | unavailable
+    facing: 'environment', // environment | user
+    lastStream: null,
   };
 
   // ── embedded LUTs ────────────────────────────────────────────
@@ -2266,6 +2291,7 @@ const IMAGE_DATA = "data:image/jpeg;base64,/9j/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHB
 
   // ── live loop (throttled; CPU rendering is ~150-250ms) ──────
   let liveTimer = null;
+
   function startLive() {
     if (state.live) return;
     state.live = true;
@@ -2275,8 +2301,84 @@ const IMAGE_DATA = "data:image/jpeg;base64,/9j/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHB
       liveTimer = setTimeout(tick, 220);
     };
     tick();
-    setMode('LIVE', false);
+    setMode(state.camState === 'live' ? 'LIVE' : 'SAMPLE', false);
+    updateShutterState();
   }
+
+  // ══ camera ════════════════════════════════════════════════════
+  // Everything a phone camera needs before getUserMedia will hand over a
+  // stream: a secure context, a declared API, a user gesture on the first
+  // call, and (in a WebView shell) a native permission grant. Each failure has
+  // its own name, and they need different answers — a single "camera failed"
+  // toast sends people to a settings screen that cannot help them.
+  function cameraSupport() {
+    if (!window.isSecureContext) return 'insecure';
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return 'unsupported';
+    return 'ok';
+  }
+
+  async function openCamera(opts = {}) {
+    const support = cameraSupport();
+    if (support !== 'ok') {
+      state.camState = 'unavailable';
+      toast(support === 'insecure'
+        ? 'Camera needs HTTPS — use "Load a photo" instead'
+        : 'This browser has no camera API — use "Load a photo"', 4200);
+      updateShutterState();
+      return false;
+    }
+    if (state.camState === 'starting') return false;
+    state.camState = 'starting';
+    updateShutterState();
+
+    const wantFacing = opts.facing || state.facing || 'environment';
+    const attempts = [
+      { video: { facingMode: { exact: wantFacing }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false },
+      { video: { facingMode: wantFacing }, audio: false },
+      { video: true, audio: false },
+    ];
+
+    let lastErr = null;
+    for (const constraints of attempts) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        const v = $('video');
+        state.video = v;            // the render path reads this, not the DOM
+        v.srcObject = stream;
+        v.setAttribute('playsinline', '');
+        v.muted = true;
+        await v.play();
+        // some devices report 0x0 until the first frame arrives
+        await new Promise((res) => {
+          if (v.videoWidth) return res();
+          const done = () => res();
+          v.addEventListener('loadedmetadata', done, { once: true });
+          setTimeout(done, 1500);
+        });
+        state.lastStream = stream;
+        state.facing = wantFacing;
+        state.camState = 'live';
+        startLive();
+        toast('Camera live');
+        buildMenu();
+        return true;
+      } catch (err) {
+        lastErr = err;
+        // Only a "constraint" failure is worth retrying with looser constraints.
+        // A refused permission will be refused again.
+        const n = err && err.name;
+        if (n === 'OverconstrainedError' || n === 'NotFoundError') continue;
+        break;
+      }
+    }
+
+    state.camState = lastErr && lastErr.name === 'NotAllowedError' ? 'denied' : 'unavailable';
+    toast(cameraHelp(lastErr), 5200);
+    updateShutterState();
+    buildMenu();
+    return false;
+  }
+
   function stopLive() {
     state.live = false;
     clearTimeout(liveTimer);
@@ -2284,35 +2386,32 @@ const IMAGE_DATA = "data:image/jpeg;base64,/9j/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHB
       state.video.srcObject.getTracks().forEach((t) => t.stop());
       state.video.srcObject = null;
     }
-    setMode('SAMPLE', true);
-    renderView();
+    state.lastStream = null;
+    if (state.camState === 'live') state.camState = 'idle';
+    updateShutterState();
   }
 
-  async function openCamera() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
-        audio: false,
-      });
-      const v = $('video');
-      v.srcObject = stream;
-      await v.play();
-      state.video = v;
-      startLive();
-      toast('Camera live');
-      buildMenu();
-    } catch (err) {
-      state.live = false;
-      toast(cameraHelp(err), 4200);
-      buildMenu();
-    }
-  }
   function cameraHelp(err) {
     const n = err && err.name;
-    if (n === 'NotAllowedError') return 'Camera permission denied — allow it, or use Photo';
-    if (n === 'NotFoundError') return 'No camera found — use Photo to load an image';
-    if (!navigator.mediaDevices) return 'This browser blocks the camera — use Photo';
-    return 'Camera unavailable — use Photo to load an image';
+    if (n === 'NotAllowedError') {
+      return 'Camera blocked. Check the app permission in system settings, then reopen — or use "Load a photo"';
+    }
+    if (n === 'NotFoundError' || n === 'OverconstrainedError') {
+      return 'No camera matched — try "Load a photo"';
+    }
+    if (n === 'NotReadableError') {
+      return 'Camera is busy in another app — close it and try again';
+    }
+    return 'Camera unavailable — use "Load a photo"';
+  }
+
+  // The shutter must never look ready when it cannot fire.
+  function updateShutterState() {
+    const btn = $('btnShoot');
+    if (!btn) return;
+    const ready = state.camState === 'live' || !!state.image;
+    btn.classList.toggle('disabled', !ready);
+    btn.setAttribute('aria-disabled', String(!ready));
   }
 
   function setMode(text, sample) {
@@ -2744,15 +2843,49 @@ const IMAGE_DATA = "data:image/jpeg;base64,/9j/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHB
 
     // camera source
     const c1 = card('Source');
+    const stateText = {
+      live: 'Live camera',
+      starting: 'Starting…',
+      idle: 'Camera off',
+      denied: 'Camera blocked',
+      unavailable: 'No camera here',
+    }[state.camState] || 'Camera';
+
     const swRow = document.createElement('div');
     swRow.className = 'switch-row';
-    swRow.innerHTML = `<span>Live camera</span><div class="switch${state.live ? ' on' : ''}" id="swLive"></div>`;
+    swRow.innerHTML = `<span>${stateText}</span>` +
+      `<div class="switch${state.live ? ' on' : ''}" id="swLive"></div>`;
     c1.appendChild(swRow);
-    $('swLive').addEventListener('click', () => {
-      if (state.live) { stopLive(); }
-      else { openCamera(); }
-      $('swLive').classList.toggle('on', state.live);
+    $('swLive').addEventListener('click', async () => {
+      if (state.live) { stopLive(); $('swLive').classList.remove('on'); }
+      else {
+        const ok = await openCamera();
+        $('swLive').classList.toggle('on', ok);
+        // the label carries the state; rebuild so it is never stale
+        if (ok) buildMenu();
+      }
     });
+
+    // front / back, the one control every camera has
+    if (state.live || state.camState === 'live') {
+      const flipRow = document.createElement('div');
+      flipRow.className = 'ctl';
+      flipRow.innerHTML = `<div class="ctl-top"><label>Lens</label></div>` +
+        `<div class="seg" id="segFacing">` +
+        `<button data-v="environment">Back</button><button data-v="user">Front</button></div>`;
+      c1.appendChild(flipRow);
+      const mark = () => {
+        for (const b of $('segFacing').children) b.classList.toggle('on', b.dataset.v === state.facing);
+      };
+      mark();
+      $('segFacing').addEventListener('click', async (e) => {
+        const b = e.target.closest('button');
+        if (!b || b.dataset.v === state.facing) return;
+        stopLive();
+        const ok = await openCamera({ facing: b.dataset.v });
+        if (ok) buildMenu();
+      });
+    }
 
     const photoRow = document.createElement('div');
     photoRow.className = 'ctl';
@@ -2874,6 +3007,14 @@ const IMAGE_DATA = "data:image/jpeg;base64,/9j/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHB
 
   // ── shooting ────────────────────────────────────────────────
   function shoot() {
+    if (!state.live && !state.image) {
+      // no stream and no photo: say so, and offer the one action that helps
+      toast(state.camState === 'denied'
+        ? 'Camera blocked — use "Load a photo" to shoot this recipe'
+        : 'Starting the camera…', 3600);
+      openCamera();
+      return;
+    }
     if (state.timer > 0) return countdownThenShoot();
     fire();
   }
@@ -2942,10 +3083,34 @@ const IMAGE_DATA = "data:image/jpeg;base64,/9j/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHB
     $('btnGallery').style.backgroundSize = 'cover';
   }
 
-  function saveShot() {
+  async function saveShot() {
     if (!state.lastShot) return;
     const { canvas, name } = state.lastShot;
     const file = `recipe-cam_${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.jpg`;
+
+    // Inside the Android shell a blob <a download> silently does nothing, so
+    // write the file and hand it to the system share sheet — that is where
+    // "Save to Photos" lives. In a browser, the download path is correct.
+    const plugins = (window.Capacitor && window.Capacitor.Plugins) || null;
+    if (plugins && plugins.Filesystem) {
+      try {
+        const b64 = canvas.toDataURL('image/jpeg', 0.94).split(',')[1];
+        const res = await plugins.Filesystem.writeFile({
+          path: file, data: b64, directory: 'CACHE', recursive: true,
+        });
+        if (plugins.Share) {
+          await plugins.Share.share({ title: name, files: [res.uri] });
+          toast('Shared ' + file);
+        } else {
+          toast('Saved to app storage');
+        }
+        return;
+      } catch (err) {
+        if (err && err.message && /cancel/i.test(err.message)) return;   // user backed out
+        // fall through to the browser path rather than losing the shot
+      }
+    }
+
     canvas.toBlob((blob) => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -3058,6 +3223,13 @@ const IMAGE_DATA = "data:image/jpeg;base64,/9j/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHB
       if (b) setZoom(Number(b.dataset.zoom));
     });
 
+    // a refused stream is usually fixable by trying again after the user has
+    // granted the permission in system settings — so let the frame retry
+    $('app').addEventListener('click', (e) => {
+      if (e.target.closest('button, .lens-rail, .sheet, .backdrop, .review, .zoom, .topbar')) return;
+      if (state.camState === 'denied' || state.camState === 'unavailable') openCamera();
+    });
+
     // hold frame to compare
     $('app').addEventListener('pointerdown', (e) => {
       if (e.target.closest('button, .lens-rail, .sheet, .backdrop, .review, .zoom, .topbar')) return;
@@ -3104,6 +3276,18 @@ const IMAGE_DATA = "data:image/jpeg;base64,/9j/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHB
       if (e.key === 'c' || e.key === 'C') setCompare(false);
     });
 
+    // A camera app must let go of the sensor when it is not on screen, or
+    // Android hands the next app a black preview.
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        if (state.live) { stopLive(); state.wasLive = true; }
+      } else if (state.wasLive) {
+        state.wasLive = false;
+        openCamera();
+      }
+    });
+    window.addEventListener('beforeunload', () => { if (state.live) stopLive(); });
+
     window.addEventListener('resize', layout);
     window.addEventListener('orientationchange', () => setTimeout(layout, 250));
   }
@@ -3132,6 +3316,10 @@ const IMAGE_DATA = "data:image/jpeg;base64,/9j/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHB
       layout();
       scheduleThumbs();
       setExposure(0);
+      updateShutterState();
+      // A camera app opens on the camera. If the platform refuses, the sample
+      // frame stays so the app is still usable rather than a black screen.
+      openCamera();
     };
     img.src = IMAGE_DATA;
   }
