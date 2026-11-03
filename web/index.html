@@ -2144,8 +2144,11 @@ const IMAGE_DATA = "data:image/jpeg;base64,/9j/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHB
     // The preview is rendered at ~0.4 MP regardless of screen density: the
     // engine is CPU-side (~250 ms at 1.5 MP), so a smaller buffer keeps the
     // live view usable while the saved file stays full-resolution.
-    const targetPx = 420000;
-    const dpr = Math.max(0.85, Math.min(2, Math.min(window.devicePixelRatio || 1,
+    // The preview does not decide the saved resolution any more (stills come
+    // from ImageCapture at sensor size), so this budget is purely about frame
+    // rate. 0.2 MP is ~2.5x faster than 0.4 MP with no cost to the output.
+    const targetPx = 200000;
+    const dpr = Math.max(0.7, Math.min(2, Math.min(window.devicePixelRatio || 1,
                           Math.sqrt(targetPx / (W * H)))));
     viewport.style.width = '100%';
     viewport.style.height = '100%';
@@ -2206,6 +2209,7 @@ const IMAGE_DATA = "data:image/jpeg;base64,/9j/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHB
     wctx.drawImage(srcEl, cx, cy, cw, ch, 0, 0, W, H);
     return wctx.getImageData(0, 0, W, H);
   }
+
 
   function renderView() {
     if (!state.guide) return;
@@ -2298,7 +2302,7 @@ const IMAGE_DATA = "data:image/jpeg;base64,/9j/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHB
     const tick = () => {
       if (!state.live) return;
       renderView();
-      liveTimer = setTimeout(tick, 220);
+      liveTimer = setTimeout(tick, 40);
     };
     tick();
     setMode(state.camState === 'live' ? 'LIVE' : 'SAMPLE', false);
@@ -3038,23 +3042,60 @@ const IMAGE_DATA = "data:image/jpeg;base64,/9j/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHB
     setTimeout(tick, 1000);
   }
 
-  function fire() {
+  // Grab the source pixels for a shot. For a live camera we ask ImageCapture
+  // for a real still — browsers that support it hand back the full sensor
+  // resolution, not the 1080p preview frame. Falling back to the video frame
+  // would silently cap every shot at video resolution, which is the difference
+  // between a camera and a screenshot of one.
+  async function capturePhoto() {
     const g = state.guide;
-    if (!g) { toast('Nothing to shoot yet'); return; }
     const srcEl = state.live ? state.video : state.image;
-    if (!srcEl) { toast('Nothing to shoot yet'); return; }
+    if (!srcEl) return null;
 
-    // Save at the source's own resolution, not the viewfinder's. The viewfinder
-    // is ~2x downscaled for speed; the file should not inherit that.
+    if (state.live && window.ImageCapture && state.lastStream) {
+      const track = state.lastStream.getVideoTracks()[0];
+      if (track) {
+        try {
+          const ic = new ImageCapture(track);
+          const blob = await ic.takePhoto();
+          const bmp = await createImageBitmap(blob);
+          let W = bmp.width, H = bmp.height;
+          const ar = g.w / g.h;
+          // crop to the guide's ratio
+          let cw = W, ch = W / ar;
+          if (ch > H) { ch = H; cw = H * ar; }
+          const c = document.createElement('canvas');
+          c.width = Math.round(cw); c.height = Math.round(ch);
+          const cx = c.getContext('2d', { willReadFrequently: true });
+          cx.drawImage(bmp, (W - cw) / 2, (H - ch) / 2, cw, ch, 0, 0, c.width, c.height);
+          bmp.close && bmp.close();
+          return {
+            img: cx.getImageData(0, 0, c.width, c.height),
+            W: c.width, H: c.height,
+            source: 'sensor',
+          };
+        } catch (err) {
+          // permission revoked mid-session, or the device refuses stills —
+          // a degraded shot beats no shot
+        }
+      }
+    }
+
+    // photo mode, or a camera that will not do stills: frame from the source
     const sw = state.live ? state.video.videoWidth : state.image.naturalWidth;
     const sh = state.live ? state.video.videoHeight : state.image.naturalHeight;
     const ar = g.w / g.h;
     let W = Math.min(1800, Math.round(Math.min(sw, sh * ar)));
     let H = Math.round(W / ar);
     if (H > sh) { H = sh; W = Math.round(H * ar); }
-
     const img = captureRegion(W, H);
-    if (!img) { toast('Nothing to shoot yet'); return; }
+    return img ? { img, W, H, source: state.live ? 'preview' : 'photo' } : null;
+  }
+
+  async function fire() {
+    const taken = await capturePhoto();
+    if (!taken) { toast('Nothing to shoot yet'); return; }
+    const { img, W, H, source } = taken;
 
     const f = $('flash');
     f.classList.add('fire');
@@ -3077,7 +3118,8 @@ const IMAGE_DATA = "data:image/jpeg;base64,/9j/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHB
     const sc = $('shot');
     sc.width = W; sc.height = H;
     sc.getContext('2d').putImageData(out, 0, 0);
-    $('shotMeta').textContent = `${r.name}\n${simLabel(r)} · ${W}×${H} · ${ms} ms`;
+    $('shotMeta').textContent =
+      `${r.name}\n${simLabel(r)} · ${W}×${H} · ${ms} ms · ${source}`;
     $('review').hidden = false;
     $('btnGallery').style.backgroundImage = `url(${cap.toDataURL('image/jpeg', 0.6)})`;
     $('btnGallery').style.backgroundSize = 'cover';
