@@ -1,0 +1,1363 @@
+[
+{
+"group": "Sony",
+"name": "FACTORY (ST)",
+"style": "Standard",
+"args": [
+0,
+0,
+0,
+"AUTO",
+0,
+0,
+0
+],
+"n": 1,
+"frame": "01-factory-st.jpg"
+},
+{
+"group": "Sony",
+"name": "Sony PT (portrait)",
+"style": "Portrait",
+"args": [
+0,
+0,
+0,
+"AUTO",
+0,
+0,
+0
+],
+"n": 2,
+"frame": "02-sony-pt-portrait.jpg"
+},
+{
+"group": "Sony",
+"name": "Sony NT (neutral)",
+"style": "Neutral",
+"args": [
+0,
+0,
+0,
+"AUTO",
+0,
+0,
+0
+],
+"n": 3,
+"frame": "03-sony-nt-neutral.jpg"
+},
+{
+"group": "Sony",
+"name": "Sony VV (vivid)",
+"style": "Vivid",
+"args": [
+0,
+0,
+0,
+"AUTO",
+0,
+0,
+0
+],
+"n": 4,
+"frame": "04-sony-vv-vivid.jpg"
+},
+{
+"group": "Sony",
+"name": "Sony VV2",
+"style": "Vivid",
+"args": [
+2,
+1,
+0,
+"AUTO",
+0,
+0,
+0
+],
+"n": 5,
+"frame": "05-sony-vv2.jpg"
+},
+{
+"group": "Sony",
+"name": "Sony FL (film-like)",
+"style": "Neutral",
+"args": [
+-3,
+-1,
+0,
+"AUTO",
+0,
+1,
+0
+],
+"n": 6,
+"frame": "06-sony-fl-film-like.jpg"
+},
+{
+"group": "Sony",
+"name": "Sony IN (instant)",
+"style": "Neutral",
+"args": [
+-3,
+-3,
+0,
+"AUTO",
+0,
+0,
+-1
+],
+"n": 7,
+"frame": "07-sony-in-instant.jpg"
+},
+{
+"group": "Sony",
+"name": "Sony SH (soft high-key)",
+"style": "Light",
+"args": [
+-2,
+-2,
+0,
+"AUTO",
+0,
+1,
+0,
+5,
+3,
+6
+],
+"n": 8,
+"frame": "08-sony-sh-soft-high-key.jpg"
+},
+{
+"group": "FujiSim",
+"name": "Provia",
+"style": "Standard",
+"args": [
+1,
+0,
+0,
+"AUTO",
+0,
+0,
+0,
+0,
+0,
+6
+],
+"n": 9,
+"frame": "09-provia.jpg"
+},
+{
+"group": "FujiSim",
+"name": "Velvia",
+"style": "Vivid",
+"args": [
+3,
+2,
+0,
+"AUTO",
+0,
+0,
+0
+],
+"n": 10,
+"frame": "10-velvia.jpg"
+},
+{
+"group": "FujiSim",
+"name": "Astia",
+"style": "Portrait",
+"args": [
+0,
+-1,
+0,
+"AUTO",
+0,
+1,
+0,
+0,
+1,
+6
+],
+"n": 11,
+"frame": "11-astia.jpg"
+},
+{
+"group": "FujiSim",
+"name": "Classic Chrome",
+"style": "Standard",
+"args": [
+-1,
+2,
+0,
+"AUTO",
+0,
+3,
+1,
+0,
+-1,
+6
+],
+"n": 12,
+"frame": "12-classic-chrome.jpg"
+},
+{
+"group": "FujiSim",
+"name": "Classic Negative",
+"style": "Standard",
+"args": [
+-3,
+3,
+1,
+"AUTO",
+0,
+-1,
+1,
+0,
+0,
+6
+],
+"n": 13,
+"frame": "13-classic-negative.jpg"
+},
+{
+"group": "FujiSim",
+"name": "Nostalgic Neg",
+"style": "Standard",
+"args": [
+1,
+0,
+0,
+"AUTO",
+0,
+3,
+0,
+0,
+0,
+6
+],
+"n": 14,
+"frame": "14-nostalgic-neg.jpg"
+},
+{
+"group": "FujiSim",
+"name": "Reala Ace",
+"style": "Standard",
+"args": [
+0,
+1,
+0,
+"AUTO",
+0,
+0,
+0
+],
+"n": 15,
+"frame": "15-reala-ace.jpg"
+},
+{
+"group": "FujiSim",
+"name": "Pro Neg Std",
+"style": "Portrait",
+"args": [
+-2,
+-1,
+0,
+"AUTO",
+0,
+0,
+0
+],
+"n": 16,
+"frame": "16-pro-neg-std.jpg"
+},
+{
+"group": "FujiSim",
+"name": "Pro Neg Hi",
+"style": "Portrait",
+"args": [
+-2,
+1,
+0,
+"AUTO",
+0,
+0,
+0
+],
+"n": 17,
+"frame": "17-pro-neg-hi.jpg"
+},
+{
+"group": "FujiSim",
+"name": "Eterna",
+"style": "Neutral",
+"args": [
+-3,
+-2,
+-1,
+"AUTO",
+0,
+0,
+0,
+0,
+-1,
+3
+],
+"n": 18,
+"frame": "18-eterna.jpg"
+},
+{
+"group": "FujiSim",
+"name": "Eterna Bleach Bypass",
+"style": "Neutral",
+"args": [
+-3,
+3,
+0,
+"AUTO",
+0,
+0,
+0,
+0,
+-1,
+"DRO_OFF"
+],
+"n": 19,
+"frame": "19-eterna-bleach-bypass.jpg"
+},
+{
+"group": "FujiSim",
+"name": "Acros",
+"style": "B&W",
+"args": [
+0,
+1,
+1,
+"AUTO",
+0,
+0,
+0
+],
+"n": 20,
+"frame": "20-acros.jpg"
+},
+{
+"group": "FujiSim",
+"name": "Acros +Ye (yellow filter)",
+"style": "B&W",
+"args": [
+0,
+1,
+1,
+"K",
+4000,
+0,
+0
+],
+"n": 21,
+"frame": "21-acros-plus-ye-yellow-filter.jpg"
+},
+{
+"group": "FujiSim",
+"name": "Acros +R (red filter)",
+"style": "B&W",
+"args": [
+0,
+0,
+0,
+"K",
+2500,
+0,
+0,
+7,
+0,
+6
+],
+"n": 22,
+"frame": "22-acros-plus-r-red-filter.jpg"
+},
+{
+"group": "FujiSim",
+"name": "Acros +G (green filter)",
+"style": "B&W",
+"args": [
+0,
+1,
+1,
+"K",
+5600,
+0,
+4
+],
+"n": 23,
+"frame": "23-acros-plus-g-green-filter.jpg"
+},
+{
+"group": "FujiSim",
+"name": "Sepia",
+"style": "Sepia",
+"args": [
+0,
+0,
+0,
+"AUTO",
+0,
+0,
+0
+],
+"n": 24,
+"frame": "24-sepia.jpg"
+},
+{
+"group": "FujiFilm",
+"name": "Fuji Pro 400H",
+"style": "Light",
+"args": [
+-2,
+-2,
+0,
+"AUTO",
+0,
+-1,
+1,
+0,
+2,
+6
+],
+"n": 25,
+"frame": "25-fuji-pro-400h.jpg"
+},
+{
+"group": "FujiFilm",
+"name": "Fuji Fortia 50",
+"style": "Vivid",
+"args": [
+3,
+2,
+0,
+"AUTO",
+0,
+-1,
+0,
+0,
+-1,
+6
+],
+"n": 26,
+"frame": "26-fuji-fortia-50.jpg"
+},
+{
+"group": "FujiFilm",
+"name": "Fuji Superia 400",
+"style": "Standard",
+"args": [
+1,
+1,
+0,
+"AUTO",
+0,
+1,
+1,
+0,
+1,
+6
+],
+"n": 27,
+"frame": "27-fuji-superia-400.jpg"
+},
+{
+"group": "FujiFilm",
+"name": "Fuji C200",
+"style": "Standard",
+"args": [
+0,
+0,
+0,
+"AUTO",
+0,
+-1,
+1
+],
+"n": 28,
+"frame": "28-fuji-c200.jpg"
+},
+{
+"group": "FujiFilm",
+"name": "Fuji Natura 1600",
+"style": "Portrait",
+"args": [
+-2,
+-2,
+0,
+"AUTO",
+0,
+1,
+0,
+0,
+1,
+6
+],
+"n": 29,
+"frame": "29-fuji-natura-1600.jpg"
+},
+{
+"group": "Kodak",
+"name": "Kodak Portra 160",
+"style": "Portrait",
+"args": [
+-3,
+-2,
+0,
+"AUTO",
+0,
+1,
+-1,
+0,
+2,
+6
+],
+"n": 30,
+"frame": "30-kodak-portra-160.jpg"
+},
+{
+"group": "Kodak",
+"name": "Kodak Portra 400",
+"style": "Portrait",
+"args": [
+-1,
+-1,
+0,
+"AUTO",
+0,
+3,
+1,
+0,
+2,
+6
+],
+"n": 31,
+"frame": "31-kodak-portra-400.jpg"
+},
+{
+"group": "Kodak",
+"name": "Kodak Portra 800",
+"style": "Portrait",
+"args": [
+-2,
+-2,
+0,
+"AUTO",
+0,
+1,
+1,
+0,
+1,
+6
+],
+"n": 32,
+"frame": "32-kodak-portra-800.jpg"
+},
+{
+"group": "Kodak",
+"name": "Kodak Gold 200",
+"style": "Standard",
+"args": [
+2,
+1,
+0,
+"AUTO",
+0,
+3,
+1,
+0,
+1,
+6
+],
+"n": 33,
+"frame": "33-kodak-gold-200.jpg"
+},
+{
+"group": "Kodak",
+"name": "Kodak Ultra Max 400",
+"style": "Standard",
+"args": [
+0,
+0,
+0,
+"AUTO",
+0,
+0,
+1,
+0,
+1,
+6
+],
+"n": 34,
+"frame": "34-kodak-ultra-max-400.jpg"
+},
+{
+"group": "Kodak",
+"name": "Kodak Color Plus 200",
+"style": "Standard",
+"args": [
+1,
+1,
+0,
+"AUTO",
+0,
+2,
+1,
+0,
+1,
+6
+],
+"n": 35,
+"frame": "35-kodak-color-plus-200.jpg"
+},
+{
+"group": "Kodak",
+"name": "Kodak Ektar 100",
+"style": "Standard",
+"args": [
+3,
+1,
+1,
+"AUTO",
+0,
+0,
+0,
+0,
+-1,
+6
+],
+"n": 36,
+"frame": "36-kodak-ektar-100.jpg"
+},
+{
+"group": "Kodak",
+"name": "Kodak Ektachrome E100",
+"style": "Clear",
+"args": [
+3,
+1,
+0,
+"AUTO",
+0,
+-1,
+0,
+0,
+-1,
+6
+],
+"n": 37,
+"frame": "37-kodak-ektachrome-e100.jpg"
+},
+{
+"group": "Kodak",
+"name": "Kodachrome 64",
+"style": "Deep",
+"args": [
+3,
+2,
+1,
+"AUTO",
+0,
+-1,
+0,
+0,
+-1,
+6
+],
+"n": 38,
+"frame": "38-kodachrome-64.jpg"
+},
+{
+"group": "Kodak",
+"name": "Kodak Vision3 500T (daylight)",
+"style": "Neutral",
+"args": [
+-1,
+0,
+0,
+"K",
+3200,
+0,
+0,
+0,
+1,
+3
+],
+"n": 39,
+"frame": "39-kodak-vision3-500t-daylight.jpg"
+},
+{
+"group": "Kodak",
+"name": "Kodak Vision 200T (Asteroid City)",
+"style": "Neutral",
+"args": [
+-2,
+-3,
+0,
+"K",
+5000,
+2,
+3,
+0,
+1,
+3
+],
+"n": 40,
+"frame": "40-kodak-vision-200t-asteroid-city.jpg"
+},
+{
+"group": "Kodak",
+"name": "Kodak Tri-X 400",
+"style": "B&W",
+"args": [
+0,
+2,
+2,
+"AUTO",
+0,
+0,
+0,
+0,
+1,
+6
+],
+"n": 41,
+"frame": "41-kodak-tri-x-400.jpg"
+},
+{
+"group": "Kodak",
+"name": "Kodak T-Max",
+"style": "B&W",
+"args": [
+0,
+2,
+3,
+"AUTO",
+0,
+0,
+0,
+0,
+0,
+6
+],
+"n": 42,
+"frame": "42-kodak-t-max.jpg"
+},
+{
+"group": "Kodak",
+"name": "Kodak Tri-X 1600 (pushed)",
+"style": "B&W",
+"args": [
+0,
+0,
+0,
+"AUTO",
+0,
+0,
+0,
+7,
+1,
+6
+],
+"n": 43,
+"frame": "43-kodak-tri-x-1600-pushed.jpg"
+},
+{
+"group": "Cine",
+"name": "Cinestill 50D (Blue Velvet)",
+"style": "Standard",
+"args": [
+-2,
+-1,
+0,
+"K",
+5500,
+-1,
+-1
+],
+"n": 44,
+"frame": "44-cinestill-50d-blue-velvet.jpg"
+},
+{
+"group": "Cine",
+"name": "Cinestill 800T",
+"style": "Neutral",
+"args": [
+0,
+0,
+0,
+"K",
+3200,
+0,
+-1,
+0,
+1,
+6
+],
+"n": 45,
+"frame": "45-cinestill-800t.jpg"
+},
+{
+"group": "Cine",
+"name": "Classic Cinema",
+"style": "Standard",
+"args": [
+0,
+-1,
+0,
+"K",
+6000,
+2,
+0,
+0,
+0,
+3
+],
+"n": 46,
+"frame": "46-classic-cinema.jpg"
+},
+{
+"group": "Cine",
+"name": "Rec709 Video (flat-ish)",
+"style": "Neutral",
+"args": [
+-2,
+-2,
+0,
+"AUTO",
+0,
+0,
+0,
+0,
+0,
+5
+],
+"n": 47,
+"frame": "47-rec709-video-flat-ish.jpg"
+},
+{
+"group": "RicohGR",
+"name": "GR Positive Film",
+"style": "Standard",
+"args": [
+3,
+2,
+0,
+"AUTO",
+0,
+2,
+0,
+0,
+-1,
+6
+],
+"n": 48,
+"frame": "48-gr-positive-film.jpg"
+},
+{
+"group": "RicohGR",
+"name": "GR Negative Film",
+"style": "Neutral",
+"args": [
+-2,
+1,
+0,
+"AUTO",
+0,
+-1,
+1,
+0,
+1,
+6
+],
+"n": 49,
+"frame": "49-gr-negative-film.jpg"
+},
+{
+"group": "RicohGR",
+"name": "GR Bleach Bypass",
+"style": "Neutral",
+"args": [
+-3,
+3,
+1,
+"AUTO",
+0,
+0,
+0,
+0,
+0,
+"DRO_OFF"
+],
+"n": 50,
+"frame": "50-gr-bleach-bypass.jpg"
+},
+{
+"group": "RicohGR",
+"name": "GR Retro",
+"style": "Standard",
+"args": [
+-3,
+-1,
+0,
+"AUTO",
+0,
+3,
+-1,
+4,
+0,
+6
+],
+"n": 51,
+"frame": "51-gr-retro.jpg"
+},
+{
+"group": "RicohGR",
+"name": "GR Cross Process",
+"style": "Vivid",
+"args": [
+2,
+2,
+0,
+"AUTO",
+0,
+-2,
+4
+],
+"n": 52,
+"frame": "52-gr-cross-process.jpg"
+},
+{
+"group": "RicohGR",
+"name": "GR Hi-Contrast B&W",
+"style": "B&W",
+"args": [
+0,
+3,
+1,
+"AUTO",
+0,
+0,
+0,
+7,
+0,
+6
+],
+"n": 53,
+"frame": "53-gr-hi-contrast-bandw.jpg"
+},
+{
+"group": "RicohGR",
+"name": "GR Hard Monotone",
+"style": "B&W",
+"args": [
+0,
+2,
+2,
+"AUTO",
+0,
+0,
+0
+],
+"n": 54,
+"frame": "54-gr-hard-monotone.jpg"
+},
+{
+"group": "RicohGR",
+"name": "GR Soft Monotone",
+"style": "B&W",
+"args": [
+0,
+-2,
+-1,
+"AUTO",
+0,
+0,
+0
+],
+"n": 55,
+"frame": "55-gr-soft-monotone.jpg"
+},
+{
+"group": "Leica",
+"name": "Leica Contemporary",
+"style": "Standard",
+"args": [
+1,
+1,
+0,
+"AUTO",
+0,
+0,
+0
+],
+"n": 56,
+"frame": "56-leica-contemporary.jpg"
+},
+{
+"group": "Leica",
+"name": "Leica Classic",
+"style": "Standard",
+"args": [
+-1,
+2,
+0,
+"AUTO",
+0,
+1,
+0
+],
+"n": 57,
+"frame": "57-leica-classic.jpg"
+},
+{
+"group": "Leica",
+"name": "Leica Eternal",
+"style": "Neutral",
+"args": [
+-3,
+-1,
+0,
+"AUTO",
+0,
+1,
+0,
+0,
+0,
+3
+],
+"n": 58,
+"frame": "58-leica-eternal.jpg"
+},
+{
+"group": "Leica",
+"name": "Leica Monochrom",
+"style": "B&W",
+"args": [
+0,
+2,
+1,
+"AUTO",
+0,
+0,
+0
+],
+"n": 59,
+"frame": "59-leica-monochrom.jpg"
+},
+{
+"group": "Hasselblad",
+"name": "Hasselblad HNCS Natural",
+"style": "Neutral",
+"args": [
+-1,
+-1,
+0,
+"AUTO",
+0,
+0,
+0
+],
+"n": 60,
+"frame": "60-hasselblad-hncs-natural.jpg"
+},
+{
+"group": "CANIK",
+"name": "Canon Standard",
+"style": "Standard",
+"args": [
+1,
+1,
+0,
+"AUTO",
+0,
+1,
+-1
+],
+"n": 61,
+"frame": "61-canon-standard.jpg"
+},
+{
+"group": "CANIK",
+"name": "Canon Portrait",
+"style": "Portrait",
+"args": [
+0,
+0,
+-1,
+"AUTO",
+0,
+1,
+-1
+],
+"n": 62,
+"frame": "62-canon-portrait.jpg"
+},
+{
+"group": "CANIK",
+"name": "Canon Faithful",
+"style": "Neutral",
+"args": [
+0,
+0,
+0,
+"AUTO",
+0,
+0,
+0
+],
+"n": 63,
+"frame": "63-canon-faithful.jpg"
+},
+{
+"group": "CANIK",
+"name": "Nikon Flat",
+"style": "Neutral",
+"args": [
+-3,
+-3,
+-1,
+"AUTO",
+0,
+0,
+0,
+0,
+0,
+5
+],
+"n": 64,
+"frame": "64-nikon-flat.jpg"
+},
+{
+"group": "CANIK",
+"name": "Nikon Vivid",
+"style": "Vivid",
+"args": [
+1,
+1,
+1,
+"AUTO",
+0,
+0,
+0
+],
+"n": 65,
+"frame": "65-nikon-vivid.jpg"
+},
+{
+"group": "PANOLY",
+"name": "Pana L.Monochrome D",
+"style": "B&W",
+"args": [
+0,
+3,
+1,
+"AUTO",
+0,
+0,
+0
+],
+"n": 66,
+"frame": "66-pana-l-monochrome-d.jpg"
+},
+{
+"group": "PANOLY",
+"name": "Pana L.ClassicNeo",
+"style": "Neutral",
+"args": [
+-3,
+-1,
+0,
+"AUTO",
+0,
+2,
+0,
+0,
+1,
+6
+],
+"n": 67,
+"frame": "67-pana-l-classicneo.jpg"
+},
+{
+"group": "PANOLY",
+"name": "Olympus Pop Art",
+"style": "Vivid",
+"args": [
+3,
+3,
+0,
+"AUTO",
+0,
+0,
+0
+],
+"n": 68,
+"frame": "68-olympus-pop-art.jpg"
+},
+{
+"group": "PANOLY",
+"name": "Olympus Pale & Light",
+"style": "Light",
+"args": [
+-3,
+-2,
+0,
+"AUTO",
+0,
+0,
+0,
+0,
+2,
+6
+],
+"n": 69,
+"frame": "69-olympus-pale-and-light.jpg"
+},
+{
+"group": "Other",
+"name": "Agfa Vista 200",
+"style": "Standard",
+"args": [
+2,
+1,
+0,
+"AUTO",
+0,
+2,
+-1,
+0,
+1,
+6
+],
+"n": 70,
+"frame": "70-agfa-vista-200.jpg"
+},
+{
+"group": "Other",
+"name": "Agfa Ultra 100",
+"style": "Vivid",
+"args": [
+3,
+1,
+0,
+"AUTO",
+0,
+0,
+0
+],
+"n": 71,
+"frame": "71-agfa-ultra-100.jpg"
+},
+{
+"group": "Other",
+"name": "Polaroid / Instax",
+"style": "Standard",
+"args": [
+-3,
+-2,
+0,
+"AUTO",
+0,
+1,
+-2,
+4,
+1,
+6
+],
+"n": 72,
+"frame": "72-polaroid-instax.jpg"
+},
+{
+"group": "Ilford",
+"name": "Ilford HP5",
+"style": "B&W",
+"args": [
+0,
+1,
+0,
+"AUTO",
+0,
+0,
+0,
+0,
+1,
+6
+],
+"n": 73,
+"frame": "73-ilford-hp5.jpg"
+},
+{
+"group": "Ilford",
+"name": "Ilford FP4",
+"style": "B&W",
+"args": [
+0,
+1,
+1,
+"AUTO",
+0,
+0,
+0
+],
+"n": 74,
+"frame": "74-ilford-fp4.jpg"
+},
+{
+"group": "Ilford",
+"name": "Ilford Delta 100",
+"style": "B&W",
+"args": [
+0,
+1,
+1,
+"AUTO",
+0,
+0,
+0
+],
+"n": 75,
+"frame": "75-ilford-delta-100.jpg"
+},
+{
+"group": "Ilford",
+"name": "Ilford Delta 3200",
+"style": "B&W",
+"args": [
+0,
+3,
+-2,
+"AUTO",
+0,
+0,
+0,
+0,
+2,
+6
+],
+"n": 76,
+"frame": "76-ilford-delta-3200.jpg"
+},
+{
+"group": "Ilford",
+"name": "Ilford Pan F 50",
+"style": "B&W",
+"args": [
+0,
+2,
+2,
+"AUTO",
+0,
+0,
+0
+],
+"n": 77,
+"frame": "77-ilford-pan-f-50.jpg"
+}
+]

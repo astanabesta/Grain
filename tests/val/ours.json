@@ -1,0 +1,243 @@
+{
+ "results": [
+  {
+   "label": "FACTORY (ST)",
+   "sim": "provia",
+   "measured": {
+    "sat": 0.16859,
+    "luma": 0.52081,
+    "contrast": 0.13055,
+    "rgb": [
+     0.53216,
+     0.5198,
+     0.49736
+    ]
+   }
+  },
+  {
+   "label": "Sony PT (portrait)",
+   "sim": "provia",
+   "measured": {
+    "sat": 0.15925,
+    "luma": 0.52082,
+    "contrast": 0.13059,
+    "rgb": [
+     0.53143,
+     0.51988,
+     0.49888
+    ]
+   }
+  },
+  {
+   "label": "Sony NT (neutral)",
+   "sim": "provia",
+   "measured": {
+    "sat": 0.14894,
+    "luma": 0.50211,
+    "contrast": 0.12631,
+    "rgb": [
+     0.51093,
+     0.50143,
+     0.48288
+    ]
+   }
+  },
+  {
+   "label": "Sony VV (vivid)",
+   "sim": "velvia",
+   "measured": {
+    "sat": 0.16214,
+    "luma": 0.51648,
+    "contrast": 0.12834,
+    "rgb": [
+     0.52858,
+     0.51528,
+     0.49265
+    ]
+   }
+  },
+  {
+   "label": "Provia",
+   "sim": "provia",
+   "measured": {
+    "sat": 0.16859,
+    "luma": 0.52081,
+    "contrast": 0.13055,
+    "rgb": [
+     0.53216,
+     0.5198,
+     0.49736
+    ]
+   }
+  },
+  {
+   "label": "Velvia",
+   "sim": "velvia",
+   "measured": {
+    "sat": 0.19195,
+    "luma": 0.51669,
+    "contrast": 0.12793,
+    "rgb": [
+     0.5324,
+     0.51487,
+     0.48849
+    ]
+   }
+  },
+  {
+   "label": "Astia",
+   "sim": "astia",
+   "measured": {
+    "sat": 0.17285,
+    "luma": 0.52809,
+    "contrast": 0.13198,
+    "rgb": [
+     0.54259,
+     0.52631,
+     0.50299
+    ]
+   }
+  },
+  {
+   "label": "Classic Chrome",
+   "sim": "classicChrome",
+   "measured": {
+    "sat": 0.13111,
+    "luma": 0.55328,
+    "contrast": 0.14405,
+    "rgb": [
+     0.56552,
+     0.55163,
+     0.53363
+    ]
+   }
+  },
+  {
+   "label": "Classic Negative",
+   "sim": "classicNeg",
+   "measured": {
+    "sat": 0.16171,
+    "luma": 0.56563,
+    "contrast": 0.16066,
+    "rgb": [
+     0.60395,
+     0.55752,
+     0.53304
+    ]
+   }
+  },
+  {
+   "label": "Pro Neg Std",
+   "sim": "proNegStd",
+   "measured": {
+    "sat": 0.13373,
+    "luma": 0.52251,
+    "contrast": 0.13083,
+    "rgb": [
+     0.5313,
+     0.52184,
+     0.50327
+    ]
+   }
+  },
+  {
+   "label": "Pro Neg Hi",
+   "sim": "proNegHi",
+   "measured": {
+    "sat": 0.12114,
+    "luma": 0.57935,
+    "contrast": 0.14901,
+    "rgb": [
+     0.58917,
+     0.57788,
+     0.56506
+    ]
+   }
+  },
+  {
+   "label": "Eterna",
+   "sim": "eterna",
+   "measured": {
+    "sat": 0.10147,
+    "luma": 0.51603,
+    "contrast": 0.1155,
+    "rgb": [
+     0.52216,
+     0.51569,
+     0.50133
+    ]
+   }
+  },
+  {
+   "label": "Eterna Bleach Bypass",
+   "sim": "eternaBleachBypass",
+   "measured": {
+    "sat": 0.08426,
+    "luma": 0.56475,
+    "contrast": 0.16361,
+    "rgb": [
+     0.57271,
+     0.56353,
+     0.55344
+    ]
+   }
+  },
+  {
+   "label": "Acros",
+   "sim": "acros",
+   "measured": {
+    "sat": 0,
+    "luma": 0.52076,
+    "contrast": 0.1334,
+    "rgb": [
+     0.52076,
+     0.52076,
+     0.52076
+    ]
+   }
+  },
+  {
+   "label": "Acros +Ye",
+   "sim": "acros",
+   "measured": {
+    "sat": 0,
+    "luma": 0.52418,
+    "contrast": 0.13082,
+    "rgb": [
+     0.52418,
+     0.52418,
+     0.52418
+    ]
+   }
+  },
+  {
+   "label": "Acros +R",
+   "sim": "acros",
+   "measured": {
+    "sat": 0,
+    "luma": 0.52852,
+    "contrast": 0.12949,
+    "rgb": [
+     0.52852,
+     0.52852,
+     0.52852
+    ]
+   }
+  },
+  {
+   "label": "Acros +G",
+   "sim": "acros",
+   "measured": {
+    "sat": 0,
+    "luma": 0.51856,
+    "contrast": 0.13559,
+    "rgb": [
+     0.51856,
+     0.51856,
+     0.51856
+    ]
+   }
+  }
+ ],
+ "errors": "none"
+}
