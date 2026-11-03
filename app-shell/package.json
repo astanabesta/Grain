@@ -1,0 +1,17 @@
+{
+  "name": "recipecam-shell",
+  "version": "3.0.0",
+  "private": true,
+  "description": "Capacitor wrapper that turns the single-file Recipe Cam web app into an Android APK",
+  "scripts": {
+    "sync": "cap sync android",
+    "add:android": "cap add android"
+  },
+  "dependencies": {
+    "@capacitor/android": "6.1.2",
+    "@capacitor/core": "6.1.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "6.1.2"
+  }
+}

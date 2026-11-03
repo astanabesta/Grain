@@ -1,0 +1,142 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    name: Assemble debug + release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify the web bundle is present and self-contained
+        run: |
+          test -s web/index.html || { echo "::error::web/index.html missing"; exit 1; }
+          size=$(stat -c%s web/index.html)
+          echo "web/index.html is $size bytes"
+          # A single-file build must not reach the network. These would be the
+          # giveaways, and they would silently break the offline app.
+          if grep -qE '<script[^>]+src=|<link[^>]+href="http' web/index.html; then
+            echo "::error::bundle references an external script or stylesheet"
+            exit 1
+          fi
+          echo "no external <script src> or <link href> — OK"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: app-shell/package-lock.json
+
+      - name: Install Capacitor
+        working-directory: app-shell
+        run: npm ci
+
+      - name: Generate Android project
+        working-directory: app-shell
+        run: npx cap add android
+
+      - name: Sync web assets into the Android project
+        working-directory: app-shell
+        run: npx cap sync android
+
+      # The app needs the microphone-free camera, and saves files to storage.
+      # Capacitor writes a minimal manifest; these permissions are added here so
+      # the source of truth for them is in the repo, not in generated output.
+      - name: Patch the Android manifest
+        run: |
+          M=app-shell/android/app/src/main/AndroidManifest.xml
+          python3 - "$M" <<'PY'
+          import sys, re
+          path = sys.argv[1]
+          xml = open(path).read()
+          perms = [
+              '<uses-permission android:name="android.permission.CAMERA" />',
+              '<uses-permission android:name="android.permission.INTERNET" />',
+          ]
+          # getDisplayMedia/getUserMedia also need these on older WebViews
+          perms.append('<uses-feature android:name="android.hardware.camera" android:required="false" />')
+          if 'android.permission.CAMERA' not in xml:
+              xml = xml.replace('<application', '\n    '.join(perms) + '\n\n    <application', 1)
+          open(path, 'w').write(xml)
+          print(f'patched {path}')
+          PY
+          grep -c "uses-permission" "$M" || true
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build debug APK
+        working-directory: app-shell/android
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Build release APK with a CI signing key
+        working-directory: app-shell/android
+        # A debug APK is installable but not shippable. This makes a release
+        # build signed with a throwaway key so the artifact on the release page
+        # is a real release APK. Replace with your own keystore for the Play Store.
+        run: |
+          keytool -genkeypair -v \
+            -keystore "$RUNNER_TEMP/ci.keystore" \
+            -alias recipecam \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass ci-signing -keypass ci-signing \
+            -dname "CN=Recipe Cam CI, OU=CI, O=Recipe Cam, L=NA, S=NA, C=NA"
+          ./gradlew assembleRelease --no-daemon \
+            -Pandroid.injected.signing.store.file="$RUNNER_TEMP/ci.keystore" \
+            -Pandroid.injected.signing.store.password=ci-signing \
+            -Pandroid.injected.signing.key.alias=recipecam \
+            -Pandroid.injected.signing.key.password=ci-signing
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p out
+          find app-shell/android/app/build/outputs/apk -name '*.apk' -exec cp {} out/ \;
+          ls -lh out
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: recipecam-apk
+          path: out/*.apk
+          if-no-files-found: error
+
+      - name: Attach APKs to a release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.apk
+          generate_release_notes: true
+
+      - name: Publish a rolling download on every main build
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest build
+          body: |
+            Automatic build from `${{ github.sha }}`.
+
+            Download `app-release.apk` and install it. Android will warn about
+            an unknown developer — that is expected for a sideloaded build.
+          files: out/*.apk
+          prerelease: true
+          make_latest: false
