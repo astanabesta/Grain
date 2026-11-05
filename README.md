@@ -36,6 +36,8 @@ If CI fails, download the build reports or copy the failing step's logs. A faile
 
 Releases up to v0.2.0 were each signed with a fresh key (the old key cache never kept the key), so every update needed an uninstall. From v0.2.1 the workflow creates one personal signing key on `main`, keeps it in the Actions cache (every build refreshes it) and signs every release with it, so updates install over the previous version. GitHub evicts caches that go unused for 7 days; after a longer gap without builds the key would be recreated and one more uninstall would be needed. **Save your photos to the device gallery before uninstalling.**
 
+Personal signing certificate from v0.2.1 (SHA-256): `6e073ef68730c0022f8359b668bbfc087e8ec348ad334a1afb962ad06e206553`. An APK signed with any other certificate will not install over this one.
+
 For a key that never changes, generate a keystore (`androiddebugkey`, store/key password `android`) and save its base64 encoding as the repository secret `GRAIN_DEBUG_KEYSTORE_BASE64`; the workflow then signs with it instead (switching to it changes the key once). This is personal test signing, not production signing; never commit a keystore.
 
 ## Included
