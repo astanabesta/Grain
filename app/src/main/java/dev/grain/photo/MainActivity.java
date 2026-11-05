@@ -16,6 +16,8 @@ import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import dev.grain.photo.develop.CubeLut;
+import dev.grain.photo.develop.FujiRecipe;
+import dev.grain.photo.develop.LutPreview;
 import java.io.File;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
@@ -52,6 +54,8 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
   private ScrollView panelScroll;
   private GrainCamera camera;
   private OrientationEventListener orientationListener;
+  /** Film-sheet thumbnails through each imported LUT, built once per import. */
+  private final java.util.Map<String, Bitmap> lutPreviews = new java.util.HashMap<>();
   private PhotoStore store;
   private SharedPreferences preferences;
   private JSONObject capabilities = new JSONObject();
@@ -341,16 +345,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     filmRow.setPadding(dp(10), 0, dp(10), 0);
     strip.addView(filmRow);
     cameraPage.addView(strip, new LinearLayout.LayoutParams(-1, dp(53)));
-    for (Recipe f : Recipe.ALL) {
-      TextView chip = button((f.raw ? "◆  " : "•  ") + f.name, 10, () -> selectRecipe(f.id));
-      chip.setMinHeight(0);
-      chip.setSingleLine(true);
-      chip.setPadding(dp(12), 0, dp(12), 0);
-      chip.setTag(f.id);
-      LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, dp(30));
-      cp.setMargins(dp(3), 0, dp(3), 0);
-      filmRow.addView(chip, cp);
-    }
+    buildFilmRow();
     LinearLayout capture = row();
     capture.setPadding(dp(28), 0, dp(28), 0);
     cameraPage.addView(capture, new LinearLayout.LayoutParams(-1, dp(94)));
@@ -441,6 +436,31 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     cameraPage.setPadding(0, 0, 0, dp(12));
   }
 
+  /**
+   * Plain Fujifilm film simulations appear once their LUT is imported; the ISP looks and the
+   * published recipes always show (a recipe without its LUT explains how to get it).
+   */
+  private boolean visible(Recipe f) {
+    return !f.standard || (luts != null && luts.has(f.fuji.filmSimulation));
+  }
+
+  private void buildFilmRow() {
+    if (filmRow == null) return;
+    if (!visible(Recipe.ALL[recipe])) recipe = 0;
+    filmRow.removeAllViews();
+    for (Recipe f : Recipe.ALL) {
+      if (!visible(f)) continue;
+      TextView chip = button((f.raw ? "◆  " : "•  ") + f.name, 10, () -> selectRecipe(f.id));
+      chip.setMinHeight(0);
+      chip.setSingleLine(true);
+      chip.setPadding(dp(12), 0, dp(12), 0);
+      chip.setTag(f.id);
+      LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, dp(30));
+      cp.setMargins(dp(3), 0, dp(3), 0);
+      filmRow.addView(chip, cp);
+    }
+  }
+
   private void layoutFrame() {
     if (stage.getWidth() == 0) return;
     double[] fit = Framing.fit(stage.getWidth(), stage.getHeight(), ratio);
@@ -504,7 +524,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     tuneButton.setText(current.raw ? "Recipe  " + (luts != null && luts.has(current.fuji.filmSimulation) ? "✓" : "· LUT needed") : "Tune film  " + strengths[recipe] + "%");
     for (int i = 0; i < filmRow.getChildCount(); i++) {
       TextView chip = (TextView) filmRow.getChildAt(i);
-      boolean active = i == recipe;
+      boolean active = Integer.valueOf(recipe).equals(chip.getTag());
       chip.setBackground(bg(active ? INK : PAPER, 30, 0, 0));
       chip.setTextColor(active ? PAPER : MUTED);
     }
@@ -709,8 +729,17 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     strength.setVisibility(rawNow ? View.GONE : View.VISIBLE);
     fillRecipePanel(recipePanel, Recipe.ALL[recipe], dialog);
     ArrayList<LinearLayout> tiles = new ArrayList<>();
+    Bitmap artwork = null;
+    try (java.io.InputStream in = getAssets().open("film-reference.jpg")) {
+      BitmapFactory.Options artworkOptions = new BitmapFactory.Options();
+      artworkOptions.inSampleSize = 4;
+      artwork = BitmapFactory.decodeStream(in, null, artworkOptions);
+    } catch (Exception ignored) {
+    }
     for (Recipe f : Recipe.ALL) {
+      if (!visible(f)) continue;
       LinearLayout tile = column();
+      tile.setTag(f.id);
       tile.setPadding(dp(5), dp(5), dp(5), dp(5));
       LinearLayout.LayoutParams tp = size(97, 157);
       tp.setMargins(0, 0, dp(11), 0);
@@ -718,23 +747,26 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
       tiles.add(tile);
       ImageView art = new ImageView(this);
       art.setScaleType(ImageView.ScaleType.CENTER_CROP);
-      try (java.io.InputStream in = getAssets().open("film-reference.jpg")) {
-        BitmapFactory.Options artworkOptions = new BitmapFactory.Options();
-        artworkOptions.inSampleSize = 4;
-        art.setImageBitmap(BitmapFactory.decodeStream(in, null, artworkOptions));
-      } catch (Exception ignored) {
+      boolean lutPreview = f.raw && luts.has(f.fuji.filmSimulation) && artwork != null;
+      Bitmap cachedPreview = lutPreview ? lutPreviews.get(f.fuji.filmSimulation) : null;
+      art.setImageBitmap(cachedPreview != null ? cachedPreview : artwork);
+      if (lutPreview) {
+        if (cachedPreview == null) previewThroughLut(art, f.fuji.filmSimulation, artwork);
+        art.setContentDescription(
+            "Reference picture through Fujifilm’s " + f.fuji.filmLabel + " LUT; approximate");
+      } else {
+        float[][] artGrades = {
+          {1.03f, 1, .93f}, {.92f, 1.02f, 1.06f}, {1.1f, 1.01f, .84f}, {.74f, .8f, .88f},
+          {1.05f, .98f, .86f}
+        };
+        float[] grade = artGrades[Math.min(f.id, artGrades.length - 1)];
+        art.setColorFilter(
+            new ColorMatrixColorFilter(
+                new float[] {
+                  grade[0], 0, 0, 0, 0, 0, grade[1], 0, 0, 0, 0, 0, grade[2], 0, 0, 0, 0, 0, 1, 0
+                }));
+        art.setContentDescription("Film collection reference artwork, not a live recipe preview");
       }
-      float[][] artGrades = {
-        {1.03f, 1, .93f}, {.92f, 1.02f, 1.06f}, {1.1f, 1.01f, .84f}, {.74f, .8f, .88f},
-        {1.05f, .98f, .86f}
-      };
-      float[] grade = artGrades[Math.min(f.id, artGrades.length - 1)];
-      art.setColorFilter(
-          new ColorMatrixColorFilter(
-              new float[] {
-                grade[0], 0, 0, 0, 0, 0, grade[1], 0, 0, 0, 0, 0, grade[2], 0, 0, 0, 0, 0, 1, 0
-              }));
-      art.setContentDescription("Film collection reference artwork, not a live recipe preview");
       art.setBackground(bg(0, 4, 0, 0));
       art.setClipToOutline(true);
       FrameLayout picture = new FrameLayout(this);
@@ -756,7 +788,11 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
       title.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
       title.setPadding(dp(3), 0, 0, 0);
       tile.addView(title, new LinearLayout.LayoutParams(-1, dp(29)));
-      TextView iso = text(f.raw ? "RAW · FUJIFILM LUT" : "ISP RECIPE", 8, f.raw ? ORANGE : MUTED);
+      TextView iso =
+          text(
+              f.standard ? "FILM SIMULATION" : f.raw ? "RAW · RECIPE" : "ISP LOOK",
+              8,
+              f.raw ? ORANGE : MUTED);
       iso.setTypeface(Typeface.MONOSPACE);
       iso.setGravity(Gravity.START);
       iso.setPadding(dp(3), 0, 0, 0);
@@ -773,7 +809,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
             strengthRow.setVisibility(f.raw ? View.GONE : View.VISIBLE);
             strength.setVisibility(f.raw ? View.GONE : View.VISIBLE);
             fillRecipePanel(recipePanel, f, dialog);
-            for (int i = 0; i < tiles.size(); i++) styleFilmTile(tiles.get(i), i == recipe);
+            for (LinearLayout t : tiles) styleFilmTile(t, Integer.valueOf(recipe).equals(t.getTag()));
           });
       styleFilmTile(tile, f.id == recipe);
     }
@@ -786,7 +822,12 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
               updateLabels();
               camera.update(snapshot());
             }));
-    TextView artNote = text("Reference artwork, not exact recipe previews", 8, MUTED);
+    TextView artNote =
+        text(
+            "Fujifilm tiles: a reference picture through each official LUT (approximate). Your"
+                + " photos are developed from RAW.",
+            8,
+            MUTED);
     artNote.setGravity(Gravity.START);
     LinearLayout.LayoutParams an = new LinearLayout.LayoutParams(-1, -2);
     an.setMargins(dp(22), dp(8), dp(22), 0);
@@ -801,7 +842,10 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
             MUTED,
             () -> {
               if (Recipe.ALL[recipe].raw) {
-                message("Fujifilm recipes are fixed as published.");
+                message(
+                    Recipe.ALL[recipe].standard
+                        ? "Film simulations use Fujifilm’s standard settings."
+                        : "Fujifilm recipes are fixed as published.");
                 return;
               }
               strengths[recipe] = 80;
@@ -825,6 +869,27 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
       window.setGravity(Gravity.BOTTOM);
       window.setLayout(-1, -2);
     }
+  }
+
+  private void previewThroughLut(ImageView art, String sim, Bitmap artwork) {
+    files.execute(
+        () -> {
+          try {
+            int w = artwork.getWidth(), h = artwork.getHeight();
+            int[] px = new int[w * h];
+            artwork.getPixels(px, 0, w, 0, 0, w, h);
+            LutPreview.apply(px, luts.load(sim));
+            Bitmap out = Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888);
+            runOnUiThread(
+                () -> {
+                  lutPreviews.put(sim, out);
+                  art.setColorFilter(null);
+                  art.setImageBitmap(out);
+                });
+          } catch (Exception e) {
+            android.util.Log.w("Grain", "LUT preview failed for " + sim, e);
+          }
+        });
   }
 
   /** Film Lab body for RAW recipes: published settings, LUT status and import. */
@@ -870,7 +935,12 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
       line.addView(value, new LinearLayout.LayoutParams(-2, dp(20)));
       panel.addView(line);
     }
-    TextView credit = paragraph("Recipe by " + r.fuji.author + " — " + r.fuji.source);
+    TextView credit =
+        paragraph(
+            r.standard
+                ? "Fujifilm " + r.fuji.filmLabel + " on its own: standard settings, no recipe"
+                    + " adjustments. LUT: Fujifilm’s official F-Log2 pack."
+                : "Recipe by " + r.fuji.author + " — " + r.fuji.source);
     credit.setPadding(0, dp(6), 0, 0);
     panel.addView(credit);
     TextView note =
@@ -920,12 +990,18 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
           try {
             LutLibrary.ImportResult result = luts.importFrom(getContentResolver(), uri, getCacheDir());
             boolean chrome = luts.has("CLASSIC-CHROME");
+            int films = 0;
+            for (String sim : result.imported) if (!FujiRecipe.isTechnical(sim)) films++;
+            int filmCount = films, technical = result.imported.size() - films;
             runOnUiThread(
                 () -> {
+                  lutPreviews.clear();
+                  buildFilmRow();
                   updateLabels();
                   message(
-                      "Imported " + result.imported.size() + " Fujifilm LUTs"
-                          + (chrome ? " · Classic Chrome ready" : " · this pack has no Classic Chrome; use GFX ETERNA 55"));
+                      filmCount + " film simulation" + (filmCount == 1 ? "" : "s") + " added to your films"
+                          + (technical > 0 ? " (+" + technical + " video LUT" + (technical == 1 ? "" : "s") + ", not used for photos)" : "")
+                          + (chrome ? "" : " · this pack has no Classic Chrome; use GFX ETERNA 55"));
                   Runnable after = afterLutImport;
                   afterLutImport = null;
                   if (after != null) after.run();

@@ -281,4 +281,68 @@ public class RawEngineTest {
     double wOff = riseWidth(off, w, h), wOn = riseWidth(on, w, h);
     assertTrue("edge width " + wOn + " vs " + wOff, wOn <= wOff + 0.75);
   }
+
+  /** The LUT names in Fujifilm's GFX ETERNA 55 v1.10 pack (F-Log2, 33-point). */
+  static final String[] GFX_ETERNA_55_PACK = {
+    "ACROS", "ASTIA", "CLASSIC-CHROME", "CLASSIC-Neg.", "ETERNA-BB", "ETERNA", "FLog2-709",
+    "PRO-Neg.Std", "PROVIA", "REALA-ACE", "Velvia", "WDR-709"
+  };
+
+  /** Every film simulation in the official pack is offered; the two Rec.709 transforms are not. */
+  @Test
+  public void everyFilmSimulationInThePackIsOffered() {
+    int films = 0;
+    for (String lut : GFX_ETERNA_55_PACK) {
+      boolean offered = false;
+      for (String[] sim : FujiRecipe.SIMULATIONS) offered |= sim[0].equalsIgnoreCase(lut);
+      if (FujiRecipe.isTechnical(lut)) {
+        assertFalse(lut + " is a video transform", offered);
+      } else {
+        assertTrue(lut + " should be offered", offered);
+        films++;
+      }
+    }
+    assertEquals(10, films);
+  }
+
+  @Test
+  public void standardSimulationHasNeutralSettings() {
+    FujiRecipe r = FujiRecipe.standard("Velvia", "Velvia");
+    assertEquals(FujiRecipe.DynamicRange.AUTO, r.dynamicRange);
+    assertEquals(0, r.highlight, 0);
+    assertEquals(0, r.shadow, 0);
+    assertEquals(0, r.color);
+    assertEquals(0, r.sharpness);
+    assertEquals(0, r.noiseReduction);
+    assertEquals(0, r.grainRoughness);
+    assertEquals(0, r.colorChrome);
+    assertEquals(0, r.colorChromeBlue);
+    assertEquals(0, r.wbShiftRed);
+    assertEquals(0, r.wbShiftBlue);
+    assertEquals("Auto", r.whiteBalance);
+    assertFalse(r.monochrome());
+    FujiRecipe acros = FujiRecipe.standard("ACROS", "Acros");
+    assertTrue(acros.monochrome());
+    for (String[] row : acros.settings())
+      if (row[0].equals("Color")) assertTrue(row[1].startsWith("n/a"));
+  }
+
+  /** Film-sheet thumbnails: greys stay grey and brighter stays brighter through an identity LUT. */
+  @Test
+  public void lutPreviewKeepsGreysNeutralAndOrdered() {
+    int[] px = new int[64];
+    for (int i = 0; i < px.length; i++) {
+      int v = 20 + i * 3;
+      px[i] = 0xff000000 | (v << 16) | (v << 8) | v;
+    }
+    dev.grain.photo.develop.LutPreview.apply(px, identity(33));
+    int prev = -1;
+    for (int p : px) {
+      int r = (p >> 16) & 255, g = (p >> 8) & 255, b = p & 255;
+      assertTrue("neutral " + r + "," + g + "," + b, Math.abs(r - g) <= 1 && Math.abs(b - g) <= 1);
+      assertTrue("ordered", g >= prev);
+      prev = g;
+      assertEquals(0xff, (p >>> 24));
+    }
+  }
 }
