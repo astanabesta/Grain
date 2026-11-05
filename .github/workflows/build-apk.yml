@@ -109,12 +109,31 @@ jobs:
           Build checks: Android unit tests, lint and APK assembly must pass before publication. Source/build reports are available in GitHub Actions. SHA256SUMS.txt verifies the APK download.
           NOTES
           sed -i "s/vVERSION/$TAG/g" release-files/RELEASE_NOTES.md
-          if gh release view "$TAG" > /dev/null 2>&1; then
-            gh release upload "$TAG" "$APK" release-files/SHA256SUMS.txt --clobber
-          else
-            gh release create "$TAG" "$APK" release-files/SHA256SUMS.txt \
-              --target "$GITHUB_SHA" --title "Grain $TAG — Device-test beta" \
-              --notes-file release-files/RELEASE_NOTES.md --prerelease
+          PUBLISHED=0
+          for ATTEMPT in 1 2 3; do
+            if {
+              if gh release view "$TAG" > /dev/null 2>&1; then
+                gh release upload "$TAG" "$APK" release-files/SHA256SUMS.txt --clobber
+              else
+                gh release create "$TAG" "$APK" release-files/SHA256SUMS.txt \
+                  --target "$GITHUB_SHA" --title "Grain $TAG — Device-test beta" \
+                  --notes-file release-files/RELEASE_NOTES.md --prerelease
+              fi
+            } > release-files/publication.log 2>&1; then
+              cat release-files/publication.log
+              PUBLISHED=1
+              break
+            fi
+            cat release-files/publication.log
+            sleep "$((ATTEMPT * 5))"
+          done
+          if [ "$PUBLISHED" -ne 1 ]; then
+            python3 - <<'PYERR'
+          from pathlib import Path
+          text=Path('release-files/publication.log').read_text(errors='replace')[-3000:]
+          print('::error title=Release publication::'+text.replace('%','%25').replace('\r','%0D').replace('\n','%0A'))
+          PYERR
+            exit 1
           fi
           printf '### Download the APK\n\n[Grain %s release](https://github.com/%s/releases/tag/%s)\n' "$TAG" "$GH_REPO" "$TAG" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
@@ -123,6 +142,7 @@ jobs:
           name: grain-build-reports-${{ github.run_number }}
           path: |
             build.log
+            release-files/publication.log
             app/build/reports/
             app/build/test-results/
           if-no-files-found: ignore
