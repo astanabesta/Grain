@@ -32,11 +32,11 @@ No GitHub secrets are required for a first debug build. No local Flutter/Android
 
 If CI fails, download the build reports or copy the failing step's logs. A failed run does not publish its APK.
 
-### Updating an installed debug APK
+### Updating an installed APK
 
-The workflow caches the personal debug signing key; an optional secret provides a more durable key. Cache eviction can still change the key. Android rejects an update signed with a different key. **Export your private photos before uninstalling** if you need to reinstall.
+Releases up to v0.2.0 were each signed with a fresh key (the old key cache never kept the key), so every update needed an uninstall. From v0.2.1 the workflow creates one personal signing key on `main`, keeps it in the Actions cache (every build refreshes it) and signs every release with it, so updates install over the previous version. GitHub evicts caches that go unused for 7 days; after a longer gap without builds the key would be recreated and one more uninstall would be needed. **Save your photos to the device gallery before uninstalling.**
 
-For stable personal updates, optionally generate a standard Android debug keystore on your own machine (`androiddebugkey`, store/key password `android`) and save its base64 encoding as the repository secret `GRAIN_DEBUG_KEYSTORE_BASE64`. The workflow restores it before building. Do not use this debug setup as production signing, and never commit a real private release keystore.
+For a key that never changes, generate a keystore (`androiddebugkey`, store/key password `android`) and save its base64 encoding as the repository secret `GRAIN_DEBUG_KEYSTORE_BASE64`; the workflow then signs with it instead (switching to it changes the key once). This is personal test signing, not production signing; never commit a keystore.
 
 ## Included
 
