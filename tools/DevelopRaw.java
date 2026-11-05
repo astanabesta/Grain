@@ -26,7 +26,7 @@ import java.util.Map;
  * illuminant1, iso, recipe (reggie|plain); optional cm2/fm2/illuminant2, shading (path to rows x cols x 4
  * little-endian float32, Camera2 order) with shadingRows/shadingCols, and noise (8 values: S,O per CFA
  * position, row-major). System properties: -Dgrain=true, -Dseed=N, -Dthreads=N, -Dev=EV, -Dnr=scale,
- * -Dsharpen=scale, -Ddebug=file (pre-NR luma codes then modelled noise variance, float32 planes).
+ * -Dsharpen=scale, -Dhalation=0..10, -Dbloom=0..10, -Dclarity=-5..5, -Ddebug=file (pre-NR luma codes then modelled noise variance, float32 planes).
  */
 public final class DevelopRaw {
   public static void main(String[] args) throws Exception {
@@ -88,6 +88,14 @@ public final class DevelopRaw {
             ? FujiRecipe.REGGIES_PORTRA
             : new FujiRecipe("plain", "Plain", "", "", "LUT", "LUT", FujiRecipe.DynamicRange.DR100,
                 0, 0, 0, 0, -4, 0, 0, false, 0, 0, "As shot", 0, 0);
+    if (System.getProperty("halation") != null || System.getProperty("bloom") != null
+        || System.getProperty("clarity") != null) {
+      FujiRecipe.Tuning t = recipe.tuning();
+      t.halation = Integer.getInteger("halation", t.halation);
+      t.bloom = Integer.getInteger("bloom", t.bloom);
+      t.clarity = Integer.getInteger("clarity", t.clarity);
+      recipe = recipe.with(t);
+    }
     RawDeveloper.Options o = new RawDeveloper.Options();
     if (args.length > 4) o.fixedGain = Double.parseDouble(args[4]);
     if (args.length > 5) o.stillsTone = !"lutOnlyTone".equals(args[5]);

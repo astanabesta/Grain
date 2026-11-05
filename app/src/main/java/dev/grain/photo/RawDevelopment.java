@@ -17,7 +17,7 @@ import org.json.JSONObject;
 
 /** Runs the RAW engine for one capture and encodes the result as an EXIF-tagged JPEG. */
 final class RawDevelopment {
-  static final String SOFTWARE = "Grain Photo 0.2.2";
+  static final String SOFTWARE = "Grain Photo 0.2.3";
 
   static final class Output {
     final byte[] jpeg;
@@ -32,7 +32,13 @@ final class RawDevelopment {
   private RawDevelopment() {}
 
   static Output develop(
-      Context context, GrainCamera.RawCapture capture, FujiRecipe recipe, CubeLut lut, float ev, long seed)
+      Context context,
+      GrainCamera.RawCapture capture,
+      FujiRecipe recipe,
+      boolean tuned,
+      CubeLut lut,
+      float ev,
+      long seed)
       throws Exception {
     final Bitmap bitmap =
         Bitmap.createBitmap(capture.frame.width, capture.frame.height, Bitmap.Config.ARGB_8888);
@@ -92,7 +98,8 @@ final class RawDevelopment {
             String.valueOf(RawSupport.exifOrientation(capture.orientationDegrees)));
         exif.setAttribute(ExifInterface.TAG_SOFTWARE, SOFTWARE);
         exif.setAttribute(
-            ExifInterface.TAG_IMAGE_DESCRIPTION, recipe.name + " (" + recipe.filmLabel + " LUT)");
+            ExifInterface.TAG_IMAGE_DESCRIPTION,
+            recipe.name + " (" + recipe.filmLabel + " LUT" + (tuned ? ", tuned" : "") + ")");
         exif.saveAttributes();
         byte[] jpeg = new byte[(int) tmp.length()];
         try (InputStream in = new FileInputStream(tmp)) {

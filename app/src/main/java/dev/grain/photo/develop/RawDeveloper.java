@@ -82,6 +82,28 @@ public final class RawDeveloper {
   static final double GRAIN_FLOOR = 0.5, GF_RESIDUAL = 0.3;
   static final int HIST_MIN = -24, HIST_PER_EV = 8, HIST_BINS = 36 * 8;
 
+  /**
+   * Grain extras (FujiRecipe.halation / bloom, 0..10), modelled as light transport in scene-linear
+   * light before the film simulation, in the normalised form E' = (1 - a) E + a (K * E): uniform
+   * areas are unchanged and light is only redistributed around structure. Halation is a second
+   * exposure of mainly the red record (some green, no blue); bloom is neutral and wider. Kernel
+   * sizes are Gaussian sigmas as fractions of the frame's long side, so the look does not depend
+   * on resolution. Clipped RAW pixels lost their true brightness; for the glow only, blocks whose
+   * green pixels clipped (light sources) send CLIP_BOOST times their clipped value into the glow
+   * around them (an assumption, not a measurement); their own inside is left as recorded.
+   */
+  static final double HALATION_SIGMA = 0.006, BLOOM_SIGMA = 0.015;
+
+  static final double HALATION_PER_STEP = 0.015, BLOOM_PER_STEP = 0.015;
+  static final float HALATION_GREEN = 0.3f, CLIP_BOOST = 8f, CLIP_LEVEL = 0.97f;
+  /**
+   * Clarity (FujiRecipe.clarity, -5..+5): mid-band local contrast of the display-code luma, the
+   * band between the 4 x 4 blocks and a Gaussian of CLARITY_SIGMA x long side, weighted to the
+   * mid-tones. Fujifilm does not publish its Clarity; this is an approximation (minus Clarity is
+   * often likened to a diffusion filter).
+   */
+  static final double CLARITY_PER_STEP = 0.12, CLARITY_SIGMA = 0.008;
+
   private RawDeveloper() {}
 
   public interface Sink {
@@ -182,6 +204,14 @@ public final class RawDeveloper {
     final float[] grainA, grainB;
     final int grainOx, grainOy;
     final int[] mod997;
+    /** Grain extras: per-channel keep factor and glow planes (quarter resolution) when enabled. */
+    final boolean glow;
+    final float[] glowKeep = new float[3], haloA = new float[3];
+    final float bloomA, clarityK;
+    final int[] clipRaw = new int[4];
+    final int haloR, bloomR, clarityR;
+    float[] qLin, qClip, band;
+    float[][] glowQ;
 
     Job(RawFrame f, FujiRecipe r, CubeLut lut, Options o, Map<String, Object> stats) {
       this.f = f;
@@ -354,6 +384,10 @@ public final class RawDeveloper {
       pV = new float[qn];
       kq = new float[qn];
       qx0 = new int[W];
+      if (r.halation > 0 || r.bloom > 0) {
+        qLin = new float[3 * qn];
+        qClip = new float[qn];
+      }
       qfx = new float[W];
       for (int x = 0; x < W; x++) {
         float u = (x - 1.5f) * 0.25f;
@@ -421,6 +455,35 @@ public final class RawDeveloper {
       stats.put("grainAmplitude", round(ampEff, 5));
       stats.put("grainSeed", o.grainSeed);
 
+      int halSteps = Math.max(0, Math.min(10, r.halation)), bloomSteps = Math.max(0, Math.min(10, r.bloom));
+      double aH = HALATION_PER_STEP * halSteps;
+      bloomA = (float) (BLOOM_PER_STEP * bloomSteps);
+      haloA[0] = (float) aH;
+      haloA[1] = (float) (aH * HALATION_GREEN);
+      haloA[2] = 0;
+      for (int c = 0; c < 3; c++) glowKeep[c] = (1 - bloomA) * (1 - haloA[c]);
+      glow = halSteps > 0 || bloomSteps > 0;
+      double longSide = Math.max(W, H) / 4.0; // in quarter-resolution blocks
+      haloR = boxRadius(HALATION_SIGMA * longSide);
+      bloomR = boxRadius(BLOOM_SIGMA * longSide);
+      clarityR = boxRadius(CLARITY_SIGMA * longSide);
+      for (int k = 0; k < 4; k++) clipRaw[k] = (int) Math.ceil(black[k] + CLIP_LEVEL * (f.white - black[k]));
+      int claritySteps = Math.max(-5, Math.min(5, r.clarity));
+      clarityK = (float) (CLARITY_PER_STEP * claritySteps);
+      stats.put("halation", halSteps);
+      stats.put("bloom", bloomSteps);
+      stats.put("clarity", claritySteps);
+      if (glow) {
+        stats.put("halationRed", round(aH, 4));
+        stats.put("bloomShare", round(bloomA, 4));
+        stats.put("glowRadiiQuarterPx", new int[] {haloR, bloomR});
+        stats.put(
+            "glowModel",
+            "normalised redistribution in scene-linear light; clipped light sources glow as "
+                + CLIP_BOOST + "x their clipped value (assumption)");
+      }
+      if (claritySteps != 0) stats.put("clarityModel", "mid-band local contrast, approximation; k=" + round(clarityK, 3));
+
       stats.put("lut", lut.title.isEmpty() ? r.filmSimulation : lut.title);
       stats.put("lutGamut", lut.gamut);
       stats.put("lutModel", lut.model);
@@ -441,6 +504,10 @@ public final class RawDeveloper {
       }
       for (Future<Void> fu : pool.invokeAll(tasks)) fu.get();
       long t = System.nanoTime();
+      if (glow) {
+        buildGlow();
+        quarterCodes();
+      }
       quarterDenoise();
       quarterDenoiseMs = Math.round((System.nanoTime() - t) / 1e6);
     }
@@ -451,6 +518,7 @@ public final class RawDeveloper {
     void quarterRows(int by0, int by1) {
       final short[] data = f.data;
       float[] acc = new float[3 * qW], cnt = new float[3];
+      int[] clipCount = glow ? new int[qW] : null;
       float[][] sh = new float[4][qW];
       float[] tmpRow = new float[Math.max(2, shading ? f.shadingColumns : 2)];
       for (int by = by0; by < by1; by++) {
@@ -477,6 +545,21 @@ public final class RawDeveloper {
           cnt[c1] += 2;
         }
         float iR = 1f / Math.max(1, cnt[0]), iG = 1f / Math.max(1, cnt[1]), iB = 1f / Math.max(1, cnt[2]);
+        if (glow) {
+          java.util.Arrays.fill(clipCount, 0);
+          // green sites only: a light source saturates green too, a saturated red object does not
+          for (int y = y0; y < y1; y++) {
+            int row = y * f.rowStride, kr = (y & 1) << 1;
+            int t0 = colorK[kr] == 1 ? clipRaw[kr] : Integer.MAX_VALUE;
+            int t1 = colorK[kr | 1] == 1 ? clipRaw[kr | 1] : Integer.MAX_VALUE;
+            for (int x = 0; x + 1 < W; x += 2) {
+              if ((data[row + x] & 0xffff) >= t0) clipCount[x >> 2]++;
+              if ((data[row + x + 1] & 0xffff) >= t1) clipCount[(x + 1) >> 2]++;
+            }
+          }
+          float inv = 1f / Math.max(1, (y1 - y0) * 2);
+          for (int bx = 0; bx < qW; bx++) qClip[by * qW + bx] = clipCount[bx] * inv;
+        }
         for (int bx = 0; bx < qW; bx++) {
           float shG = 0.5f * (sh[1][bx] + sh[2][bx]);
           float R = acc[3 * bx] * iR * sh[0][bx];
@@ -489,10 +572,17 @@ public final class RawDeveloper {
             if (R > G) R += w * (G - R);
             if (B > G) B += w * (G - B);
           }
+          int i = by * qW + bx;
+          if (glow) {
+            qLin[3 * i] = m[0] * R + m[1] * G + m[2] * B;
+            qLin[3 * i + 1] = m[3] * R + m[4] * G + m[5] * B;
+            qLin[3 * i + 2] = m[6] * R + m[7] * G + m[8] * B;
+            qS[i] = shG;
+            continue;
+          }
           float c0 = tone.apply(m[0] * R + m[1] * G + m[2] * B);
           float c1 = tone.apply(m[3] * R + m[4] * G + m[5] * B);
           float c2 = tone.apply(m[6] * R + m[7] * G + m[8] * B);
-          int i = by * qW + bx;
           float yq = 0.25f * (c0 + 2 * c1 + c2);
           qY[i] = yq;
           qU[i] = c0 - yq;
@@ -500,6 +590,85 @@ public final class RawDeveloper {
           qS[i] = shG;
         }
       }
+    }
+
+    /**
+     * Glow planes at quarter resolution: the source is the scene-linear block value plus, for
+     * clipped RAW pixels, the light they lost (CLIP_BOOST); halation blurs it with the small kernel
+     * into red (and some green), bloom with the wide kernel into all channels. Three box passes
+     * approximate a Gaussian.
+     */
+    void buildGlow() {
+      int n = qW * qH;
+      if (colSum == null) colSum = new float[qW];
+      float[] src = new float[n], blur = new float[n], box = new float[n], x = new float[n];
+      float boost = CLIP_BOOST - 1;
+      boolean clipped = false;
+      for (int i = 0; i < n; i++) {
+        x[i] = boost * qClip[i] * qS[i]; // light the clipped pixels lost, in units of the clip colour
+        clipped |= x[i] > 0;
+      }
+      // that extra light only reaches the surroundings: max(0, K * X - X), so the inside of a
+      // clipped source keeps its colour and its edge is not darkened
+      float[] xh = null, xb = null;
+      if (clipped && haloA[0] > 0) {
+        xh = new float[n];
+        gauss(x, xh, haloR, box);
+        for (int i = 0; i < n; i++) xh[i] = Math.max(0, xh[i] - x[i]);
+      }
+      if (clipped && bloomA > 0) {
+        xb = new float[n];
+        gauss(x, xb, bloomR, box);
+        for (int i = 0; i < n; i++) xb[i] = Math.max(0, xb[i] - x[i]);
+      }
+      // inside clipped sources the light given away is put back (weight keepIn = min(1, 2 x clipped
+      // share)): the film stays saturated there
+      glowQ = new float[3][];
+      for (int c = 0; c < 3; c++) {
+        float clip = (m[3 * c] + m[3 * c + 1] + m[3 * c + 2]) * clipFactor;
+        for (int i = 0; i < n; i++) src[i] = Math.max(0, qLin[3 * i + c]);
+        float[] g = new float[n];
+        if (haloA[c] > 0) {
+          gauss(src, blur, haloR, box);
+          float w = (1 - bloomA) * haloA[c];
+          for (int i = 0; i < n; i++) {
+            float keepIn = Math.min(1, 2 * qClip[i]);
+            g[i] += w * (blur[i] + (xh == null ? 0 : clip * xh[i]) + keepIn * Math.max(0, src[i] - blur[i]));
+          }
+        }
+        if (bloomA > 0) {
+          gauss(src, blur, bloomR, box);
+          for (int i = 0; i < n; i++) {
+            float keepIn = Math.min(1, 2 * qClip[i]);
+            g[i] += bloomA * (blur[i] + (xb == null ? 0 : clip * xb[i]) + keepIn * Math.max(0, src[i] - blur[i]));
+          }
+        }
+        glowQ[c] = g;
+      }
+    }
+
+    /** Quarter-resolution codes once the glow is known (same steps as quarterRows). */
+    void quarterCodes() {
+      int n = qW * qH;
+      float kR = glowKeep[0], kG = glowKeep[1], kB = glowKeep[2];
+      float[] gR = glowQ[0], gG = glowQ[1], gB = glowQ[2];
+      for (int i = 0; i < n; i++) {
+        float c0 = tone.apply(kR * qLin[3 * i] + gR[i]);
+        float c1 = tone.apply(kG * qLin[3 * i + 1] + gG[i]);
+        float c2 = tone.apply(kB * qLin[3 * i + 2] + gB[i]);
+        float yq = 0.25f * (c0 + 2 * c1 + c2);
+        qY[i] = yq;
+        qU[i] = c0 - yq;
+        qV[i] = c2 - yq;
+      }
+      qLin = qClip = null;
+    }
+
+    /** Three edge-replicated box means of radius r: a Gaussian of sigma^2 = r (r + 1). */
+    void gauss(float[] in, float[] out, int r, float[] tmp) {
+      boxMean(in, out, r, tmp);
+      boxMean(out, out, r, tmp);
+      boxMean(out, out, r, tmp);
     }
 
     /** Gain of one shading channel at the centres (4 bx + 2, y) of the quarter-resolution blocks. */
@@ -560,6 +729,11 @@ public final class RawDeveloper {
         float q = m1[i] * qY[i] + m2[i];
         yd[i] = q + lowKeep * (qY[i] - q);
         dY[i] = yd[i] - qY[i];
+      }
+      if (clarityK != 0) {
+        band = new float[n];
+        gauss(yd, band, clarityR, box);
+        for (int i = 0; i < n; i++) band[i] = yd[i] - band[i];
       }
       if (debugQuarter != null)
         for (int i = 0; i < n; i++) {
@@ -856,6 +1030,26 @@ public final class RawDeveloper {
       int out = r * W;
       int k0 = (yy & 1) << 1;
       int cEven = j.colorK[k0], cOdd = j.colorK[k0 | 1];
+      final float[][] gq = j.glowQ;
+      final float[] gR = gq == null ? null : gq[0], gG = gq == null ? null : gq[1], gB = gq == null ? null : gq[2];
+      final float kR = j.glowKeep[0], kG = j.glowKeep[1], kB = j.glowKeep[2];
+      final int[] qx0 = j.qx0;
+      final float[] qfx = j.qfx;
+      int q0 = 0, q1 = 0;
+      float fy = 0;
+      if (gq != null) {
+        float v = (yy - 1.5f) * 0.25f;
+        int y0q = (int) Math.floor(v);
+        if (y0q < 0) {
+          y0q = 0;
+          fy = 0;
+        } else if (y0q >= j.qH - 1) {
+          y0q = j.qH - 2;
+          fy = 1;
+        } else fy = v - y0q;
+        q0 = y0q * j.qW;
+        q1 = q0 + j.qW;
+      }
       for (int x = 0; x < W; x++) {
         int i = cRow + x;
         int col = (x & 1) == 0 ? cEven : cOdd;
@@ -899,6 +1093,18 @@ public final class RawDeveloper {
         float lr = m[0] * R + m[1] * G + m[2] * B;
         float lg = m[3] * R + m[4] * G + m[5] * B;
         float lb = m[6] * R + m[7] * G + m[8] * B;
+        if (gq != null) {
+          int i0 = q0 + qx0[x], i1 = q1 + qx0[x];
+          float fx = qfx[x];
+          float a0 = gR[i0] + fx * (gR[i0 + 1] - gR[i0]), a1 = gR[i1] + fx * (gR[i1 + 1] - gR[i1]);
+          lr = kR * lr + a0 + fy * (a1 - a0);
+          a0 = gG[i0] + fx * (gG[i0 + 1] - gG[i0]);
+          a1 = gG[i1] + fx * (gG[i1 + 1] - gG[i1]);
+          lg = kG * lg + a0 + fy * (a1 - a0);
+          a0 = gB[i0] + fx * (gB[i0 + 1] - gB[i0]);
+          a1 = gB[i1] + fx * (gB[i1 + 1] - gB[i1]);
+          lb = kB * lb + a0 + fy * (a1 - a0);
+        }
         cr[out + x] = tone.apply(lr);
         cg[out + x] = tone.apply(lg);
         cb[out + x] = tone.apply(lb);
@@ -975,6 +1181,8 @@ public final class RawDeveloper {
         }
       }
       final float lambda = j.sharpen, keep = j.nrKeep;
+      final float[] bandQ = j.band;
+      final float clarityK = j.clarityK;
       final float[] dYq = j.dY, pUq = j.pU, pVq = j.pV, kq = j.kq, qfx = j.qfx;
       final int[] qx0 = j.qx0;
       final int qW = j.qW;
@@ -1004,6 +1212,12 @@ public final class RawDeveloper {
           float fx = qfx[x];
           float t0 = dYq[i0] + fx * (dYq[i0 + 1] - dYq[i0]), t1 = dYq[i1] + fx * (dYq[i1 + 1] - dYq[i1]);
           float yo = q + lambda * (q - blur) + keep * (y - q) + t0 + fy * (t1 - t0);
+          if (bandQ != null) {
+            float b0 = bandQ[i0] + fx * (bandQ[i0 + 1] - bandQ[i0]);
+            float b1 = bandQ[i1] + fx * (bandQ[i1 + 1] - bandQ[i1]);
+            float wv = 4 * yo * (1 - yo);
+            if (wv > 0) yo += clarityK * wv * (b0 + fy * (b1 - b0));
+          }
           t0 = kq[i0] + fx * (kq[i0 + 1] - kq[i0]);
           t1 = kq[i1] + fx * (kq[i1 + 1] - kq[i1]);
           float kk = t0 + fy * (t1 - t0);
@@ -1281,6 +1495,11 @@ public final class RawDeveloper {
     double mean = sum / a.length, sd = Math.sqrt(Math.max(1e-12, sq / a.length - mean * mean));
     for (int i = 0; i < a.length; i++) a[i] = (float) ((a[i] - mean) / sd);
     return a;
+  }
+
+  /** Radius of three box passes whose combined Gaussian has the given sigma (at least 1). */
+  static int boxRadius(double sigma) {
+    return Math.max(1, (int) Math.round((-1 + Math.sqrt(1 + 4 * sigma * sigma)) / 2));
   }
 
   static double round(double v, int digits) {
