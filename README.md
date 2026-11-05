@@ -6,7 +6,9 @@
 
 Cream/olive/orange Grain design. Real Camera2 still capture. Recipes request supported white balance, tone curves, noise reduction and sharpening **before capture**, not a generic color filter added to a finished JPEG. Digital framing is applied afterward as a geometry-only crop.
 
-**Status: first-device-beta source.** Java syntax and pure geometry/curve math have been checked locally. No Android SDK is installed here, no APK was built here, and no real-phone testing has been performed. GitHub Actions is included for the first complete Android build. Hardware recipe response is deliberately marked uncalibrated.
+**Status: device-test beta.** v0.1.1 passed Android compilation, tests, lint and APK packaging in GitHub Actions. v0.1.2 corrects the double sensor-rotation path in the viewfinder; each APK is published only after its CI checks pass. No local Android SDK/build is used. Physical-phone validation and recipe calibration remain pending.
+
+**Chroma / Fuji research:** Chroma contains recognizable Fuji-style LUT bases, but not the named recipe catalog sometimes implied by those names. See [research findings and recipe limitations](docs/CHROMA_RESEARCH.md). No third-party LUTs were imported.
 
 ## Get your APK with GitHub Actions
 
@@ -14,19 +16,19 @@ This repository now contains the standalone Grain project. The previous project'
 
 1. Open **Actions → Build and Release Grain APK** in this repository.
 2. A push to `main` starts the build automatically. You can also choose **Run workflow**.
-3. After a green run, download the APK from the **v0.1.1 GitHub Release**. The Actions artifact **grain-photo-debug-N** is also retained.
-4. Extract the artifact ZIP and install `app-debug.apk` on your Redmi Note 13 Pro Plus.
+3. After a green run, download the APK from the **v0.1.2 GitHub Release**. The Actions artifact **grain-photo-debug-N** is also retained.
+4. Install the release APK directly. If using the Actions artifact instead, extract its ZIP first.
 5. Allow installation from your browser/file manager when Android asks, then grant **Camera** access.
 
 The Android app's package is `dev.grain.photo`; it installs separately from Zircon Cinema. The final HTML design reference remains under `design/`.
 
 No GitHub secrets are required for a first debug build. No local Flutter/Android Studio/SDK is needed. The workflow installs Java 17, Gradle 8.13, Android API 36 / build-tools 36.0.0 on GitHub's ephemeral runner. It runs tests + lint + assembles an installable debug APK.
 
-If CI fails, download the build reports or copy the failing step's logs. This project is prepared for CI, not falsely described as a successfully built APK.
+If CI fails, download the build reports or copy the failing step's logs. A failed run does not publish its APK.
 
 ### Updating an installed debug APK
 
-A fresh CI runner normally generates a new debug signing key. Android rejects an update signed with a different key. **Export your private photos before uninstalling** if you need to reinstall.
+The workflow caches the personal debug signing key; an optional secret provides a more durable key. Cache eviction can still change the key. Android rejects an update signed with a different key. **Export your private photos before uninstalling** if you need to reinstall.
 
 For stable personal updates, optionally generate a standard Android debug keystore on your own machine (`androiddebugkey`, store/key password `android`) and save its base64 encoding as the repository secret `GRAIN_DEBUG_KEYSTORE_BASE64`. The workflow restores it before building. Do not use this debug setup as production signing, and never commit a real private release keystore.
 
