@@ -1,87 +1,88 @@
-# Recipe Cam
+# Grain Photo
 
-A camera app for Fujifilm film-simulation recipes: pick a recipe, shoot, and the
-frame already looks that way — SOOC, no editing.
+**A separate, native Android recipe camera for your Redmi Note 13 Pro Plus.**
 
-- `web/index.html` — the whole app in one self-contained file (no network, no CDN)
-- `app-shell/` — Capacitor wrapper that packages it as an Android app
-- `.github/workflows/android.yml` — CI that builds the APK
+**v0.1.1 UI revision:** native layout and controls now follow the final HTML framing edition: custom orange shutter, line icons, anchored ratio/zoom controls, film-card sheet, paper gallery and preferences. See [design parity](docs/DESIGN_PARITY.md).
 
-## Get the APK
+Cream/olive/orange Grain design. Real Camera2 still capture. Recipes request supported white balance, tone curves, noise reduction and sharpening **before capture**, not a generic color filter added to a finished JPEG. Digital framing is applied afterward as a geometry-only crop.
 
-Every push to `main` publishes a rolling **release** with `app-*.apk` attached.
-Open the Releases page, download the APK, and install it (Android will warn about
-an unknown developer — expected for a sideloaded build).
+**Status: first-device-beta source.** Java syntax and pure geometry/curve math have been checked locally. No Android SDK is installed here, no APK was built here, and no real-phone testing has been performed. GitHub Actions is included for the first complete Android build. Hardware recipe response is deliberately marked uncalibrated.
 
-Tagging `v1.0.0` produces a versioned release instead.
+## Get your APK with GitHub Actions
 
-## Build locally
+This repository now contains the standalone Grain project. The previous project's files were replaced in a normal commit; earlier Git history was preserved.
 
-```bash
-cd app-shell
-npm ci
-npx cap add android
-npx cap sync android
-cd android && ./gradlew assembleDebug
+1. Open **Actions → Build Grain APK** in this repository.
+2. A push to `main` starts the build automatically. You can also choose **Run workflow**.
+3. After a green run, download **grain-photo-debug-N** under Artifacts.
+4. Extract the artifact ZIP and install `app-debug.apk` on your Redmi Note 13 Pro Plus.
+5. Allow installation from your browser/file manager when Android asks, then grant **Camera** access.
+
+The Android app's package is `dev.grain.photo`; it installs separately from Zircon Cinema. The final HTML design reference remains under `design/`.
+
+No GitHub secrets are required for a first debug build. No local Flutter/Android Studio/SDK is needed. The workflow installs Java 17, Gradle 8.13, Android API 36 / build-tools 36.0.0 on GitHub's ephemeral runner. It runs tests + lint + assembles an installable debug APK.
+
+If CI fails, download the build reports or copy the failing step's logs. This project is prepared for CI, not falsely described as a successfully built APK.
+
+### Updating an installed debug APK
+
+A fresh CI runner normally generates a new debug signing key. Android rejects an update signed with a different key. **Export your private photos before uninstalling** if you need to reinstall.
+
+For stable personal updates, optionally generate a standard Android debug keystore on your own machine (`androiddebugkey`, store/key password `android`) and save its base64 encoding as the repository secret `GRAIN_DEBUG_KEYSTORE_BASE64`. The workflow restores it before building. Do not use this debug setup as production signing, and never commit a real private release keystore.
+
+## Included
+
+- Separate package `dev.grain.photo`; installs alongside Zircon Cinema.
+- Native Android/Java, no Flutter dependency or WebView wrapper.
+- Camera2 JPEG still requests, selected from the phone's public output sizes.
+- Four experimental ISP recipes: Daylight, Coast, Golden, Afterhours.
+- Per-recipe curve strength, supported WB presets, recipe EV bias and NR/edge preferences.
+- Camera capability diagnostics and a per-photo requested/returned-settings receipt.
+- Portrait preview, digital pinch zoom, 1×/2×, precise 1–5× slider; no fake optical lens controls.
+- Explicit 3:4, 1:1 and 9:16 picker; real output crop, no fixed-size upscaling.
+- Tap focus, composition grid, exposure compensation, volume-key shutter.
+- Cancellable 3s/5s timer; per-recipe strengths/preferences remembered.
+- Optional retained full-frame recipe capture.
+- Private gallery, detail view, MediaStore export, sharing, delete with Undo.
+- Original interactive HTML design under `design/grain-prototype.html`.
+
+## Important boundaries
+
+- **JPEG only in this beta.** HEIF and RAW/DNG are not implemented. Capability diagnostics can report advertised HEIF, but do not pretend it is enabled.
+- **Full-frame capture is not an unfiltered original.** The ISP recipe is already baked into it. A clean original cannot be recovered from that JPEG.
+- **Balanced** chooses the largest public JPEG up to 16 MP; **Larger** up to 24 MP. Digital zoom/cropping reduces output resolution. No claim of access to the stock camera's 200 MP mode.
+- Recipes are original experimental 1D RGB responses, not calibrated film-stock reproductions or arbitrary 3D LUTs. They need device testing. No grain, halation, Silver monochrome, flash, or RAW engine is silently faked.
+- HAL acceptance / metadata does not prove exact pixel response. Check the receipt and run the device test plan.
+- Private photos are deleted when the app is uninstalled. Export important photos first. No cloud backup or network access.
+
+## Folder map
+
+```text
+.github/workflows/build-apk.yml   GitHub-only APK build
+app/                            Android app
+  src/main/java/dev/grain/photo/
+    MainActivity.java            Native Grain UI and interaction
+    GrainStyle.java               Drawn icons, shutter, ratio diagrams, print thumbnail
+    GrainCamera.java             Camera2 session / ISP recipe / still capture
+    Recipe.java                  Capture-aware recipe definitions
+    CurveMath.java               Monotonic experimental channel responses
+    Framing.java                 Shared crop/focus/preview geometry
+    PhotoStore.java              EXIF/crop, atomic private storage and export
+  src/test/                      JUnit math/curve tests
+design/grain-prototype.html      Original interactive phone mockup
+docs/                           Architecture, source audit, device test checklist
+tools/                          SDK-free Java syntax + math smoke checks
 ```
 
-The APK lands in `android/app/build/outputs/apk/debug/`.
 
-## Editing the web app
+## Lightweight checks (optional)
 
-Build the single file from the design sources, then copy it into place:
+On any machine with JDK 17+ and Bash 4+:
 
 ```bash
-OUT=recipe-cam-design-v3.html DESIGN_DIR=design/v3 python3 design/build.py
-cp recipe-cam-design-v3.html web/index.html
+bash tools/check-source.sh
 ```
 
-The CI check fails if `web/index.html` ever references an external `<script src>`
-or `<link href>`, because that would silently break the offline app.
+This checks Java syntax and 1,227 crop/curve cases without an Android SDK. It does **not** compile/link the Android app. GitHub Actions runs the Android build and JUnit tests.
 
-## Camera permissions
-
-The camera is not a nice-to-have here, so it is worth knowing what makes it work:
-
-- `AndroidManifest.xml` must **declare** `android.permission.CAMERA`. Capacitor's
-  `BridgeWebChromeClient` maps WebView `VIDEO_CAPTURE` to a runtime request, but a
-  package that does not declare the permission is refused *before any dialog
-  appears*, and `getUserMedia` reports `NotAllowedError` — indistinguishable from
-  the user tapping "deny". CI injects the declaration after `cap add android` and
-  then asserts it landed.
-- `@capacitor/filesystem` + `@capacitor/share` are required for saving. A blob
-  `<a download>` does nothing inside a WebView, so the app writes the JPEG and
-  opens the system share sheet instead.
-- The app opens the camera on launch, releases the sensor when backgrounded, and
-  falls back to the bundled sample frame if permission is refused.
-
-**Not verified by CI:** the APK is built but never launched, so the camera path is
-not exercised on a device. It is checked in a desktop browser against Chromium's
-fake capture device. If a device-specific failure shows up, the app renders the
-error and user agent on screen instead of a black rectangle.
-
-## The pipeline
-
-RAW in -> recipe -> JPEG out.
-
-- **Input**: a photo (any JPEG/PNG), a live camera stream, or a **raw file**.
-  `engine/raw.js` decodes uncompressed TIFF/DNG (8- and 16-bit, RGB or CFA with
-  a bilinear demosaic) and applies only the camera's `AsShotNeutral` — the
-  camera's own balance, not a look. DNGs using lossless-JPEG compression and
-  Fujifilm `.RAF` are **refused with a message**, because decoding them badly
-  would be worse than saying no: export a 16-bit TIFF instead.
-- **Recipe**: 213 recipes — 12 curated plus 201 from the
-  [open-fuji-recipes](https://github.com/matthieurobin/open-fuji-recipes) corpus.
-- **Render**: `engine/gl.js` is a WebGL2 fragment shader that does the pointwise
-  recipe maths at frame rate, with the 33^3 Fujifilm LUT as a 3D texture so the
-  sampler does the interpolation. `engine/color.js` is the CPU engine and runs
-  whenever WebGL2 is unavailable.
-- **Output**: JPEG. Stills come from `ImageCapture.takePhoto()` at sensor
-  resolution, not from the preview buffer.
-
-## Signing
-
-CI signs the release APK with a throwaway key generated per build, so the APK is
-installable but **every build has a different signature** — installing a new one
-over an old one requires uninstalling first. For a Play Store release, replace
-that with a real keystore in repository secrets.
+See [Architecture](docs/ARCHITECTURE.md), [Repository audit](docs/REPO_AUDIT.md), and [Device test plan](docs/DEVICE_TEST_PLAN.md).
