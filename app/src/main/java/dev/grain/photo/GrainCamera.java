@@ -11,13 +11,16 @@ import android.media.ImageReader;
 import android.os.*;
 import android.util.*;
 import android.view.*;
+import dev.grain.photo.develop.RawFrame;
+import java.io.File;
 import java.nio.ByteBuffer;
 import java.util.*;
 import org.json.*;
 
 /**
- * Native Camera2 still engine. Uses the direct-ISP request approach inspected in Zircon Cinema. No
- * video engine, P010 routing, RAW claim, or JPEG color filter is used here.
+ * Native Camera2 still engine. ISP recipes use direct capture requests (approach inspected in
+ * Zircon Cinema). Fujifilm recipes capture RAW_SENSOR plus the phone's own JPEG for reference and
+ * hand the RAW to the on-device developer. No video engine, P010 routing or JPEG color filter.
  */
 public final class GrainCamera {
   public interface Listener {
@@ -26,6 +29,9 @@ public final class GrainCamera {
     void error(String message);
 
     void captured(byte[] jpeg, Snapshot settings, JSONObject receipt);
+
+    /** RAW recipe capture: sensor data + calibration, the phone's JPEG and an optional DNG. */
+    void capturedRaw(RawCapture capture, Snapshot settings, JSONObject receipt);
 
     void status(String message);
   }
@@ -45,6 +51,20 @@ public final class GrainCamera {
       this.ratio = Framing.ratio(ratio);
       this.keepFull = keepFull;
       this.ev = ev;
+    }
+  }
+
+  public static final class RawCapture {
+    public final RawFrame frame;
+    public final byte[] phoneJpeg;
+    public final File dng;
+    public final int orientationDegrees;
+
+    RawCapture(RawFrame frame, byte[] phoneJpeg, File dng, int orientationDegrees) {
+      this.frame = frame;
+      this.phoneJpeg = phoneJpeg;
+      this.dng = dng;
+      this.orientationDegrees = orientationDegrees;
     }
   }
 
@@ -78,6 +98,13 @@ public final class GrainCamera {
   private boolean maximumResolution;
   private volatile boolean neutral;
   private volatile boolean closing;
+  private ImageReader rawReader;
+  private Size rawSize;
+  private Image pendingRaw;
+  private long pendingRawTime;
+  private boolean pendingWantsRaw;
+  private String rawUnavailable = "not probed";
+  private volatile File dngDirectory;
 
   public GrainCamera(Activity activity, TextureView texture, Listener listener) {
     this.activity = activity;
@@ -143,6 +170,37 @@ public final class GrainCamera {
             }
           },
           handler);
+      rawReader = null;
+      rawSize = null;
+      if (front) rawUnavailable = "RAW recipes use the rear camera in this build";
+      else if (!RawSupport.supported(chars, streams))
+        rawUnavailable = "Camera2 does not expose RAW_SENSOR with calibration for this camera";
+      else {
+        rawSize = RawSupport.rawSize(streams);
+        rawReader =
+            ImageReader.newInstance(
+                rawSize.getWidth(), rawSize.getHeight(), ImageFormat.RAW_SENSOR, 2);
+        rawReader.setOnImageAvailableListener(
+            reader -> {
+              Image image = null;
+              try {
+                image = reader.acquireNextImage();
+                if (image == null) return;
+                if (closed || token != generation || !inFlight || !pendingWantsRaw) return;
+                if (pendingRaw != null) pendingRaw.close();
+                pendingRaw = image;
+                pendingRawTime = image.getTimestamp();
+                image = null;
+                tryFinish();
+              } catch (Exception e) {
+                failCapture("Could not read RAW: " + e.getMessage());
+              } finally {
+                if (image != null) image.close();
+              }
+            },
+            handler);
+        rawUnavailable = null;
+      }
       buildCapabilities(streams);
       manager.openCamera(
           cameraId,
@@ -245,8 +303,10 @@ public final class GrainCamera {
       if (surface == null) throw new Exception("Preview surface is not ready");
       surface.setDefaultBufferSize(previewSize.getWidth(), previewSize.getHeight());
       previewSurface = new Surface(surface);
+      List<Surface> outputs = new ArrayList<>(Arrays.asList(previewSurface, jpegReader.getSurface()));
+      if (rawReader != null) outputs.add(rawReader.getSurface());
       device.createCaptureSession(
-          Arrays.asList(previewSurface, jpegReader.getSurface()),
+          outputs,
           new CameraCaptureSession.StateCallback() {
             @Override
             public void onConfigured(CameraCaptureSession s) {
@@ -272,6 +332,19 @@ public final class GrainCamera {
             @Override
             public void onConfigureFailed(CameraCaptureSession s) {
               if (token != generation) return;
+              if (rawReader != null) {
+                // Keep the camera usable: retry without the RAW stream.
+                rawReader.close();
+                rawReader = null;
+                rawUnavailable = "The phone rejected preview + JPEG + RAW in one session";
+                try {
+                  capabilities.put("rawImplemented", false).put("rawUnavailable", rawUnavailable);
+                } catch (JSONException ignored) {
+                }
+                if (previewSurface != null) previewSurface.release();
+                createSession(token);
+                return;
+              }
               postError(
                   "The phone rejected preview + JPEG at this size. Turn off Larger capture and"
                       + " retry.");
@@ -335,7 +408,9 @@ public final class GrainCamera {
     warnings.clear();
     JSONObject applied = new JSONObject();
     Recipe recipe = Recipe.ALL[s.recipe];
-    boolean plainPreview = neutral && !still;
+    if (recipe.raw && still) return applyRaw(b, s, recipe);
+    // RAW recipes preview through the phone's normal ISP; the look is applied in development.
+    boolean plainPreview = (neutral || recipe.raw) && !still;
     set(b, CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO);
     set(b, CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
     set(
@@ -419,6 +494,49 @@ public final class GrainCamera {
     return applied;
   }
 
+  /** RAW capture request: phone auto exposure/WB/focus, lens-shading map, reference JPEG. */
+  private JSONObject applyRaw(CaptureRequest.Builder b, Snapshot s, Recipe recipe) throws Exception {
+    warnings.clear();
+    JSONObject applied = new JSONObject();
+    set(b, CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO);
+    set(b, CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
+    set(
+        b,
+        CaptureRequest.CONTROL_AF_MODE,
+        chooseMode(
+            chars.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES),
+            CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE,
+            CaptureRequest.CONTROL_AF_MODE_AUTO,
+            CaptureRequest.CONTROL_AF_MODE_OFF));
+    set(b, CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO);
+    Range<Integer> range = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE);
+    Rational step = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP);
+    int index = 0;
+    // The user's EV is applied in development (metering key), so RAW capture only adds headroom.
+    if (range != null && step != null && step.doubleValue() > 0)
+      index =
+          Math.max(
+              range.getLower(),
+              Math.min(range.getUpper(), (int) Math.round(recipe.exposureBias / step.doubleValue())));
+    set(b, CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, index);
+    applied.put("evIndex", index).put("userEvAppliedInDevelopment", s.ev)
+        .put("captureEvBias", recipe.exposureBias);
+    int[] shadingModes =
+        chars.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_LENS_SHADING_MAP_MODES);
+    if (contains(shadingModes, CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON)
+        && set(
+            b,
+            CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE,
+            CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON))
+      applied.put("lensShadingMap", "requested");
+    else warnings.add("Lens shading map not available; vignetting is not corrected in RAW development");
+    set(b, CaptureRequest.JPEG_QUALITY, (byte) 95);
+    set(b, CaptureRequest.JPEG_ORIENTATION, jpegOrientation());
+    applied.put("warnings", new JSONArray(warnings));
+    applied.put("compatibilityMode", safeMode);
+    return applied;
+  }
+
   private <T> boolean set(CaptureRequest.Builder b, CaptureRequest.Key<T> key, T value) {
     if (!requestKeys.contains(key)) {
       warnings.add(key.getName() + " unavailable");
@@ -445,15 +563,22 @@ public final class GrainCamera {
             postError("Camera is busy or not ready");
             return;
           }
+          boolean wantsRaw = Recipe.ALL[snapshot.recipe].raw;
+          if (wantsRaw && rawReader == null) {
+            postError("RAW capture is unavailable: " + rawUnavailable);
+            return;
+          }
           inFlight = true;
           pending = snapshot;
           pendingBytes = null;
           pendingResult = null;
+          pendingWantsRaw = wantsRaw;
           try {
             CaptureRequest.Builder b =
                 device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
             pendingApplied = applyRecipe(b, snapshot, true);
             b.addTarget(jpegReader.getSurface());
+            if (wantsRaw) b.addTarget(rawReader.getSurface());
             b.setTag(snapshot);
             session.capture(
                 b.build(),
@@ -494,8 +619,10 @@ public final class GrainCamera {
 
   private void tryFinish() {
     if (!inFlight || pendingBytes == null || pendingResult == null) return;
+    if (pendingWantsRaw && pendingRaw == null) return;
     Long timestamp = pendingResult.get(CaptureResult.SENSOR_TIMESTAMP);
     if (timestamp == null || timestamp != pendingImageTime) return;
+    if (pendingWantsRaw && timestamp != pendingRawTime) return;
     try {
       JSONObject receipt =
           new JSONObject()
@@ -528,6 +655,38 @@ public final class GrainCamera {
             "HAL did not report the requested tone-map mode. Recipe response is unverified.");
       byte[] bytes = pendingBytes;
       Snapshot snap = pending;
+      if (pendingWantsRaw) {
+        Image raw = pendingRaw;
+        pendingRaw = null;
+        RawFrame frame;
+        File dng = null;
+        int orientation = jpegOrientation();
+        try {
+          frame = RawSupport.frame(raw, chars, pendingResult);
+          File dir = dngDirectory;
+          if (dir != null) {
+            dng = new File(dir, "capture-" + timestamp + ".dng");
+            try {
+              RawSupport.writeDng(chars, pendingResult, raw, orientation, dng);
+            } catch (Exception e) {
+              if (!dng.delete() && dng.exists()) Log.w("Grain", "Partial DNG kept");
+              dng = null;
+              receipt.put("dngWarning", "DNG not written: " + e.getMessage());
+            }
+          }
+          receipt.put("rawFrame", RawSupport.describe(frame, pendingResult));
+        } finally {
+          raw.close();
+        }
+        receipt
+            .put("raw", true)
+            .put("sourceFormat", "Camera2 RAW_SENSOR developed on device; phone ISP JPEG kept as reference")
+            .put("rawSize", frame.width + "x" + frame.height);
+        RawCapture capture = new RawCapture(frame, bytes, dng, orientation);
+        clearPending();
+        main.post(() -> listener.capturedRaw(capture, snap, receipt));
+        return;
+      }
       clearPending();
       main.post(() -> listener.captured(bytes, snap, receipt));
     } catch (Exception e) {
@@ -558,6 +717,11 @@ public final class GrainCamera {
 
   private void clearPending() {
     inFlight = false;
+    pendingWantsRaw = false;
+    if (pendingRaw != null) {
+      pendingRaw.close();
+      pendingRaw = null;
+    }
     pending = null;
     pendingBytes = null;
     pendingResult = null;
@@ -688,12 +852,28 @@ public final class GrainCamera {
     capabilities
         .put("heifAdvertised", heif != null && heif.length > 0)
         .put("heifImplemented", false)
-        .put("rawImplemented", false)
+        .put("rawImplemented", rawReader != null)
+        .put("rawUnavailable", rawUnavailable == null ? JSONObject.NULL : rawUnavailable)
+        .put("rawSelected", rawSize == null ? JSONObject.NULL : rawSize.toString())
+        .put("rawProbe", RawSupport.probe(chars, streams))
         .put("captureLimit", "16 MP balanced / 24 MP larger, selected from public JPEG sizes");
   }
 
   public JSONObject capabilities() {
     return capabilities;
+  }
+
+  public boolean rawAvailable() {
+    return rawReader != null;
+  }
+
+  public String rawUnavailableReason() {
+    return rawUnavailable;
+  }
+
+  /** Where RAW captures write their DNG before the photo is saved; null = no DNG. */
+  public void setDngDirectory(File dir) {
+    dngDirectory = dir;
   }
 
   public void neutralPreview(boolean enabled) {
@@ -736,6 +916,10 @@ public final class GrainCamera {
             if (jpegReader != null) {
               jpegReader.close();
               jpegReader = null;
+            }
+            if (rawReader != null) {
+              rawReader.close();
+              rawReader = null;
             }
             if (previewSurface != null) {
               previewSurface.release();

@@ -2,6 +2,8 @@
 
 **A separate, native Android recipe camera for your Redmi Note 13 Pro Plus.**
 
+**v0.2.0 — first Fujifilm recipe from RAW:** the ◆ **Reggie's Portra** film captures the sensor RAW (plus the phone's own JPEG), then develops it on the phone: Camera2 calibration → scene-linear → F-Log2/F-Gamut → Fujifilm's **official** Classic Chrome LUT (imported by you from Fujifilm's free pack; never bundled) → a stills tone model fitted on public Fujifilm RAF/JPEG pairs → recipe controls → JPEG, with DNG and receipt kept for tuning. See [RAW Fujifilm recipes](docs/RAW_FUJI_RECIPES.md).
+
 **v0.1.1 UI revision:** native layout and controls now follow the final HTML framing edition: custom orange shutter, line icons, anchored ratio/zoom controls, film-card sheet, paper gallery and preferences. See [design parity](docs/DESIGN_PARITY.md).
 
 Cream/olive/orange Grain design. Real Camera2 still capture. Recipes request supported white balance, tone curves, noise reduction and sharpening **before capture**, not a generic color filter added to a finished JPEG. Digital framing is applied afterward as a geometry-only crop.
@@ -18,7 +20,7 @@ This repository now contains the standalone Grain project. The previous project'
 
 1. Open **Actions → Build and Release Grain APK** in this repository.
 2. A push to `main` starts the build automatically. You can also choose **Run workflow**.
-3. After a green run, download the APK from the **v0.1.3 GitHub Release**. The Actions artifact **grain-photo-debug-N** is also retained.
+3. After a green run, download the APK from the newest **GitHub Release** (v0.2.0). The Actions artifact **grain-photo-debug-N** is also retained.
 4. Install the release APK directly. If using the Actions artifact instead, extract its ZIP first.
 5. Allow installation from your browser/file manager when Android asks, then grant **Camera** access.
 
@@ -52,10 +54,10 @@ For stable personal updates, optionally generate a standard Android debug keysto
 
 ## Important boundaries
 
-- **JPEG only in this beta.** HEIF and RAW/DNG are not implemented. Capability diagnostics can report advertised HEIF, but do not pretend it is enabled.
+- **ISP looks are JPEG; Fujifilm recipes use RAW.** Reggie's Portra needs Camera2 RAW_SENSOR on the rear camera and the imported Fujifilm LUT; Grain explains and refuses to shoot it otherwise. HEIF is not implemented.
 - **Full-frame capture is not an unfiltered original.** The ISP recipe is already baked into it. A clean original cannot be recovered from that JPEG.
 - **Balanced** chooses the largest public JPEG up to 16 MP; **Larger** up to 24 MP. Digital zoom/cropping reduces output resolution. No claim of access to the stock camera's 200 MP mode.
-- Recipes are original experimental 1D RGB responses, not calibrated film-stock reproductions or arbitrary 3D LUTs. They need device testing. No grain, halation, Silver monochrome, flash, or RAW engine is silently faked.
+- The four ISP looks are original experimental 1D RGB responses, not film-stock reproductions. The Fujifilm recipe uses Fujifilm's own LUT, but its stills tone model, grain, Color Chrome, FX Blue, WB-shift step and DR-Auto rule are Grain's approximations and still need testing on the phone.
 - HAL acceptance / metadata does not prove exact pixel response. Check the receipt and run the device test plan.
 - Private photos are deleted when the app is uninstalled. Export important photos first. No cloud backup or network access.
 
@@ -72,10 +74,14 @@ app/                            Android app
     CurveMath.java               Monotonic experimental channel responses
     Framing.java                 Shared crop/focus/preview geometry
     PhotoStore.java              EXIF/crop, atomic private storage and export
+    RawSupport.java              RAW_SENSOR probe, frame + calibration copy, DNG
+    RawDevelopment.java          Runs the RAW engine, EXIF-tagged JPEG
+    LutLibrary.java              Imports Fujifilm's official F-Log2 LUT zip (private app storage)
+    develop/                     Pure-Java RAW engine: demosaic, DNG colour, F-Log2, LUT, tone model
   src/test/                      JUnit math/curve tests
 design/grain-prototype.html      Original interactive phone mockup
 docs/                           Architecture, source audit, device test checklist
-tools/                          SDK-free Java syntax + math smoke checks
+tools/                          SDK-free Java syntax + math smoke checks; DevelopRaw desktop harness
 ```
 
 
