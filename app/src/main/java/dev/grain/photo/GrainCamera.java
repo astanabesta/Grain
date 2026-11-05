@@ -103,6 +103,9 @@ public final class GrainCamera {
   private Image pendingRaw;
   private long pendingRawTime;
   private boolean pendingWantsRaw;
+  /** Physical device rotation (clockwise degrees) from the activity, and its value at the shutter. */
+  private volatile int deviceRotation;
+  private int pendingRotation;
   private String rawUnavailable = "not probed";
   private volatile File dngDirectory;
 
@@ -571,6 +574,7 @@ public final class GrainCamera {
           }
           inFlight = true;
           pending = snapshot;
+          pendingRotation = deviceRotation;
           pendingBytes = null;
           pendingResult = null;
           pendingWantsRaw = wantsRaw;
@@ -637,6 +641,8 @@ public final class GrainCamera {
               .put("raw", false)
               .put("opticalZoom", false)
               .put("sensorTimestampNs", timestamp)
+              .put("deviceRotation", pendingRotation)
+              .put("extraRotation", extraRotation())
               .put("actual", resultJson(pendingResult));
       JSONObject actual = receipt.getJSONObject("actual");
       int afState = actual.optInt("afState", -1);
@@ -668,7 +674,8 @@ public final class GrainCamera {
           if (dir != null) {
             dng = new File(dir, "capture-" + timestamp + ".dng");
             try {
-              RawSupport.writeDng(chars, pendingResult, raw, orientation, dng);
+              RawSupport.writeDng(
+                  chars, pendingResult, raw, (orientation + extraRotation()) % 360, dng);
             } catch (Exception e) {
               if (!dng.delete() && dng.exists()) Log.w("Grain", "Partial DNG kept");
               dng = null;
@@ -707,7 +714,7 @@ public final class GrainCamera {
     put(j, "edgeMode", r.get(CaptureResult.EDGE_MODE));
     put(j, "noiseReductionMode", r.get(CaptureResult.NOISE_REDUCTION_MODE));
     TonemapCurve curve = r.get(CaptureResult.TONEMAP_CURVE);
-    if (curve != null) j.put("tonemapCurve", Recipe.curveJson(curve));
+    if (curve != null && Recipe.hasPoints(curve)) j.put("tonemapCurve", Recipe.curveJson(curve));
     return j;
   }
 
@@ -804,6 +811,18 @@ public final class GrainCamera {
 
   public int uprightHeight() {
     return sensorRotation % 180 == 0 ? jpegSize.getHeight() : jpegSize.getWidth();
+  }
+
+  /**
+   * The UI is portrait-locked, so pictures are formed upright for a portrait-held phone. When the
+   * phone is turned, the saved files get this extra clockwise rotation in their EXIF/DNG orientation.
+   */
+  public void setDeviceRotation(int degrees) {
+    deviceRotation = ((degrees % 360) + 360) % 360;
+  }
+
+  private int extraRotation() {
+    return front ? (360 - pendingRotation) % 360 : pendingRotation;
   }
 
   private int jpegOrientation() {

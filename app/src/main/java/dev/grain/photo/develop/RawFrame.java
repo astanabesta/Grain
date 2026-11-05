@@ -22,6 +22,12 @@ public final class RawFrame {
   public int illuminant1 = 21, illuminant2 = 21;
   public int iso = 100;
   public long exposureNs;
+  /**
+   * Camera2 noise profile per CFA position (row-major 2x2, same indexing as {@link #black}): the
+   * variance of a pixel normalised to [0, 1] after black subtraction is noiseS * x + noiseO. Null
+   * when the HAL did not report it.
+   */
+  public double[] noiseS, noiseO;
 
   public RawFrame(short[] data, int width, int height, int rowStride) {
     if (width < 8 || height < 8 || (width & 1) != 0 || (height & 1) != 0)

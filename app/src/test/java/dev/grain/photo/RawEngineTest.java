@@ -184,4 +184,101 @@ public class RawEngineTest {
     assertFalse(p.matcher("x/33Grid/F-Log2C/FLog2C_to_PROVIA_33grid_V.1.00.cube").find());
     assertFalse(p.matcher("x/65Grid/F-Log2/FLog2_to_PROVIA_65grid_V.1.00.cube").find());
   }
+
+  /** Gaussian RAW noise with var = S x + O on a brightness ramp: the frame measurement recovers it. */
+  @Test
+  public void rawNoiseMeasurementRecoversTheCurve() {
+    int w = 640, h = 480;
+    short[] data = new short[w * h];
+    RawFrame f = new RawFrame(data, w, h, w);
+    f.cfa = RawFrame.GRBG;
+    double s = 6e-4, o = 1.5e-6;
+    Random rnd = new Random(11);
+    for (int y = 0; y < h; y++)
+      for (int x = 0; x < w; x++) {
+        double level = 0.004 * Math.pow(2, 7.0 * x / w);
+        double v = level + rnd.nextGaussian() * Math.sqrt(s * level + o);
+        data[y * w + x] = (short) Math.max(0, Math.min(1023, Math.round(64 + v * (1023 - 64))));
+      }
+    double[] m = RawDeveloper.measureRawNoise(f, 0);
+    assertNotNull(m);
+    assertEquals("shot term", s, m[0], 0.2 * s);
+    // 10-bit quantisation adds 1/12 LSB^2 to the read term
+    assertEquals("read term", o + 1.0 / 12 / (959.0 * 959.0), m[1], 0.6 * o);
+  }
+
+  static int[] developNoisyStep(double lumaNr, long seed) throws Exception {
+    int w = 320, h = 240;
+    double[] n = {0.5, 1, 0.625};
+    short[] data = new short[w * h];
+    RawFrame f = new RawFrame(data, w, h, w);
+    Random rnd = new Random(seed);
+    for (int y = 0; y < h; y++)
+      for (int x = 0; x < w; x++) {
+        int c = f.color(x, y);
+        double level = (x < w / 2 ? 0.05 : 0.20) * (c == 0 ? n[0] : c == 2 ? n[2] : 1);
+        double v = level + rnd.nextGaussian() * Math.sqrt(6e-4 * level + 1.5e-6);
+        data[y * w + x] = (short) Math.max(0, Math.min(1023, Math.round(64 + v * (1023 - 64))));
+      }
+    f.neutral = n;
+    f.colorMatrix1 = CM;
+    f.iso = 3200;
+    FujiRecipe plain =
+        new FujiRecipe("plain", "Plain", "", "", "LUT", "LUT", FujiRecipe.DynamicRange.DR100,
+            0, 0, 0, 0, -4, 0, 0, false, 0, 0, "As shot", 0, 0);
+    RawDeveloper.Options opt = new RawDeveloper.Options();
+    opt.grain = false;
+    opt.threads = 2;
+    opt.sharpen = 0;
+    opt.lumaNr = lumaNr;
+    opt.fixedGain = 2.0;
+    int[] out = new int[w * h];
+    RawDeveloper.develop(f, plain, identity(33), opt, (y, rows, argb, width) ->
+        System.arraycopy(argb, 0, out, y * width, rows * width));
+    return out;
+  }
+
+  static double flatStd(int[] img, int w, int x0, int x1, int y0, int y1) {
+    double s = 0, ss = 0;
+    int k = 0;
+    for (int y = y0; y < y1; y++)
+      for (int x = x0; x < x1; x++) {
+        int g = (img[y * w + x] >> 8) & 255;
+        s += g;
+        ss += g * g;
+        k++;
+      }
+    double mean = s / k;
+    return Math.sqrt(Math.max(0, ss / k - mean * mean));
+  }
+
+  /** 10-90 % rise width (pixels) of the row-averaged green profile around the step at w / 2. */
+  static double riseWidth(int[] img, int w, int h) {
+    double[] prof = new double[w];
+    for (int y = 20; y < h - 20; y++)
+      for (int x = 0; x < w; x++) prof[x] += (img[y * w + x] >> 8) & 255;
+    double lo = 0, hi = 0;
+    for (int x = w / 2 - 40; x < w / 2 - 20; x++) lo += prof[x] / 20;
+    for (int x = w / 2 + 20; x < w / 2 + 40; x++) hi += prof[x] / 20;
+    double a = lo + 0.1 * (hi - lo), b = lo + 0.9 * (hi - lo);
+    double xa = -1, xb = -1;
+    for (int x = w / 2 - 20; x < w / 2 + 20; x++) {
+      if (xa < 0 && prof[x] >= a) xa = x - 1 + (a - prof[x - 1]) / (prof[x] - prof[x - 1]);
+      if (xb < 0 && prof[x] >= b) xb = x - 1 + (b - prof[x - 1]) / (prof[x] - prof[x - 1]);
+    }
+    return xb - xa;
+  }
+
+  /** Luma noise reduction must clean flat areas without blurring a strong edge. */
+  @Test
+  public void noiseReductionCleansFlatAreasButKeepsEdges() throws Exception {
+    int w = 320, h = 240;
+    int[] off = developNoisyStep(0, 5), on = developNoisyStep(1, 5);
+    double sdOff = flatStd(off, w, 20, w / 2 - 30, 20, h - 20), sdOn = flatStd(on, w, 20, w / 2 - 30, 20, h - 20);
+    double sdOffB = flatStd(off, w, w / 2 + 30, w - 20, 20, h - 20), sdOnB = flatStd(on, w, w / 2 + 30, w - 20, 20, h - 20);
+    assertTrue("dark side " + sdOn + " vs " + sdOff, sdOn < 0.75 * sdOff);
+    assertTrue("bright side " + sdOnB + " vs " + sdOffB, sdOnB < 0.75 * sdOffB);
+    double wOff = riseWidth(off, w, h), wOn = riseWidth(on, w, h);
+    assertTrue("edge width " + wOn + " vs " + wOff, wOn <= wOff + 0.75);
+  }
 }

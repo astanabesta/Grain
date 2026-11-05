@@ -51,6 +51,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
   private LinearLayout filmRow;
   private ScrollView panelScroll;
   private GrainCamera camera;
+  private OrientationEventListener orientationListener;
   private PhotoStore store;
   private SharedPreferences preferences;
   private JSONObject capabilities = new JSONObject();
@@ -101,6 +102,22 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
       @Override public void handleOnBackPressed() { navigateBack(); }
     });
     camera = new GrainCamera(this, texture, this);
+    orientationListener =
+        new OrientationEventListener(this) {
+          int last = -1;
+
+          @Override
+          public void onOrientationChanged(int degrees) {
+            if (degrees == ORIENTATION_UNKNOWN) return;
+            // 20-degree hysteresis around the diagonals so a slight tilt does not flip it.
+            if (last >= 0) {
+              int d = Math.abs(((degrees - last + 540) % 360) - 180);
+              if (d < 65) return;
+            }
+            last = ((degrees + 45) / 90 * 90) % 360;
+            if (camera != null) camera.setDeviceRotation(last);
+          }
+        };
     applyRawFilesPreference();
     texture.setSurfaceTextureListener(
         new TextureView.SurfaceTextureListener() {
@@ -1335,11 +1352,14 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
   protected void onResume() {
     super.onResume();
     resumed = true;
+    if (orientationListener != null && orientationListener.canDetectOrientation())
+      orientationListener.enable();
     if (texture != null && texture.isAvailable()) openCamera();
   }
 
   @Override
   protected void onPause() {
+    if (orientationListener != null) orientationListener.disable();
     dismissCameraTool();
     resumed = false;
     cancelTimer();
@@ -1680,7 +1700,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     ScrollView scroll = new ScrollView(this);
     TextView text = text(json.toString(), 10, INK);
     try {
-      text.setText(json.toString(2));
+      text.setText(json.toString(2).replace("\\/", "/"));
     } catch (Exception ignored) {
     }
     text.setTypeface(Typeface.MONOSPACE);
@@ -1697,7 +1717,13 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
             (d, w) -> {
               android.content.ClipboardManager clip =
                   (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-              clip.setPrimaryClip(ClipData.newPlainText(title, json.toString()));
+              String plain;
+              try {
+                plain = json.toString(2).replace("\\/", "/");
+              } catch (Exception e) {
+                plain = json.toString();
+              }
+              clip.setPrimaryClip(ClipData.newPlainText(title, plain));
               message("Diagnostics copied");
             })
         .show();

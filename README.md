@@ -2,6 +2,8 @@
 
 **A separate, native Android recipe camera for your Redmi Note 13 Pro Plus.**
 
+**v0.2.1 — faster, cleaner RAW development:** release build (much faster on the phone), noise curve measured per frame (the phone's own profile is ~5× low), two-scale noise reduction, recipe sharpening, noise-aware grain, and sideways photos saved upright.
+
 **v0.2.0 — first Fujifilm recipe from RAW:** the ◆ **Reggie's Portra** film captures the sensor RAW (plus the phone's own JPEG), then develops it on the phone: Camera2 calibration → scene-linear → F-Log2/F-Gamut → Fujifilm's **official** Classic Chrome LUT (imported by you from Fujifilm's free pack; never bundled) → a stills tone model fitted on public Fujifilm RAF/JPEG pairs → recipe controls → JPEG, with DNG and receipt kept for tuning. See [RAW Fujifilm recipes](docs/RAW_FUJI_RECIPES.md).
 
 **v0.1.1 UI revision:** native layout and controls now follow the final HTML framing edition: custom orange shutter, line icons, anchored ratio/zoom controls, film-card sheet, paper gallery and preferences. See [design parity](docs/DESIGN_PARITY.md).
@@ -20,13 +22,13 @@ This repository now contains the standalone Grain project. The previous project'
 
 1. Open **Actions → Build and Release Grain APK** in this repository.
 2. A push to `main` starts the build automatically. You can also choose **Run workflow**.
-3. After a green run, download the APK from the newest **GitHub Release** (v0.2.0). The Actions artifact **grain-photo-debug-N** is also retained.
+3. After a green run, download the APK from the newest **GitHub Release** (v0.2.1). The Actions artifact **grain-photo-N** is also retained.
 4. Install the release APK directly. If using the Actions artifact instead, extract its ZIP first.
 5. Allow installation from your browser/file manager when Android asks, then grant **Camera** access.
 
 The Android app's package is `dev.grain.photo`; it installs separately from Zircon Cinema. The final HTML design reference remains under `design/`.
 
-No GitHub secrets are required for a first debug build. No local Flutter/Android Studio/SDK is needed. The workflow installs Java 17, Gradle 8.13, Android API 36 / build-tools 36.0.0 on GitHub's ephemeral runner. It runs tests + lint + assembles an installable debug APK.
+No GitHub secrets are required for a first debug build. No local Flutter/Android Studio/SDK is needed. The workflow installs Java 17, Gradle 8.13, Android API 36 / build-tools 36.0.0 on GitHub's ephemeral runner. It runs tests + lint + assembles an installable release APK signed with the personal debug key.
 
 If CI fails, download the build reports or copy the failing step's logs. A failed run does not publish its APK.
 

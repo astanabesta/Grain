@@ -127,6 +127,18 @@ public final class Recipe {
                 + " a claim of film-stock equivalence.");
   }
 
+  /** False for the all-zero placeholder curve some HALs report when no curve is in use. */
+  public static boolean hasPoints(TonemapCurve c) {
+    for (int ch = 0; ch < 3; ch++) {
+      if (c.getPointCount(ch) < 2) return false;
+      for (int p = 0; p < c.getPointCount(ch); p++) {
+        android.graphics.PointF v = c.getPoint(ch, p);
+        if (v.x != 0 || v.y != 0) return true;
+      }
+    }
+    return false;
+  }
+
   public static JSONArray curveJson(TonemapCurve c) throws Exception {
     JSONArray rgb = new JSONArray();
     for (int ch = 0; ch < 3; ch++) {

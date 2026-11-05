@@ -47,12 +47,12 @@ jobs:
             mkdir -p "$HOME/.android"
             printf '%s' "$DEBUG_KEY" | base64 --decode > "$HOME/.android/debug.keystore"
           fi
-      - name: Unit tests, lint, and installable debug APK
+      - name: Unit tests, lint, and installable release APK
         shell: bash
         run: |
           set +e
           set -o pipefail
-          gradle --no-daemon --console=plain :app:testDebugUnitTest :app:lintDebug :app:assembleDebug 2>&1 | tee build.log
+          gradle --no-daemon --console=plain :app:testDebugUnitTest :app:lintDebug :app:assembleRelease 2>&1 | tee build.log
           CODE=${PIPESTATUS[0]}
           if [ "$CODE" -ne 0 ]; then
             python3 - <<'PY'
@@ -72,8 +72,8 @@ jobs:
           exit "$CODE"
       - uses: actions/upload-artifact@v4
         with:
-          name: grain-photo-debug-${{ github.run_number }}
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: grain-photo-${{ github.run_number }}
+          path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 14
       - name: Publish Grain GitHub Release with APK
@@ -88,9 +88,9 @@ jobs:
           test -n "$VERSION"
           TAG="v$VERSION"
           mkdir -p release-files
-          APK="release-files/Grain-$TAG-debug.apk"
-          cp app/build/outputs/apk/debug/app-debug.apk "$APK"
-          (cd release-files && sha256sum "Grain-$TAG-debug.apk" > SHA256SUMS.txt)
+          APK="release-files/Grain-$TAG.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$APK"
+          (cd release-files && sha256sum "Grain-$TAG.apk" > SHA256SUMS.txt)
           sed "s/vVERSION/$TAG/g" .github/release-notes.md > release-files/RELEASE_NOTES.md
           PUBLISHED=0
           : > release-files/publication.log
@@ -107,7 +107,7 @@ jobs:
           for ATTEMPT in 1 2 3 4 5; do
             sleep "$((ATTEMPT * 4))"
             if gh release upload "$TAG" "$APK" release-files/SHA256SUMS.txt --clobber >> release-files/publication.log 2>&1; then
-              if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "Grain-$TAG-debug.apk"; then
+              if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "Grain-$TAG.apk"; then
                 PUBLISHED=1
                 break
               fi
