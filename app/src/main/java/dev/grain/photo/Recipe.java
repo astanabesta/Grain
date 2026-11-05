@@ -99,13 +99,19 @@ public final class Recipe {
     whiteBalance = CaptureRequest.CONTROL_AWB_MODE_AUTO;
     edgeMode = CaptureRequest.EDGE_MODE_FAST;
     noiseMode = CaptureRequest.NOISE_REDUCTION_MODE_FAST;
-    // RAW headroom: DR-Auto captures 1/3 EV under; development meters the scene itself.
-    exposureBias =
-        fuji.dynamicRange == FujiRecipe.DynamicRange.DR400
-            ? -2f
-            : fuji.dynamicRange == FujiRecipe.DynamicRange.DR200
-                ? -1f
-                : fuji.dynamicRange == FujiRecipe.DynamicRange.AUTO ? -1f / 3 : 0f;
+    exposureBias = rawCaptureBias(fuji);
+  }
+
+  /**
+   * RAW capture headroom for a film's Dynamic Range setting (DR-Auto captures 1/3 EV under);
+   * development meters the scene itself.
+   */
+  public static float rawCaptureBias(FujiRecipe f) {
+    return f.dynamicRange == FujiRecipe.DynamicRange.DR400
+        ? -2f
+        : f.dynamicRange == FujiRecipe.DynamicRange.DR200
+            ? -1f
+            : f.dynamicRange == FujiRecipe.DynamicRange.AUTO ? -1f / 3 : 0f;
   }
 
   public static int rawRecipeCount() {
@@ -122,23 +128,39 @@ public final class Recipe {
   }
 
   public JSONObject json(int strength) throws Exception {
+    return json(strength, null);
+  }
+
+  /** Receipt entry. For RAW films {@code tuned} is the film as tuned in the app (null = default). */
+  public JSONObject json(int strength, FujiRecipe tuned) throws Exception {
     if (raw) {
+      FujiRecipe f = tuned != null ? tuned : fuji;
+      boolean changed = !f.sameSettings(fuji);
       JSONObject settings = new JSONObject();
-      for (String[] row : fuji.settings()) settings.put(row[0], row[1]);
-      return new JSONObject()
-          .put("id", id)
-          .put("name", name)
-          .put("version", 1)
-          .put(
-              "kind",
-              standard
-                  ? "RAW development + official Fujifilm F-Log2 LUT, film simulation at standard settings"
-                  : "RAW development + official Fujifilm F-Log2 LUT")
-          .put("author", fuji.author)
-          .put("source", fuji.source)
-          .put("filmSimulationLut", fuji.filmSimulation)
-          .put("settings", settings)
-          .put("captureEvBias", exposureBias);
+      for (String[] row : f.settings()) settings.put(row[0], row[1]);
+      JSONObject out =
+          new JSONObject()
+              .put("id", id)
+              .put("name", name)
+              .put("version", 2)
+              .put(
+                  "kind",
+                  standard
+                      ? "RAW development + official Fujifilm F-Log2 LUT, film simulation"
+                      : "RAW development + official Fujifilm F-Log2 LUT")
+              .put("author", fuji.author)
+              .put("source", fuji.source)
+              .put("filmSimulationLut", fuji.filmSimulation)
+              .put("settings", settings)
+              .put("tuned", changed)
+              .put("defaultSettings", standard ? "Fujifilm standard settings" : "published recipe")
+              .put("captureEvBias", rawCaptureBias(f));
+      if (changed) {
+        JSONObject defaults = new JSONObject();
+        for (String[] row : fuji.settings()) defaults.put(row[0], row[1]);
+        out.put("defaultSettingValues", defaults);
+      }
+      return out;
     }
     return new JSONObject()
         .put("id", id)

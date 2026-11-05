@@ -345,4 +345,232 @@ public class RawEngineTest {
       assertEquals(0xff, (p >>> 24));
     }
   }
+  static final FujiRecipe PLAIN =
+      new FujiRecipe("plain", "Plain", "", "", "LUT", "LUT", FujiRecipe.DynamicRange.DR100,
+          0, 0, 0, 0, -4, 0, 0, false, 0, 0, "As shot", 0, 0);
+
+  interface Scene {
+    /** Scene level of a neutral surface, relative to the RAW white level (values above 1 clip). */
+    double level(int x, int y);
+  }
+
+  /** Develops a noise-free synthetic neutral scene through an identity LUT at a fixed gain. */
+  static int[] developScene(int w, int h, Scene scene, FujiRecipe recipe) throws Exception {
+    double[] n = {0.5, 1, 0.625};
+    short[] data = new short[w * h];
+    RawFrame f = new RawFrame(data, w, h, w);
+    for (int y = 0; y < h; y++)
+      for (int x = 0; x < w; x++) {
+        int c = f.color(x, y);
+        double v = scene.level(x, y) * (c == 0 ? n[0] : c == 2 ? n[2] : 1);
+        data[y * w + x] = (short) Math.round(64 + Math.min(1, v) * (1023 - 64));
+      }
+    f.neutral = n;
+    f.colorMatrix1 = CM;
+    f.iso = 100;
+    RawDeveloper.Options o = new RawDeveloper.Options();
+    o.grain = false;
+    o.threads = 2;
+    o.fixedGain = 1.5;
+    int[] out = new int[w * h];
+    RawDeveloper.develop(f, recipe, identity(33), o, (y, rows, argb, width) ->
+        System.arraycopy(argb, 0, out, y * width, rows * width));
+    return out;
+  }
+
+  static FujiRecipe extras(FujiRecipe r, int halation, int bloom, int clarity) {
+    FujiRecipe.Tuning t = r.tuning();
+    t.halation = halation;
+    t.bloom = bloom;
+    t.clarity = clarity;
+    return r.with(t);
+  }
+
+  /** Mean channel difference b - a (0 R, 1 G, 2 B) over pixels whose distance to (cx, cy) is in [r0, r1). */
+  static double ringDiff(int[] a, int[] b, int w, int h, int cx, int cy, double r0, double r1, int ch) {
+    double s = 0;
+    int k = 0, shift = 16 - 8 * ch;
+    for (int y = 0; y < h; y++)
+      for (int x = 0; x < w; x++) {
+        double d = Math.hypot(x - cx, y - cy);
+        if (d < r0 || d >= r1) continue;
+        s += ((b[y * w + x] >> shift) & 255) - ((a[y * w + x] >> shift) & 255);
+        k++;
+      }
+    return s / k;
+  }
+
+  /** Halation and bloom only move light around: a uniform field, clipped or not, is unchanged. */
+  @Test
+  public void glowLeavesUniformFieldsUnchanged() throws Exception {
+    int w = 256, h = 192;
+    for (double level : new double[] {0.10, 4.0}) {
+      int[] off = developScene(w, h, (x, y) -> level, PLAIN);
+      int[] on = developScene(w, h, (x, y) -> level, extras(PLAIN, 10, 10, 0));
+      for (int i = 0; i < off.length; i++)
+        for (int sh = 0; sh <= 16; sh += 8) {
+          int d = ((on[i] >> sh) & 255) - ((off[i] >> sh) & 255);
+          assertTrue("level " + level + " pixel " + i + " differs by " + d, Math.abs(d) <= 1);
+        }
+    }
+  }
+
+  /** Halation around a clipped lamp is red-dominant and local; bloom around it is close to neutral. */
+  @Test
+  public void halationIsRedAroundBrightLightAndBloomIsNeutral() throws Exception {
+    int w = 800, h = 600, cx = 400, cy = 300;
+    Scene lamp = (x, y) -> Math.hypot(x - cx, y - cy) <= 6 ? 4.0 : 0.01;
+    int[] off = developScene(w, h, lamp, PLAIN);
+    int[] halo = developScene(w, h, lamp, extras(PLAIN, 10, 0, 0));
+    double r = ringDiff(off, halo, w, h, cx, cy, 9, 14, 0);
+    double g = ringDiff(off, halo, w, h, cx, cy, 9, 14, 1);
+    double b = ringDiff(off, halo, w, h, cx, cy, 9, 14, 2);
+    assertTrue("halation red " + r, r > 4);
+    assertTrue("red dominant " + r + " vs green " + g, r > 1.5 * g);
+    assertTrue("green above blue " + g + " vs " + b, g >= b - 0.5);
+    double far = ringDiff(off, halo, w, h, cx, cy, 120, 1000, 0);
+    assertTrue("halation stays local " + far, Math.abs(far) < 0.3);
+    int[] bloom = developScene(w, h, lamp, extras(PLAIN, 0, 10, 0));
+    double br = ringDiff(off, bloom, w, h, cx, cy, 9, 14, 0);
+    double bg = ringDiff(off, bloom, w, h, cx, cy, 9, 14, 1);
+    double bb = ringDiff(off, bloom, w, h, cx, cy, 9, 14, 2);
+    assertTrue("bloom glows " + bg, bg > 4);
+    assertTrue("bloom close to neutral " + br + "/" + bg + "/" + bb,
+        Math.abs(br - bg) < 0.35 * bg && Math.abs(bb - bg) < 0.35 * bg);
+  }
+
+  static double greenStd(int[] img, int w, int h) {
+    return flatStd(img, w, w / 8, w - w / 8, h / 8, h - h / 8);
+  }
+
+  static double greenMean(int[] img, int w, int h) {
+    double s = 0;
+    int k = 0;
+    for (int y = h / 8; y < h - h / 8; y++)
+      for (int x = w / 8; x < w - w / 8; x++) {
+        s += (img[y * w + x] >> 8) & 255;
+        k++;
+      }
+    return s / k;
+  }
+
+  /** Clarity changes mid-scale local contrast: negative softens, positive strengthens. */
+  @Test
+  public void clarityChangesLocalContrast() throws Exception {
+    int w = 640, h = 480;
+    Scene stripes = (x, y) -> 0.08 * (1 + 0.5 * Math.sin(2 * Math.PI * x / 24.0));
+    int[] soft = developScene(w, h, stripes, extras(PLAIN, 0, 0, -5));
+    int[] base = developScene(w, h, stripes, PLAIN);
+    int[] hard = developScene(w, h, stripes, extras(PLAIN, 0, 0, 5));
+    double s0 = greenStd(base, w, h), sm = greenStd(soft, w, h), sp = greenStd(hard, w, h);
+    assertTrue("clarity -5 " + sm + " vs " + s0, sm < 0.9 * s0);
+    assertTrue("clarity +5 " + sp + " vs " + s0, sp > 1.1 * s0);
+    assertEquals(greenMean(base, w, h), greenMean(soft, w, h), 3);
+    assertEquals(greenMean(base, w, h), greenMean(hard, w, h), 3);
+  }
+
+  /** Tuning clamps to the camera ranges and keeps the film's identity and LUT. */
+  @Test
+  public void tuningClampsAndKeepsTheFilm() {
+    FujiRecipe reggie = FujiRecipe.REGGIES_PORTRA;
+    FujiRecipe same = reggie.with(reggie.tuning());
+    assertTrue(same.sameSettings(reggie));
+    assertEquals(reggie.key, same.key);
+    assertEquals(reggie.filmSimulation, same.filmSimulation);
+    assertEquals(reggie.whiteBalance, same.whiteBalance);
+    FujiRecipe.Tuning t = reggie.tuning();
+    t.highlight = 7;
+    t.shadow = 1.3;
+    t.color = 9;
+    t.sharpness = -6;
+    t.noiseReduction = 5;
+    t.clarity = -8;
+    t.wbShiftRed = 12;
+    t.wbShiftBlue = -12;
+    t.grainRoughness = 0;
+    t.grainLarge = true;
+    t.colorChrome = 5;
+    t.halation = 15;
+    t.bloom = -2;
+    t.dynamicRange = FujiRecipe.DynamicRange.DR400;
+    FujiRecipe x = reggie.with(t);
+    assertEquals(4, x.highlight, 0);
+    assertEquals(1.5, x.shadow, 0);
+    assertEquals(4, x.color);
+    assertEquals(-4, x.sharpness);
+    assertEquals(4, x.noiseReduction);
+    assertEquals(-5, x.clarity);
+    assertEquals(9, x.wbShiftRed);
+    assertEquals(-9, x.wbShiftBlue);
+    assertFalse("large grain needs grain", x.grainLarge);
+    assertEquals(2, x.colorChrome);
+    assertEquals(10, x.halation);
+    assertEquals(0, x.bloom);
+    assertEquals(FujiRecipe.DynamicRange.DR400, x.dynamicRange);
+    assertFalse(x.sameSettings(reggie));
+    assertEquals("Reggie’s Portra", x.name);
+    FujiRecipe acros = FujiRecipe.standard("ACROS", "Acros");
+    FujiRecipe.Tuning mono = acros.tuning();
+    mono.color = 3;
+    assertEquals("no colour on black and white", 0, acros.with(mono).color);
+    assertEquals(0, reggie.halation);
+    assertEquals(0, reggie.bloom);
+  }
+
+  /** Every Highlight / Shadow combination the app can set keeps the tone curve monotonic. */
+  @Test
+  public void toneCurveStaysMonotonicAcrossTuning() {
+    for (int dr = 0; dr <= 2; dr++)
+      for (double hl = FujiRecipe.TONE_MIN; hl <= FujiRecipe.TONE_MAX; hl += FujiRecipe.TONE_STEP)
+        for (double sh = FujiRecipe.TONE_MIN; sh <= FujiRecipe.TONE_MAX; sh += FujiRecipe.TONE_STEP) {
+          ToneModel.Curve c = ToneModel.curve(dr, hl, sh, true, 1);
+          double prev = -1;
+          for (double e = -10; e <= 8; e += 0.05) {
+            double v = c.apply(FLog2.encode(0.18 * Math.pow(2, e)));
+            assertTrue("DR" + (100 << dr) + " H" + hl + " S" + sh + " at " + e, v >= prev - 1e-9);
+            prev = v;
+          }
+        }
+  }
+  /** Every position of every app control round-trips through the recipe and shows the default. */
+  @Test
+  public void tuningControlsCoverEveryEngineValue() {
+    FujiRecipe reggie = FujiRecipe.REGGIES_PORTRA;
+    java.util.List<dev.grain.photo.develop.TuningControl> all =
+        new java.util.ArrayList<>(dev.grain.photo.develop.TuningControl.fujifilm(reggie));
+    all.addAll(dev.grain.photo.develop.TuningControl.extras());
+    java.util.Map<String, String> shown = new java.util.HashMap<>();
+    for (dev.grain.photo.develop.TuningControl c : all) {
+      shown.put(c.name, c.labels[c.at(reggie.tuning())]);
+      for (int p = 0; p < c.labels.length; p++) {
+        FujiRecipe.Tuning t = reggie.tuning();
+        c.set(t, p);
+        assertEquals(c.name + " position " + p, p, c.at(t));
+        assertEquals(c.name + " survives with()", p, c.at(reggie.with(t).tuning()));
+      }
+    }
+    assertEquals("DR-Auto", shown.get("Dynamic range"));
+    assertEquals("+2", shown.get("WB shift red"));
+    assertEquals("−4", shown.get("WB shift blue"));
+    assertEquals("−1", shown.get("Highlight"));
+    assertEquals("−1", shown.get("Shadow"));
+    assertEquals("+2", shown.get("Color"));
+    assertEquals("−2", shown.get("Sharpness"));
+    assertEquals("−4", shown.get("High ISO NR"));
+    assertEquals("0", shown.get("Clarity"));
+    assertEquals("Weak · Small", shown.get("Grain"));
+    assertEquals("Strong", shown.get("Color Chrome Effect"));
+    assertEquals("Weak", shown.get("Color Chrome FX Blue"));
+    assertEquals("Off", shown.get("Halation"));
+    assertEquals("Off", shown.get("Bloom"));
+    assertEquals(13, dev.grain.photo.develop.TuningControl.fujifilm(reggie).get(3).labels.length);
+    for (dev.grain.photo.develop.TuningControl c :
+        dev.grain.photo.develop.TuningControl.fujifilm(FujiRecipe.standard("ACROS", "Acros")))
+      assertNotEquals("no Color control for Acros", "Color", c.name);
+    FujiRecipe velvia = FujiRecipe.standard("Velvia", "Velvia");
+    for (dev.grain.photo.develop.TuningControl c : dev.grain.photo.develop.TuningControl.fujifilm(velvia)) {
+      String v = c.labels[c.at(velvia.tuning())];
+      assertTrue(c.name + " standard is " + v, v.equals("0") || v.equals("Off") || v.equals("DR-Auto"));
+    }
+  }
 }

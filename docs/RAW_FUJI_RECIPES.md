@@ -1,7 +1,49 @@
-# Fujifilm recipes from RAW (v0.2.2, engine `grain-raw-2`)
+# Fujifilm recipes from RAW (v0.2.3, engine `grain-raw-2`)
 
 Grain's first Fujifilm recipe, **Reggie's Portra**, is developed from the phone's sensor RAW. It is not
 a filter on the phone's finished JPEG.
+
+## Tuning (v0.2.3)
+
+Every RAW film can be tuned in the film sheet (`FujiRecipe.Tuning`, `FujiRecipe.with`,
+`TuningControl`, saved per film by `RecipeTuning` as `tune.<film key>`). The default is the film's
+own: Fujifilm's standard settings for a simulation on its own, the published settings for
+Reggie's Portra. *Reset this look* returns to it. Ranges follow Fujifilm's menus:
+
+| Setting | Values |
+|---|---|
+| Dynamic range | DR-Auto, DR100, DR200, DR400 (capture headroom follows: −1/3, 0, −1, −2 EV) |
+| White balance | Auto, with WB shift R and B −9…+9 (fixed WB modes are planned for v0.3.0) |
+| Highlight, Shadow | −2…+4 in 0.5 steps |
+| Color | −4…+4 (not shown for Acros) |
+| Sharpness, High ISO NR | −4…+4 |
+| Clarity | −5…+5 |
+| Grain | Off, Weak/Strong × Small/Large |
+| Color Chrome Effect, FX Blue | Off, Weak, Strong |
+
+The receipt's `recipe` block records the effective settings, `tuned`, and the default values when
+tuned; the JPEG description says "tuned". Clarity (new in v0.2.3) is a mid-band local-contrast
+step on the display-code luma (the band between the 4×4 blocks and a Gaussian of 0.8 % of the long
+side, weighted to mid-tones). Fujifilm does not publish its Clarity, so this is an approximation;
+negative values soften like a light diffusion filter.
+
+## Grain extras: Halation and Bloom (v0.2.3)
+
+No Fujifilm film simulation has halation or bloom, so both are **Off** by default and are labelled
+as Grain extras, not Fujifilm settings. They are steps 1–10, applied in scene-linear light before
+F-Log2 and the LUT, so the film simulation renders the glow like any other light:
+
+- normalised redistribution E′ = keep·E + glow: uniform areas are unchanged (tested), light only
+  moves around structure;
+- **Halation**: a second exposure of mainly the red record (green 0.3×, no blue), Gaussian σ 0.6 %
+  of the long side, 1.5 % of the light per step — a red-orange rim around bright lights;
+- **Bloom**: neutral, σ 1.5 % of the long side, 1.5 % per step — a soft diffusion-filter glow;
+- clipped light sources (blocks whose green pixels clipped) glow as 8× their clipped value, an
+  assumption because the RAW lost their true brightness; the inside of a clipped source keeps its
+  colour. A saturated red object (green not clipped) is not boosted.
+
+At 0 the development is bit-identical to v0.2.2. The extras affect the developed photo only, not
+the viewfinder.
 
 ## Film simulations on their own (v0.2.2)
 
@@ -79,7 +121,12 @@ Local JUnit tests (`RawEngineTest`) check:
 - neutral preservation on both colour paths;
 - that a flat Bayer field develops flat and neutral;
 - that the frame noise measurement recovers a known noise curve;
-- that noise reduction cleans flat areas without widening a strong edge.
+- that noise reduction cleans flat areas without widening a strong edge;
+- (v0.2.3) that Halation and Bloom leave uniform fields unchanged (clipped or not), that the
+  halo around a clipped lamp is red-dominant and local and bloom is neutral, that Clarity lowers or
+  raises local contrast without moving the mean, that tuning clamps to the camera ranges, that every
+  app control position round-trips, and that the tone curve stays monotonic for every
+  Highlight/Shadow/DR combination.
 
 ## First phone test (v0.2.0 → v0.2.1)
 

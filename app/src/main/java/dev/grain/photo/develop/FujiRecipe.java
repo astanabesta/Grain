@@ -23,6 +23,17 @@ public final class FujiRecipe {
   public final boolean grainLarge;
   public final int wbShiftRed, wbShiftBlue;
   public final String whiteBalance;
+  /**
+   * Grain extras, not Fujifilm settings (no Fujifilm film simulation has them): 0 = off, 1..10.
+   * Halation re-exposes mainly the red record around bright light; bloom spreads highlight light.
+   */
+  public final int halation, bloom;
+
+  /** Tuning ranges, in Fujifilm's menu units (X-Trans IV / V). */
+  public static final double TONE_MIN = -2, TONE_MAX = 4, TONE_STEP = 0.5;
+
+  public static final int COLOR_MAX = 4, SHARPNESS_MAX = 4, NR_MAX = 4, CLARITY_MAX = 5;
+  public static final int WB_SHIFT_MAX = 9, EXTRA_MAX = 10;
 
   public FujiRecipe(
       String key,
@@ -45,6 +56,34 @@ public final class FujiRecipe {
       String whiteBalance,
       int wbShiftRed,
       int wbShiftBlue) {
+    this(key, name, author, source, filmSimulation, filmLabel, dynamicRange, highlight, shadow, color,
+        sharpness, noiseReduction, clarity, grainRoughness, grainLarge, colorChrome, colorChromeBlue,
+        whiteBalance, wbShiftRed, wbShiftBlue, 0, 0);
+  }
+
+  public FujiRecipe(
+      String key,
+      String name,
+      String author,
+      String source,
+      String filmSimulation,
+      String filmLabel,
+      DynamicRange dynamicRange,
+      double highlight,
+      double shadow,
+      int color,
+      int sharpness,
+      int noiseReduction,
+      int clarity,
+      int grainRoughness,
+      boolean grainLarge,
+      int colorChrome,
+      int colorChromeBlue,
+      String whiteBalance,
+      int wbShiftRed,
+      int wbShiftBlue,
+      int halation,
+      int bloom) {
     this.key = key;
     this.name = name;
     this.author = author;
@@ -65,6 +104,94 @@ public final class FujiRecipe {
     this.whiteBalance = whiteBalance;
     this.wbShiftRed = wbShiftRed;
     this.wbShiftBlue = wbShiftBlue;
+    this.halation = halation;
+    this.bloom = bloom;
+  }
+
+  /** The adjustable settings of a film, edited in the app and applied with {@link #with}. */
+  public static final class Tuning {
+    public DynamicRange dynamicRange = DynamicRange.AUTO;
+    public double highlight, shadow;
+    public int color, sharpness, noiseReduction, clarity;
+    public int grainRoughness, colorChrome, colorChromeBlue;
+    public boolean grainLarge;
+    public int wbShiftRed, wbShiftBlue;
+    public int halation, bloom;
+  }
+
+  public Tuning tuning() {
+    Tuning t = new Tuning();
+    t.dynamicRange = dynamicRange;
+    t.highlight = highlight;
+    t.shadow = shadow;
+    t.color = color;
+    t.sharpness = sharpness;
+    t.noiseReduction = noiseReduction;
+    t.clarity = clarity;
+    t.grainRoughness = grainRoughness;
+    t.grainLarge = grainLarge;
+    t.colorChrome = colorChrome;
+    t.colorChromeBlue = colorChromeBlue;
+    t.wbShiftRed = wbShiftRed;
+    t.wbShiftBlue = wbShiftBlue;
+    t.halation = halation;
+    t.bloom = bloom;
+    return t;
+  }
+
+  /** This film with tuned settings (clamped to the camera ranges); identity and LUT unchanged. */
+  public FujiRecipe with(Tuning t) {
+    return new FujiRecipe(
+        key,
+        name,
+        author,
+        source,
+        filmSimulation,
+        filmLabel,
+        t.dynamicRange == null ? DynamicRange.AUTO : t.dynamicRange,
+        tone(t.highlight),
+        tone(t.shadow),
+        monochrome() ? 0 : clamp(t.color, COLOR_MAX),
+        clamp(t.sharpness, SHARPNESS_MAX),
+        clamp(t.noiseReduction, NR_MAX),
+        clamp(t.clarity, CLARITY_MAX),
+        Math.max(0, Math.min(2, t.grainRoughness)),
+        t.grainLarge && t.grainRoughness > 0,
+        Math.max(0, Math.min(2, t.colorChrome)),
+        Math.max(0, Math.min(2, t.colorChromeBlue)),
+        whiteBalance,
+        clamp(t.wbShiftRed, WB_SHIFT_MAX),
+        clamp(t.wbShiftBlue, WB_SHIFT_MAX),
+        Math.max(0, Math.min(EXTRA_MAX, t.halation)),
+        Math.max(0, Math.min(EXTRA_MAX, t.bloom)));
+  }
+
+  /** True when every adjustable setting matches (identity strings are not compared). */
+  public boolean sameSettings(FujiRecipe o) {
+    return dynamicRange == o.dynamicRange
+        && highlight == o.highlight
+        && shadow == o.shadow
+        && color == o.color
+        && sharpness == o.sharpness
+        && noiseReduction == o.noiseReduction
+        && clarity == o.clarity
+        && grainRoughness == o.grainRoughness
+        && grainLarge == o.grainLarge
+        && colorChrome == o.colorChrome
+        && colorChromeBlue == o.colorChromeBlue
+        && wbShiftRed == o.wbShiftRed
+        && wbShiftBlue == o.wbShiftBlue
+        && halation == o.halation
+        && bloom == o.bloom;
+  }
+
+  static int clamp(int v, int max) {
+    return Math.max(-max, Math.min(max, v));
+  }
+
+  static double tone(double v) {
+    double s = Math.rint(v / TONE_STEP) * TONE_STEP;
+    return Math.max(TONE_MIN, Math.min(TONE_MAX, s)) + 0.0;
   }
 
   /** Reggie Ballesteros' recipe as published by Fuji X Weekly (X-Trans IV), unchanged. */
@@ -177,7 +304,9 @@ public final class FujiRecipe {
       {"Clarity", signed(clarity)},
       {"Grain", grainRoughness == 0 ? "Off" : level(grainRoughness) + " / " + (grainLarge ? "Large" : "Small")},
       {"Color Chrome Effect", level(colorChrome)},
-      {"Color Chrome FX Blue", level(colorChromeBlue)}
+      {"Color Chrome FX Blue", level(colorChromeBlue)},
+      {"Halation (Grain extra)", halation == 0 ? "Off" : String.valueOf(halation)},
+      {"Bloom (Grain extra)", bloom == 0 ? "Off" : String.valueOf(bloom)}
     };
   }
 }

@@ -2,6 +2,8 @@
 
 **A separate, native Android recipe camera for your Redmi Note 13 Pro Plus.**
 
+**v0.2.3 — tune any RAW film, plus optional Halation and Bloom:** every ◆ film's settings can be tuned in the film sheet (Dynamic range, WB shift, Highlight, Shadow, Color, Sharpness, High ISO NR, Clarity, Grain, Color Chrome, FX Blue), saved per film, with *Reset this look* back to the default: Fujifilm's standard settings for a film simulation, the published recipe for Reggie's Portra. Clarity is now applied in development. **Halation** and **Bloom** (Off, 1–10) are optional Grain extras, off by default: no Fujifilm film simulation has them. They are made from the RAW light before the film simulation and show in the developed photo only.
+
 **v0.2.2 — every Fujifilm film simulation:** all 10 film simulations in Fujifilm's official LUT pack (Provia, Velvia, Astia, Classic Chrome, Reala Ace, Pro Neg. Std, Classic Neg., Eterna, Eterna Bleach Bypass, Acros) are selectable once the pack is imported, developed from RAW at standard settings. The pack's two Rec.709 video conversions are no longer counted as film simulations.
 
 **v0.2.1 — faster, cleaner RAW development:** release build (much faster on the phone), noise curve measured per frame (the phone's own profile is ~5× low), two-scale noise reduction, recipe sharpening, noise-aware grain, and sideways photos saved upright.
@@ -24,7 +26,7 @@ This repository now contains the standalone Grain project. The previous project'
 
 1. Open **Actions → Build and Release Grain APK** in this repository.
 2. A push to `main` starts the build automatically. You can also choose **Run workflow**.
-3. After a green run, download the APK from the newest **GitHub Release** (v0.2.2). The Actions artifact **grain-photo-N** is also retained.
+3. After a green run, download the APK from the newest **GitHub Release** (v0.2.3). The Actions artifact **grain-photo-N** is also retained.
 4. Install the release APK directly. If using the Actions artifact instead, extract its ZIP first.
 5. Allow installation from your browser/file manager when Android asks, then grant **Camera** access.
 

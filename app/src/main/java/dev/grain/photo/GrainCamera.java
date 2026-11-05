@@ -11,6 +11,7 @@ import android.media.ImageReader;
 import android.os.*;
 import android.util.*;
 import android.view.*;
+import dev.grain.photo.develop.FujiRecipe;
 import dev.grain.photo.develop.RawFrame;
 import java.io.File;
 import java.nio.ByteBuffer;
@@ -42,9 +43,23 @@ public final class GrainCamera {
     public final String ratio;
     public final boolean keepFull;
     public final float ev;
+    /** The RAW film as tuned in the app (null for ISP looks): what capture and development use. */
+    public final FujiRecipe fuji;
 
     public Snapshot(
         int recipe, int strength, double zoom, String ratio, boolean keepFull, float ev) {
+      this(recipe, strength, zoom, ratio, keepFull, ev, null);
+    }
+
+    public Snapshot(
+        int recipe,
+        int strength,
+        double zoom,
+        String ratio,
+        boolean keepFull,
+        float ev,
+        FujiRecipe fuji) {
+      this.fuji = fuji;
       this.recipe = recipe;
       this.strength = strength;
       this.zoom = Framing.zoom(zoom);
@@ -516,15 +531,17 @@ public final class GrainCamera {
     Range<Integer> range = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE);
     Rational step = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP);
     int index = 0;
-    // The user's EV is applied in development (metering key), so RAW capture only adds headroom.
+    // The user's EV is applied in development (metering key), so RAW capture only adds headroom
+    // for the film's (possibly tuned) Dynamic Range setting.
+    float bias = s.fuji != null ? Recipe.rawCaptureBias(s.fuji) : recipe.exposureBias;
     if (range != null && step != null && step.doubleValue() > 0)
       index =
           Math.max(
               range.getLower(),
-              Math.min(range.getUpper(), (int) Math.round(recipe.exposureBias / step.doubleValue())));
+              Math.min(range.getUpper(), (int) Math.round(bias / step.doubleValue())));
     set(b, CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, index);
     applied.put("evIndex", index).put("userEvAppliedInDevelopment", s.ev)
-        .put("captureEvBias", recipe.exposureBias);
+        .put("captureEvBias", bias);
     int[] shadingModes =
         chars.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_LENS_SHADING_MAP_MODES);
     if (contains(shadingModes, CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON)
@@ -635,7 +652,7 @@ public final class GrainCamera {
               .put("cameraId", cameraId)
               .put("device", Build.MODEL)
               .put("android", Build.VERSION.RELEASE)
-              .put("recipe", Recipe.ALL[pending.recipe].json(pending.strength))
+              .put("recipe", Recipe.ALL[pending.recipe].json(pending.strength, pending.fuji))
               .put("requested", pendingApplied)
               .put("sourceFormat", "Camera2 ISP JPEG")
               .put("raw", false)

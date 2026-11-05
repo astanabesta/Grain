@@ -18,6 +18,7 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import dev.grain.photo.develop.CubeLut;
 import dev.grain.photo.develop.FujiRecipe;
 import dev.grain.photo.develop.LutPreview;
+import dev.grain.photo.develop.TuningControl;
 import java.io.File;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
@@ -61,6 +62,8 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
   private JSONObject capabilities = new JSONObject();
   private int recipe, strengths[] = new int[Recipe.ALL.length], timerSeconds;
   private LutLibrary luts;
+  /** Saved per-film tuning of the RAW films. */
+  private RecipeTuning tuning;
   private ActivityResultLauncher<String[]> lutPicker;
   private boolean keepRawFiles = true;
   private Runnable afterLutImport;
@@ -90,6 +93,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
   public void onCreate(Bundle saved) {
     super.onCreate(saved);
     preferences = getSharedPreferences("grain", MODE_PRIVATE);
+    tuning = new RecipeTuning(preferences);
     Arrays.fill(strengths, 80);
     loadPrefs();
     store = new PhotoStore(this);
@@ -472,7 +476,8 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
   }
 
   private GrainCamera.Snapshot snapshot() {
-    return new GrainCamera.Snapshot(recipe, strengths[recipe], zoom, ratio, keepFull, ev);
+    return new GrainCamera.Snapshot(
+        recipe, strengths[recipe], zoom, ratio, keepFull, ev, tuning.effective(Recipe.ALL[recipe]));
   }
 
   private void selectRecipe(int id) {
@@ -497,6 +502,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     filmLabel.setText(
         current.raw
             ? "◆  " + current.name.toUpperCase(Locale.ROOT) + " / RAW · " + current.fuji.filmLabel.toUpperCase(Locale.ROOT)
+                + (tuning.tuned(current) ? " · TUNED" : "")
             : "•  " + current.name.toUpperCase(Locale.ROOT) + " / ISP");
     ratioButton.setText(ratio);
     ratioButton.setCompoundDrawablesWithIntrinsicBounds(
@@ -521,7 +527,12 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
       timerButton.setTypeface(Typeface.MONOSPACE);
     }
     timerButton.setTextColor(timerSeconds == 0 ? INK : ORANGE);
-    tuneButton.setText(current.raw ? "Recipe  " + (luts != null && luts.has(current.fuji.filmSimulation) ? "✓" : "· LUT needed") : "Tune film  " + strengths[recipe] + "%");
+    tuneButton.setText(
+        !current.raw
+            ? "Tune film  " + strengths[recipe] + "%"
+            : luts == null || !luts.has(current.fuji.filmSimulation)
+                ? "Recipe  · LUT needed"
+                : tuning.tuned(current) ? "Tuned  ✓" : "Tune  ✓");
     for (int i = 0; i < filmRow.getChildCount(); i++) {
       TextView chip = (TextView) filmRow.getChildAt(i);
       boolean active = Integer.valueOf(recipe).equals(chip.getTag());
@@ -687,7 +698,6 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     Dialog dialog = new Dialog(this);
     LinearLayout body = column();
     body.setPadding(0, dp(8), 0, dp(20));
-    body.setBackground(bg(PAPER, 25, 0, 0));
     View handle = new View(this);
     handle.setBackground(bg(0xffc9cebb, 4, 0, 0));
     LinearLayout.LayoutParams hp = size(30, 3);
@@ -841,11 +851,15 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
             10,
             MUTED,
             () -> {
-              if (Recipe.ALL[recipe].raw) {
+              Recipe current = Recipe.ALL[recipe];
+              if (current.raw) {
+                boolean wasTuned = tuning.tuned(current);
+                tuning.reset(current);
+                fillRecipePanel(recipePanel, current, dialog);
+                updateLabels();
                 message(
-                    Recipe.ALL[recipe].standard
-                        ? "Film simulations use Fujifilm’s standard settings."
-                        : "Fujifilm recipes are fixed as published.");
+                    (wasTuned ? "Back to " : "Already at ")
+                        + (current.standard ? "Fujifilm’s standard settings" : "the published recipe"));
                 return;
               }
               strengths[recipe] = 80;
@@ -860,7 +874,25 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     TextView done = button("Back to shooting ↗", 10, PAPER, dialog::dismiss);
     done.setBackground(bg(INK, 25, 0, 0));
     footer.addView(done, size(143, 39));
-    dialog.setContentView(body);
+    int maxSheet = Math.round(getResources().getDisplayMetrics().heightPixels * 0.9f);
+    // The tuning list is taller than many screens: the sheet scrolls, up to 90 % of the height.
+    ScrollView sheet =
+        new ScrollView(this) {
+          @Override
+          protected void onMeasure(int widthSpec, int heightSpec) {
+            int limit = maxSheet;
+            if (View.MeasureSpec.getMode(heightSpec) != View.MeasureSpec.UNSPECIFIED)
+              limit = Math.min(limit, View.MeasureSpec.getSize(heightSpec));
+            super.onMeasure(
+                widthSpec, View.MeasureSpec.makeMeasureSpec(limit, View.MeasureSpec.AT_MOST));
+          }
+        };
+    sheet.setVerticalScrollBarEnabled(false);
+    sheet.setOverScrollMode(View.OVER_SCROLL_NEVER);
+    sheet.setBackground(bg(PAPER, 25, 0, 0));
+    sheet.setClipToOutline(true);
+    sheet.addView(body, new FrameLayout.LayoutParams(-1, -2));
+    dialog.setContentView(sheet);
     dialog.show();
     Window window = dialog.getWindow();
     if (window != null) {
@@ -925,30 +957,137 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     get.setBackground(bg(PAPER, 25, LINE, 1));
     actions.addView(get, new LinearLayout.LayoutParams(0, dp(36), 1));
     panel.addView(actions);
-    for (String[] item : r.fuji.settings()) {
-      LinearLayout line = row();
-      TextView key = text(item[0], 9, MUTED);
-      key.setGravity(Gravity.START);
-      line.addView(key, new LinearLayout.LayoutParams(0, dp(20), 1));
-      TextView value = text(item[1], 9, INK);
-      value.setGravity(Gravity.END);
-      line.addView(value, new LinearLayout.LayoutParams(-2, dp(20)));
-      panel.addView(line);
-    }
+    FujiRecipe.Tuning work = tuning.effective(r).tuning();
+    FujiRecipe.Tuning defaults = r.fuji.tuning();
+    LinearLayout head = row();
+    head.setPadding(0, dp(4), 0, dp(2));
+    TextView heading = text("SETTINGS", 9, MUTED);
+    heading.setTypeface(Typeface.MONOSPACE);
+    heading.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+    head.addView(heading, new LinearLayout.LayoutParams(0, dp(24), 1));
+    TextView badge = text("", 9, MUTED);
+    badge.setTypeface(Typeface.MONOSPACE);
+    head.addView(badge, new LinearLayout.LayoutParams(-2, dp(24)));
+    panel.addView(head);
+    Runnable showBadge =
+        () -> {
+          boolean isTuned = tuning.tuned(r);
+          badge.setText(
+              isTuned
+                  ? "TUNED · ORANGE = CHANGED"
+                  : r.standard ? "DEFAULT · FUJIFILM STANDARD" : "DEFAULT · PUBLISHED RECIPE");
+          badge.setTextColor(isTuned ? ORANGE : MUTED);
+        };
+    showBadge.run();
+    Runnable changed =
+        () -> {
+          tuning.save(r, work);
+          showBadge.run();
+          updateLabels();
+        };
+    fixedSetting(panel, "Film simulation", r.fuji.filmLabel);
+    fixedSetting(panel, "White balance", r.fuji.whiteBalance);
+    for (TuningControl setting : TuningControl.fujifilm(r.fuji))
+      stepper(panel, setting, work, defaults, changed);
+    TextView extrasTitle = text("GRAIN EXTRAS · NOT FUJIFILM SETTINGS", 9, MUTED);
+    extrasTitle.setTypeface(Typeface.MONOSPACE);
+    extrasTitle.setGravity(Gravity.START);
+    extrasTitle.setPadding(0, dp(14), 0, dp(4));
+    panel.addView(extrasTitle, new LinearLayout.LayoutParams(-1, -2));
+    for (TuningControl setting : TuningControl.extras())
+      stepper(panel, setting, work, defaults, changed);
+    TextView extrasNote =
+        paragraph(
+            "No Fujifilm film simulation has halation or bloom, so both start Off. Halation: a"
+                + " red-orange glow around bright lights, like film without an anti-halation"
+                + " layer. Bloom: a soft glow spreading from highlights, like a diffusion filter."
+                + " Both are made from the RAW light before the film simulation.");
+    extrasNote.setPadding(0, dp(6), 0, 0);
+    panel.addView(extrasNote);
     TextView credit =
         paragraph(
             r.standard
-                ? "Fujifilm " + r.fuji.filmLabel + " on its own: standard settings, no recipe"
-                    + " adjustments. LUT: Fujifilm’s official F-Log2 pack."
-                : "Recipe by " + r.fuji.author + " — " + r.fuji.source);
-    credit.setPadding(0, dp(6), 0, 0);
+                ? "Default: Fujifilm " + r.fuji.filmLabel + " at standard settings (every setting"
+                    + " 0 / Off). LUT: Fujifilm’s official F-Log2 pack."
+                : "Default: the recipe by " + r.fuji.author + " as published — " + r.fuji.source);
+    credit.setPadding(0, dp(2), 0, 0);
     panel.addView(credit);
     TextView note =
         paragraph(
-            "The viewfinder shows the phone’s normal preview. Each photo is developed from the"
-                + " sensor RAW with Fujifilm’s LUT plus Grain’s stills tone model. Grain, Color"
-                + " Chrome, FX Blue, WB shift and DR-Auto are Grain’s approximations.");
+            "Tuning changes the developed photo only; the viewfinder shows the phone’s normal"
+                + " preview. Each photo is developed from the sensor RAW with Fujifilm’s LUT plus"
+                + " Grain’s stills tone model. Dynamic range, WB shift, Clarity, Grain, Color"
+                + " Chrome, FX Blue and the extras are Grain’s approximations.");
     panel.addView(note);
+  }
+
+  private void fixedSetting(LinearLayout panel, String name, String value) {
+    LinearLayout line = row();
+    TextView key = text(name, 10, INK);
+    key.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+    line.addView(key, new LinearLayout.LayoutParams(0, dp(34), 1));
+    TextView shown = text(value, 10, INK);
+    line.addView(shown, size(160, 28));
+    panel.addView(line);
+  }
+
+  /** A setting row: name, then − value + (orange when it differs from the film's default). */
+  private void stepper(
+      LinearLayout panel,
+      TuningControl setting,
+      FujiRecipe.Tuning work,
+      FujiRecipe.Tuning defaults,
+      Runnable changed) {
+    LinearLayout line = row();
+    TextView key = text(setting.name, 10, INK);
+    key.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+    line.addView(key, new LinearLayout.LayoutParams(0, dp(34), 1));
+    TextView minus = text("−", 15, INK);
+    TextView value = text("", 10, INK);
+    TextView plus = text("+", 15, INK);
+    for (TextView step : new TextView[] {minus, plus}) {
+      step.setBackground(bg(PAPER, 15, LINE, 1));
+      step.setClickable(true);
+      step.setFocusable(true);
+    }
+    minus.setContentDescription("Decrease " + setting.name);
+    plus.setContentDescription("Increase " + setting.name);
+    line.addView(minus, size(34, 28));
+    line.addView(value, size(92, 28));
+    line.addView(plus, size(34, 28));
+    int standard = setting.at(defaults);
+    int last = setting.labels.length - 1;
+    Runnable show =
+        () -> {
+          int i = setting.at(work);
+          value.setText(setting.labels[i]);
+          value.setTextColor(i == standard ? INK : ORANGE);
+          value.setContentDescription(
+              setting.name + " " + setting.labels[i]
+                  + (i == standard ? ", default" : ", changed from " + setting.labels[standard]));
+          minus.setEnabled(i > 0);
+          minus.setAlpha(i > 0 ? 1f : .3f);
+          plus.setEnabled(i < last);
+          plus.setAlpha(i < last ? 1f : .3f);
+        };
+    minus.setOnClickListener(
+        v -> {
+          int i = setting.at(work);
+          if (i <= 0) return;
+          setting.set(work, i - 1);
+          changed.run();
+          show.run();
+        });
+    plus.setOnClickListener(
+        v -> {
+          int i = setting.at(work);
+          if (i >= last) return;
+          setting.set(work, i + 1);
+          changed.run();
+          show.run();
+        });
+    show.run();
+    panel.addView(line);
   }
 
   private void pickLuts(Runnable after) {
@@ -1336,15 +1475,24 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     }
     saving = true;
     Recipe r = Recipe.ALL[settings.recipe];
-    status.setText("Developing " + r.name + " from RAW…");
+    FujiRecipe film = settings.fuji != null ? settings.fuji : r.fuji;
+    boolean tuned = !film.sameSettings(r.fuji);
+    String filmName = r.name + (tuned ? " (tuned)" : "");
+    status.setText("Developing " + filmName + " from RAW…");
     files.execute(
         () -> {
           try {
             long t = System.nanoTime();
-            CubeLut lut = luts.load(r.fuji.filmSimulation);
+            CubeLut lut = luts.load(film.filmSimulation);
             RawDevelopment.Output out =
                 RawDevelopment.develop(
-                    this, capture, r.fuji, lut, settings.ev, capture.frame.exposureNs ^ System.nanoTime());
+                    this,
+                    capture,
+                    film,
+                    tuned,
+                    lut,
+                    settings.ev,
+                    capture.frame.exposureNs ^ System.nanoTime());
             long ms = (System.nanoTime() - t) / 1_000_000;
             receipt.put("development", out.stats.put("totalMs", ms));
             PhotoStore.Photo photo =
@@ -1365,12 +1513,12 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
                   shutter.setContentDescription("Take photo");
                   status.setText(
                       photo.metadata.optInt("width") + " × " + photo.metadata.optInt("height")
-                          + " · " + r.name + " · developed in " + String.format(Locale.US, "%.1f s", ms / 1000.0));
+                          + " · " + filmName + " · developed in " + String.format(Locale.US, "%.1f s", ms / 1000.0));
                   updateThumb();
                   message(
                       receipt.has("focusWarning")
                           ? "Saved, but the camera reported not focused. Tap the subject and retry."
-                          : r.name + " developed from RAW" + (photo.dng != null ? " · DNG kept" : ""));
+                          : filmName + " developed from RAW" + (photo.dng != null ? " · DNG kept" : ""));
                 });
           } catch (Throwable e) {
             if (capture.dng != null && capture.dng.exists() && !capture.dng.delete())
