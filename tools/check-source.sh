@@ -6,5 +6,5 @@ trap 'rm -rf "$CHECK_DIR"' EXIT
 javac -d "$CHECK_DIR" tools/CheckJavaSyntax.java
 mapfile -t SOURCES < <(find app/src -name '*.java' | sort)
 java -cp "$CHECK_DIR" CheckJavaSyntax "${SOURCES[@]}"
-javac -d "$CHECK_DIR" app/src/main/java/dev/grain/photo/{Framing,CurveMath}.java tools/SmokeTest.java
+javac -d "$CHECK_DIR" app/src/main/java/dev/grain/photo/{Framing,CurveMath,PreviewMath}.java tools/SmokeTest.java
 java -cp "$CHECK_DIR" SmokeTest

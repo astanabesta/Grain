@@ -94,8 +94,11 @@ jobs:
           cat > release-files/RELEASE_NOTES.md <<'NOTES'
           ## Grain Photo — personal-device beta
 
-          Install **Grain-v0.1.1-debug.apk** on your Redmi Note 13 Pro Plus.
+          Install the attached **Grain-vVERSION-debug.apk** on your Redmi Note 13 Pro Plus.
 
+          - Viewfinder fix: remove duplicate sensor rotation; preserve center crop and zoom.
+          - Preview geometry regression tests and orientation diagnostics.
+          - Chroma / Fuji recipe research in docs/CHROMA_RESEARCH.md; no LUTs imported.
           - Native Grain UI based on the final HTML design.
           - Camera2 JPEG still capture with experimental capture-time ISP recipes.
           - Zoom, framing, timer, private gallery, export and capture receipts.
@@ -104,6 +107,7 @@ jobs:
 
           Build checks: Android unit tests, lint and APK assembly must pass before publication. Source/build reports are available in GitHub Actions. SHA256SUMS.txt verifies the APK download.
           NOTES
+          sed -i "s/vVERSION/$TAG/g" release-files/RELEASE_NOTES.md
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" "$APK" release-files/SHA256SUMS.txt --clobber
           else

@@ -608,32 +608,24 @@ public final class GrainCamera {
   }
 
   public void updateTransform(double zoom) {
-    if (previewSize == null || chars == null || texture.getWidth() == 0) return;
-    int rotation = jpegOrientation(), w = texture.getWidth(), h = texture.getHeight();
-    boolean swap = rotation == 90 || rotation == 270;
-    float uw = swap ? previewSize.getHeight() : previewSize.getWidth(),
-        uh = swap ? previewSize.getWidth() : previewSize.getHeight();
-    float scale = (float) (Math.max(w / uw, h / uh) * zoom);
-    float[] src = {0, 0, w, 0, w, h, 0, h}, dst = new float[8];
-    float[] nx = {0, 1, 1, 0}, ny = {0, 0, 1, 1};
-    for (int i = 0; i < 4; i++) {
-      float x = nx[i], y = ny[i], rx = x, ry = y;
-      if (rotation == 90) {
-        rx = 1 - y;
-        ry = x;
-      } else if (rotation == 180) {
-        rx = 1 - x;
-        ry = 1 - y;
-      } else if (rotation == 270) {
-        rx = y;
-        ry = 1 - x;
-      }
-      dst[i * 2] = w / 2f + (rx - .5f) * uw * scale;
-      dst[i * 2 + 1] = h / 2f + (ry - .5f) * uh * scale;
-    }
-    Matrix m = new Matrix();
-    m.setPolyToPoly(src, 0, dst, 0, 4);
-    texture.setTransform(m);
+    if (previewSize == null || chars == null
+        || texture.getWidth() == 0 || texture.getHeight() == 0) return;
+    int width=texture.getWidth(),height=texture.getHeight();
+    // TextureView already handles SENSOR_ORIENTATION. JPEG orientation is a different pipeline.
+    float[] source={0,0,width,0,width,height,0,height};
+    float[] destination=PreviewMath.destinationCorners(width,height,previewSize.getWidth(),
+        previewSize.getHeight(),sensorRotation,displayDegrees(),zoom);
+    Matrix transform=new Matrix();transform.setPolyToPoly(source,0,destination,0,4);
+    texture.setTransform(transform);
+  }
+
+  private int displayDegrees() {
+    return switch (activity.getWindowManager().getDefaultDisplay().getRotation()) {
+      case Surface.ROTATION_90 -> 90;
+      case Surface.ROTATION_180 -> 180;
+      case Surface.ROTATION_270 -> 270;
+      default -> 0;
+    };
   }
 
   public int uprightWidth() {
@@ -645,13 +637,7 @@ public final class GrainCamera {
   }
 
   private int jpegOrientation() {
-    int degrees =
-        switch (activity.getWindowManager().getDefaultDisplay().getRotation()) {
-          case Surface.ROTATION_90 -> 90;
-          case Surface.ROTATION_180 -> 180;
-          case Surface.ROTATION_270 -> 270;
-          default -> 0;
-        };
+    int degrees = displayDegrees();
     return (sensorRotation + (front ? degrees : -degrees) + 360) % 360;
   }
 
@@ -668,6 +654,8 @@ public final class GrainCamera {
             .put("sdk", Build.VERSION.SDK_INT)
             .put("cameraId", cameraId)
             .put("sensorOrientation", sensorRotation)
+            .put("previewOrientationStrategy", "TextureView sensor correction + display-only transform v2")
+            .put("displayDegrees", displayDegrees())
             .put("selectedJpeg", jpegSize.toString())
             .put("preview", previewSize.toString())
             .put("jpegSizes", outputs)

@@ -25,6 +25,12 @@ public final class SmokeTest {
           count++;
         }
     if (Framing.zoom(Double.NaN) != 1) throw new AssertionError("NaN zoom");
+    for(int sensor:new int[]{90,270}){
+      float[] corners=PreviewMath.destinationCorners(300,400,1440,1080,sensor,0,1);
+      float[] expected={0,0,300,0,300,400,0,400};
+      for(int i=0;i<8;i++)if(Math.abs(corners[i]-expected[i])>.01)throw new AssertionError("Double preview rotation");
+      count++;
+    }
     System.out.println("PASS: " + count + " crop/curve cases; no Android SDK used.");
   }
 }
