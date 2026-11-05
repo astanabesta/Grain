@@ -1,4 +1,4 @@
-# Fujifilm recipes from RAW (v0.2.0)
+# Fujifilm recipes from RAW (v0.2.1, engine `grain-raw-2`)
 
 Grain's first Fujifilm recipe, **Reggie's Portra**, is developed from the phone's sensor RAW. It is not
 a filter on the phone's finished JPEG.
@@ -26,15 +26,25 @@ a filter on the phone's finished JPEG.
 5. **Film simulation**: Fujifilm's official 33-point `FLog2_to_<SIM>` LUT (trilinear). You import it
    from the free *GFX ETERNA 55* pack. It is stored privately in the app and is never committed,
    bundled or exported.
-6. **Recipe controls** (Grain's approximations, not Fujifilm measurements):
-   - Color = OKLab chroma scale;
+6. **Noise** (v0.2.1, before the LUT, in the F-Log2 code domain):
+   - noise curve: the camera's `SENSOR_NOISE_PROFILE` (green) is the baseline, scaled ×5.3 because
+     on this phone it under-reports noise variance about five-fold (measured on the first two test
+     DNGs), then re-fitted on each frame from same-colour pixel differences in flat 8×8 blocks
+     (clamped to 0.5–1.6× / 0.5–12× of the baseline);
+   - low frequencies: a quarter-resolution pass (4×4 RAW block means → codes) removes blotchy luma
+     noise with a self-guided filter and colour blotches with a luma-guided chroma filter;
+   - pixel scale: a self-guided 5×5 filter whose epsilon follows the noise curve through gain, lens
+     shading and the tone curve; High ISO NR sets strength and how much fine grain is kept;
+   - Sharpness: unsharp mask on the denoised luma (Reggie's −2 is gentle).
+7. **Recipe controls** (Grain's approximations, not Fujifilm measurements):
+   - Color = chroma scale in the code domain (calibrated to match the earlier OKLab step);
    - Color Chrome = depth on saturated colours;
    - FX Blue = depth on blues;
-   - grain = tileable luminance-weighted noise;
-   - chroma noise reduction in the code domain;
+   - grain = cached tileable luminance-weighted textures; the amount is reduced where the image's
+     own noise already provides texture (never below a quarter of the recipe amount);
    - WB shift = 0.04 log2 per step.
-7. **Output**: a JPEG at quality 95 with EXIF copied from the phone JPEG. The receipt's
-   `development` block records every number used.
+8. **Output**: a JPEG at quality 95 with EXIF copied from the phone JPEG. The receipt's
+   `development` block records every number used, including per-stage timings.
 
 ## Evidence so far
 
@@ -53,14 +63,31 @@ Local JUnit tests (`RawEngineTest`) check:
 - curve monotonicity;
 - the LUT identity and its binary round trip;
 - neutral preservation on both colour paths;
-- that a flat Bayer field develops flat and neutral.
+- that a flat Bayer field develops flat and neutral;
+- that the frame noise measurement recovers a known noise curve;
+- that noise reduction cleans flat areas without widening a strong edge.
 
-## What the first phone test must establish
+## First phone test (v0.2.0 → v0.2.1)
 
-- That the Redmi exposes RAW with lens-shading maps and matrices, from the Diagnostics → `rawProbe`
-  block.
-- Exposure and white point on real scenes, from the Grain JPEG vs the phone JPEG and DNG.
-- How the colour of skin, sky and foliage compares with known Classic Chrome renderings.
-- Development time and memory on the phone (target: at most a few seconds).
+Two Redmi shots (ISO 2742 and 2363, indoor light), each with DNG, phone JPEG and receipt:
+
+| Finding | Change in v0.2.1 |
+|---|---|
+| The desktop harness reproduces the phone's development exactly (same gain, CCT, DR) | used for all tuning |
+| Exposure is camera-like: indoor scenes are developed brighter than the phone's own JPEG (+1.8 EV on the darkest) | kept, by design |
+| Heavy noise; the camera's noise profile is about 5× too low | rescaled + per-frame measurement; two-scale NR |
+| Colour blotches and coarse mottling in shadows | quarter-resolution luma and chroma NR |
+| 21 s first photo, about 7 s after | release (non-debuggable) build; faster engine |
+| Photos taken with the phone sideways were saved sideways | device rotation added to JPEG/DNG orientation |
+
+On the desktop harness (2 threads), a full 12.5 MP development takes about 0.7 s warm. Time on the phone
+must be re-measured with the receipt's `timingMs`.
+
+## What the next phone test should check
+
+- Development time on the phone (`timingMs`, target: about 2 s or less).
+- Daylight and low-ISO scenes (the first test was indoor at ISO 2300–2700).
+- Skin, sky and foliage colour against known Classic Chrome renderings.
+- Landscape shots now save upright.
 
 Desktop harness: `tools/DevelopRaw.java` develops a raw Bayer dump with any `.cube` file. No Android is needed.

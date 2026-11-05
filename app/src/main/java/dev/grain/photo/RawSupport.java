@@ -145,6 +145,26 @@ final class RawSupport {
       f.forwardMatrix2 = null;
       f.calibration2 = null;
     }
+    // Camera noise model, one (S, O) pair per CFA position in row-major order like the black
+    // levels. On the Redmi Note 13 Pro+ it under-reports noise ~5x; the developer rescales it and
+    // checks it against the frame itself.
+    Pair<Double, Double>[] noise = result.get(CaptureResult.SENSOR_NOISE_PROFILE);
+    if (noise != null && noise.length == 4) {
+      double[] s = new double[4], o = new double[4];
+      boolean ok = true;
+      for (int k = 0; k < 4; k++) {
+        if (noise[k] == null || noise[k].first == null || noise[k].second == null) {
+          ok = false;
+          break;
+        }
+        s[k] = noise[k].first;
+        o[k] = noise[k].second;
+      }
+      if (ok) {
+        f.noiseS = s;
+        f.noiseO = o;
+      }
+    }
     Integer iso = result.get(CaptureResult.SENSOR_SENSITIVITY);
     f.iso = iso == null ? 100 : iso;
     Long exposure = result.get(CaptureResult.SENSOR_EXPOSURE_TIME);

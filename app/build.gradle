@@ -6,14 +6,23 @@ android {
         applicationId 'dev.grain.photo'
         minSdk 29
         targetSdk 36
-        versionCode 5
-        versionName '0.2.0'
+        versionCode 6
+        versionName '0.2.1'
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
-    buildTypes { release { minifyEnabled false } }
+    buildTypes {
+        // Published builds are release builds (not debuggable, so ART compiles the RAW developer
+        // properly) signed with the same personal debug key as earlier versions, so they install as
+        // an update over v0.2.0 without losing photos.
+        release {
+            minifyEnabled false
+            debuggable false
+            signingConfig signingConfigs.debug
+        }
+    }
     lint { abortOnError true; checkReleaseBuilds false }
 }
 dependencies {

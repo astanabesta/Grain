@@ -80,6 +80,7 @@ public final class PhotoStore {
         out.getFD().sync();
       }
       metadata.put("phoneJpegKept", true);
+      addRotationQuietly(new File(staging, "phone-isp.jpg"), metadata.optInt("extraRotation", 0));
     }
     boolean rawPhoto = metadata.optBoolean("raw", false);
     try {
@@ -145,12 +146,15 @@ public final class PhotoStore {
           if (decoded != null && !decoded.isRecycled()) decoded.recycle();
         }
       }
+      int extra = metadata.optInt("extraRotation", 0);
+      addRotationQuietly(finalImage, extra);
+      boolean turned = extra == 90 || extra == 270;
       metadata
           .put("id", id)
-          .put("width", crop[2])
-          .put("height", crop[3])
-          .put("sourceWidth", uprightW)
-          .put("sourceHeight", uprightH)
+          .put("width", turned ? crop[3] : crop[2])
+          .put("height", turned ? crop[2] : crop[3])
+          .put("sourceWidth", turned ? uprightH : uprightW)
+          .put("sourceHeight", turned ? uprightW : uprightH)
           .put("ratio", ratio)
           .put("digitalZoom", zoom)
           .put("fullCaptureKept", keepFull)
@@ -163,8 +167,9 @@ public final class PhotoStore {
           .put("geometryOnlyPostProcessing", !full)
           .put("savedAt", System.currentTimeMillis());
       if (keepFull) {
-        if (!source.renameTo(new File(staging, "full-capture.jpg")))
-          throw new IOException("Cannot retain source");
+        File kept = new File(staging, "full-capture.jpg");
+        if (!source.renameTo(kept)) throw new IOException("Cannot retain source");
+        addRotationQuietly(kept, extra);
       } else if (!source.delete()) throw new IOException("Cannot remove staging source");
       File receipt = new File(staging, "receipt.json");
       try (FileOutputStream out = new FileOutputStream(receipt)) {
@@ -222,6 +227,39 @@ public final class PhotoStore {
       if (error instanceof Exception) throw (Exception) error;
       throw new IOException(error);
     }
+  }
+
+  /**
+   * Adds a clockwise rotation (0, 90, 180 or 270 degrees: the phone held sideways or upside down)
+   * to a JPEG's EXIF orientation in place. Pixels are not touched; mirrored values are left alone.
+   */
+  static void addRotation(File jpeg, int degrees) throws IOException {
+    degrees = ((degrees % 360) + 360) % 360;
+    if (degrees % 90 != 0 || degrees == 0 || !jpeg.isFile()) return;
+    ExifInterface exif = new ExifInterface(jpeg);
+    int o = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL);
+    int idx = rotationIndex(o);
+    if (idx < 0) return;
+    exif.setAttribute(ExifInterface.TAG_ORIENTATION, String.valueOf(CLOCKWISE[(idx + degrees / 90) % 4]));
+    exif.saveAttributes();
+  }
+
+  /** Orientation is metadata only: a failure to update it must never lose the photo. */
+  static void addRotationQuietly(File jpeg, int degrees) {
+    try {
+      addRotation(jpeg, degrees);
+    } catch (Exception e) {
+      android.util.Log.w("Grain", "Could not set orientation on " + jpeg.getName(), e);
+    }
+  }
+
+  /** EXIF orientations for 0, 90, 180 and 270 degrees clockwise. */
+  static final int[] CLOCKWISE = {1, 6, 3, 8};
+
+  static int rotationIndex(int exifOrientation) {
+    if (exifOrientation == 0) return 0;
+    for (int i = 0; i < 4; i++) if (CLOCKWISE[i] == exifOrientation) return i;
+    return -1;
   }
 
   static Matrix orientationMatrix(int o) {
