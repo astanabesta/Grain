@@ -454,14 +454,22 @@ public final class GrainCamera {
                           (s.ev + (plainPreview ? 0 : recipe.exposureBias)) / step.doubleValue())));
     set(b, CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, index);
     applied.put("evIndex", index).put("userEv", s.ev).put("recipeEvBias", recipe.exposureBias);
+    // RAW films with a fixed white balance preview with the nearest Camera2 preset (development
+    // uses the exact white point); hold-to-compare shows the phone's auto white balance.
+    int wantWb =
+        neutral && !still
+            ? CaptureRequest.CONTROL_AWB_MODE_AUTO
+            : recipe.raw
+                ? Recipe.awbModeFor(s.fuji != null ? s.fuji : recipe.fuji)
+                : plainPreview ? CaptureRequest.CONTROL_AWB_MODE_AUTO : recipe.whiteBalance;
     int wb =
         chooseMode(
             chars.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES),
-            plainPreview ? CaptureRequest.CONTROL_AWB_MODE_AUTO : recipe.whiteBalance,
+            wantWb,
             CaptureRequest.CONTROL_AWB_MODE_AUTO);
     set(b, CaptureRequest.CONTROL_AWB_MODE, wb);
     applied.put("awbMode", wb);
-    if (wb != recipe.whiteBalance)
+    if (wb != wantWb)
       warnings.add("Recipe white-balance preset unavailable; AUTO requested instead");
     if (!safeMode && !plainPreview) {
       int edge =
@@ -527,7 +535,19 @@ public final class GrainCamera {
             CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE,
             CaptureRequest.CONTROL_AF_MODE_AUTO,
             CaptureRequest.CONTROL_AF_MODE_OFF));
-    set(b, CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO);
+    // Auto films keep the phone's auto white balance (development uses its as-shot white); a fixed
+    // Fujifilm white balance requests the nearest Camera2 preset for the reference JPEG and the
+    // DNG's as-shot white, while development uses the exact white point.
+    int wantWb = Recipe.awbModeFor(s.fuji != null ? s.fuji : recipe.fuji);
+    int wb =
+        chooseMode(
+            chars.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES),
+            wantWb,
+            CaptureRequest.CONTROL_AWB_MODE_AUTO);
+    set(b, CaptureRequest.CONTROL_AWB_MODE, wb);
+    applied.put("awbMode", wb);
+    if (wb != wantWb)
+      warnings.add("White-balance preset unavailable for the reference JPEG; AUTO requested instead");
     Range<Integer> range = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE);
     Rational step = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP);
     int index = 0;

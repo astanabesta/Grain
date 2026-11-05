@@ -23,10 +23,11 @@ import java.util.Map;
  *
  * <p>meta.txt: key=value lines — width, height, cfa (0 RGGB, 1 GRBG, 2 GBRG, 3 BGGR), black (4
  * comma values, row-major 2x2), white, neutral (3), cm1 (9, XYZ->camera), fm1 (optional, 9),
- * illuminant1, iso, recipe (reggie|plain); optional cm2/fm2/illuminant2, shading (path to rows x cols x 4
+ * illuminant1, iso, recipe (reggie|plain|a published recipe key|sim-LUTNAME); optional cm2/fm2/illuminant2, shading (path to rows x cols x 4
  * little-endian float32, Camera2 order) with shadingRows/shadingCols, and noise (8 values: S,O per CFA
  * position, row-major). System properties: -Dgrain=true, -Dseed=N, -Dthreads=N, -Dev=EV, -Dnr=scale,
- * -Dsharpen=scale, -Dhalation=0..10, -Dbloom=0..10, -Dclarity=-5..5, -Ddebug=file (pre-NR luma codes then modelled noise variance, float32 planes).
+ * -Dsharpen=scale, -Dhalation=0..10, -Dbloom=0..10, -Dclarity=-5..5, -Drecipe=key, -Dwb=DAYLIGHT|KELVIN|...,
+ * -Dkelvin=K, -Ddr=DR400|DRP_STRONG|..., -Dfilter=0..3, -DshiftR/-DshiftB=-9..9, -Dhl/-Dsh=tone, -Ddebug=file (pre-NR luma codes then modelled noise variance, float32 planes).
  */
 public final class DevelopRaw {
   public static void main(String[] args) throws Exception {
@@ -83,19 +84,32 @@ public final class DevelopRaw {
       try (FileReader in = new FileReader(args[2])) {
         lut = CubeLut.parse(in);
       }
+    String wanted = System.getProperty("recipe", meta.getOrDefault("recipe", "plain"));
     FujiRecipe recipe =
-        "reggie".equals(meta.getOrDefault("recipe", "plain"))
-            ? FujiRecipe.REGGIES_PORTRA
-            : new FujiRecipe("plain", "Plain", "", "", "LUT", "LUT", FujiRecipe.DynamicRange.DR100,
-                0, 0, 0, 0, -4, 0, 0, false, 0, 0, "As shot", 0, 0);
-    if (System.getProperty("halation") != null || System.getProperty("bloom") != null
-        || System.getProperty("clarity") != null) {
+        new FujiRecipe("plain", "Plain", "", "", "LUT", "LUT", FujiRecipe.DynamicRange.DR100,
+            0, 0, 0, 0, -4, 0, 0, false, 0, 0, "As shot", 0, 0);
+    if ("reggie".equals(wanted)) recipe = FujiRecipe.REGGIES_PORTRA;
+    for (FujiRecipe p : FujiRecipe.PUBLISHED) if (p.key.equals(wanted)) recipe = p;
+    if (wanted.startsWith("sim-")) recipe = FujiRecipe.standard(wanted.substring(4).toUpperCase(java.util.Locale.ROOT), wanted);
+    String[] tuned = {"halation", "bloom", "clarity", "wb", "kelvin", "dr", "filter", "shiftR", "shiftB", "hl", "sh"};
+    boolean any = false;
+    for (String k : tuned) any |= System.getProperty(k) != null;
+    if (any) {
       FujiRecipe.Tuning t = recipe.tuning();
       t.halation = Integer.getInteger("halation", t.halation);
       t.bloom = Integer.getInteger("bloom", t.bloom);
       t.clarity = Integer.getInteger("clarity", t.clarity);
+      if (System.getProperty("wb") != null) t.wbMode = FujiRecipe.WhiteBalance.valueOf(System.getProperty("wb"));
+      t.kelvin = Integer.getInteger("kelvin", t.kelvin);
+      if (System.getProperty("dr") != null) t.dynamicRange = FujiRecipe.DynamicRange.valueOf(System.getProperty("dr"));
+      t.monoFilter = Integer.getInteger("filter", t.monoFilter);
+      t.wbShiftRed = Integer.getInteger("shiftR", t.wbShiftRed);
+      t.wbShiftBlue = Integer.getInteger("shiftB", t.wbShiftBlue);
+      if (System.getProperty("hl") != null) t.highlight = Double.parseDouble(System.getProperty("hl"));
+      if (System.getProperty("sh") != null) t.shadow = Double.parseDouble(System.getProperty("sh"));
       recipe = recipe.with(t);
     }
+    System.out.println("recipe=" + recipe.key + " " + java.util.Arrays.deepToString(recipe.settings()));
     RawDeveloper.Options o = new RawDeveloper.Options();
     if (args.length > 4) o.fixedGain = Double.parseDouble(args[4]);
     if (args.length > 5) o.stillsTone = !"lutOnlyTone".equals(args[5]);

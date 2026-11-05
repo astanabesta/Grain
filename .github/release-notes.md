@@ -1,23 +1,23 @@
-## Grain Photo vVERSION — tune your films, plus optional Halation and Bloom (device-test beta)
+## Grain Photo vVERSION — six more Fujifilm recipes (device-test beta)
 
 Install **Grain-vVERSION.apk** on the Redmi Note 13 Pro+.
-- **From v0.2.1 or v0.2.2:** it installs as an update. Your photos and imported LUTs stay.
+- **From v0.2.1, v0.2.2 or v0.2.3:** it installs as an update. Your photos, imported LUTs and tuning stay.
 - **From v0.2.0 or older:** first save the photos you want to keep (photo → **Save to device gallery**), uninstall Grain, install this APK, then re-import the LUT pack (*Tune → Import LUT pack*).
 
-### New: tune any RAW film
-- Open the film sheet (**Tune** button) on any ◆ film. Every setting now has − / + buttons: Dynamic range, WB shift (red and blue), Highlight, Shadow, Color, Sharpness, High ISO NR, Clarity, Grain, Color Chrome Effect and Color Chrome FX Blue. The ranges follow Fujifilm's own menus.
-- Defaults: the 10 film simulations start at **Fujifilm's standard settings** (everything 0 / Off). **Reggie's Portra** starts at its **published recipe**.
-- A changed value turns orange, and the button says **Tuned ✓**. Tuning is saved separately for each film. **Reset this look** puts the film back to its default.
-- **Clarity** now really works. Before this build it was ignored, which didn't matter while every film used 0. Negative Clarity softens like a light diffusion filter; positive adds local contrast.
+### New recipes (from RAW, published settings as default)
+- **Kodak Gold 200**, **Kodachrome 64**, **Vibrant Arizona** (Classic Chrome), **Pacific Blues** (Classic Neg.), **CineStill 800T** (Eterna) and **Kodak Tri-X 400** (Acros), from Fuji X Weekly. They need the same Fujifilm LUT pack you already imported.
+- Recipes now come right after Reggie's Portra, before the plain film simulations.
+- Selecting a recipe shows its typical exposure compensation (for example +2/3 to +1 EV for Gold 200). It's a guide only: set it with the exposure control if you want it.
 
-### New: Halation and Bloom (optional extras)
-- Two extra settings, **Off** by default: **Halation** (a red-orange glow around bright lights, like film without an anti-halation layer) and **Bloom** (a soft glow from highlights, like a diffusion filter). Strength 1–10.
-- No Fujifilm film simulation has either, so with both Off your photos stay true to Fujifilm (and to Reggie's recipe).
-- They are made from the RAW light before the film simulation, not pasted on afterwards. They show most around bright, clipped lights such as lamps, windows and the sun.
+### New settings for every film (Tune)
+- **White balance:** Auto, Daylight, Shade, Fluorescent 1/2/3, Incandescent and Kelvin (Color temperature 2500–10000 K). Fujifilm doesn't publish its preset values, so Grain uses white points measured from Fujifilm's own RAW files. WB shift works in every mode. A fixed white balance shows the light's real colour, like the camera does: CineStill 800T is made for lamps and turns teal in daylight.
+- **D-Range Priority** Weak and Strong. As on the camera, it sets Highlight and Shadow itself, so those rows show "Set by DR-P".
+- **Filter** for Acros films: +Ye, +R or +G (Tri-X starts with none). Color, Color Chrome and FX Blue don't change a black-and-white picture, so they're hidden for Acros.
+- The viewfinder now follows a fixed white balance with the nearest phone preset. The photo itself uses the exact white point.
 
 ### Good to know
-- Tuning and the extras change the developed photo only; the viewfinder still shows the phone's normal preview.
-- Dynamic range, WB shift, Clarity, Grain, Color Chrome, FX Blue, Halation and Bloom are Grain's approximations of camera processing. The film simulation itself is Fujifilm's own LUT.
-- Daylight is still untested; outdoor photos (DNG + receipt) are the most useful feedback.
+- Reggie's Portra and the plain film simulations develop exactly as in v0.2.3.
+- D-Range Priority, the Acros filters, Dynamic range, WB shift, Clarity, Grain, Color Chrome, FX Blue, Halation and Bloom are Grain's approximations of camera processing. The white-balance presets are measured, with about ±150 K uncertainty. The film simulation itself is Fujifilm's own LUT.
+- Most useful feedback: the fixed-white-balance recipes in daylight and under lamps, each with the DNG + receipt.
 
 This is a personal device-test build, signed with the project's personal key (certificate SHA-256 6e073ef6…). SHA256SUMS.txt verifies the APK download.

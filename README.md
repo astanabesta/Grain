@@ -2,6 +2,8 @@
 
 **A separate, native Android recipe camera for your Redmi Note 13 Pro Plus.**
 
+**v0.3.0 — six more Fujifilm recipes:** Kodak Gold 200, Kodachrome 64, Pacific Blues, Vibrant Arizona, CineStill 800T and Kodak Tri-X 400 (Fuji X Weekly), developed from RAW with their published settings as the default and listed right after Reggie's Portra. The settings they need are new for every film: fixed **white balance** (Daylight, Shade, Fluorescent 1–3, Incandescent, Kelvin 2500–10000 K) using Fujifilm's preset white points measured from Fujifilm RAW files, **D-Range Priority** Weak/Strong, and the Acros **+Ye/+R/+G** filters. The recipe's typical exposure compensation is shown as a guide (never applied automatically). Fixed-white-balance films preview with the nearest phone preset. See [RAW Fujifilm recipes](docs/RAW_FUJI_RECIPES.md).
+
 **v0.2.3 — tune any RAW film, plus optional Halation and Bloom:** every ◆ film's settings can be tuned in the film sheet (Dynamic range, WB shift, Highlight, Shadow, Color, Sharpness, High ISO NR, Clarity, Grain, Color Chrome, FX Blue), saved per film, with *Reset this look* back to the default: Fujifilm's standard settings for a film simulation, the published recipe for Reggie's Portra. Clarity is now applied in development. **Halation** and **Bloom** (Off, 1–10) are optional Grain extras, off by default: no Fujifilm film simulation has them. They are made from the RAW light before the film simulation and show in the developed photo only.
 
 **v0.2.2 — every Fujifilm film simulation:** all 10 film simulations in Fujifilm's official LUT pack (Provia, Velvia, Astia, Classic Chrome, Reala Ace, Pro Neg. Std, Classic Neg., Eterna, Eterna Bleach Bypass, Acros) are selectable once the pack is imported, developed from RAW at standard settings. The pack's two Rec.709 video conversions are no longer counted as film simulations.
@@ -26,7 +28,7 @@ This repository now contains the standalone Grain project. The previous project'
 
 1. Open **Actions → Build and Release Grain APK** in this repository.
 2. A push to `main` starts the build automatically. You can also choose **Run workflow**.
-3. After a green run, download the APK from the newest **GitHub Release** (v0.2.3). The Actions artifact **grain-photo-N** is also retained.
+3. After a green run, download the APK from the newest **GitHub Release** (v0.3.0). The Actions artifact **grain-photo-N** is also retained.
 4. Install the release APK directly. If using the Actions artifact instead, extract its ZIP first.
 5. Allow installation from your browser/file manager when Android asks, then grant **Camera** access.
 
@@ -65,7 +67,7 @@ For a key that never changes, generate a keystore (`androiddebugkey`, store/key 
 - **ISP looks are JPEG; Fujifilm recipes use RAW.** Reggie's Portra needs Camera2 RAW_SENSOR on the rear camera and the imported Fujifilm LUT; Grain explains and refuses to shoot it otherwise. HEIF is not implemented.
 - **Full-frame capture is not an unfiltered original.** The ISP recipe is already baked into it. A clean original cannot be recovered from that JPEG.
 - **Balanced** chooses the largest public JPEG up to 16 MP; **Larger** up to 24 MP. Digital zoom/cropping reduces output resolution. No claim of access to the stock camera's 200 MP mode.
-- The four ISP looks are original experimental 1D RGB responses, not film-stock reproductions. The Fujifilm recipe uses Fujifilm's own LUT, but its stills tone model, grain, Color Chrome, FX Blue, WB-shift step and DR-Auto rule are Grain's approximations and still need testing on the phone.
+- The four ISP looks are original experimental 1D RGB responses, not film-stock reproductions. The Fujifilm recipes use Fujifilm's own LUTs, but the stills tone model, grain, Color Chrome, FX Blue, WB-shift step, DR-Auto rule, D-Range Priority curve and Acros filters are Grain's approximations, and the fixed white-balance presets are measured values with about ±150 K uncertainty; all still need testing on the phone.
 - HAL acceptance / metadata does not prove exact pixel response. Check the receipt and run the device test plan.
 - Private photos are deleted when the app is uninstalled. Export important photos first. No cloud backup or network access.
 

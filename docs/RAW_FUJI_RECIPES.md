@@ -1,9 +1,31 @@
-# Fujifilm recipes from RAW (v0.2.3, engine `grain-raw-2`)
+# Fujifilm recipes from RAW (v0.3.0, engine `grain-raw-2`)
 
-Grain's first Fujifilm recipe, **Reggie's Portra**, is developed from the phone's sensor RAW. It is not
-a filter on the phone's finished JPEG.
+Grain's Fujifilm recipes are developed from the phone's sensor RAW. They are not filters on the
+phone's finished JPEG. v0.3.0 has seven published recipes (Reggie's Portra plus six from Fuji X
+Weekly) and every film simulation in the imported pack on its own.
 
-## Tuning (v0.2.3)
+## Published recipes (v0.3.0)
+
+Each recipe's default is its published settings (`FujiRecipe.PUBLISHED`); tuning and *Reset this
+look* work as for every film. Recipes are listed before the plain film simulations.
+
+| Recipe (id) | Film simulation | White balance | DR | Highlight / Shadow | Color | Grain | CCE / FX Blue | Sharpness / NR / Clarity | Typical EV |
+|---|---|---|---|---|---|---|---|---|---|
+| Reggie's Portra (4) | Classic Chrome | Auto, R+2 B−4 | DR-Auto | −1 / −1 | +2 | Weak, Small | Strong / Weak | −2 / −4 / 0 | — |
+| Kodak Gold 200 (17) | Classic Chrome | Daylight, R+4 B−5 | DR400 | −1.5 / +0.5 | +3 | Strong, Small | Weak / Off | −2 / −4 / −2 | +2/3 to +1 |
+| Kodachrome 64 (18) | Classic Chrome | Daylight, R+2 B−5 | DR200 | 0 / +0.5 | +2 | Weak, Small | Strong / Off | +1 / −4 / +3 | 0 to +2/3 |
+| Pacific Blues (19) | Classic Neg. | 5800K, R+1 B−3 | DR400 | −2 / +3 | +4 | Strong, Large | Strong / Weak | −2 / −4 / −3 | +2/3 to +1 |
+| Vibrant Arizona (20) | Classic Chrome | 4350K, R+6 B−8 | DR-P Strong | set by DR-P | +4 | Weak, Small | Off / Weak | −2 / −4 / −3 | +2/3 to +1 1/3 |
+| CineStill 800T (21) | Eterna | Fluorescent 3, R−6 B−4 | DR400 | 0 / +2 | +4 | Strong, Large | Strong / Weak | −3 / −4 / −5 | −1/3 to +2/3 |
+| Kodak Tri-X 400 (22) | Acros | Daylight, R+9 B−9 | DR200 | 0 / +3 | n/a | Strong, Large | (Strong / Off, not applied) | +1 / −4 / +4 | +1/3 to +1 |
+
+Gold 200, Kodachrome 64, Pacific Blues, Vibrant Arizona and CineStill 800T are by Ritchie Roesch;
+Tri-X 400 is Anders Lindborg's recipe in Ritchie Roesch's X100V version (published for ISO
+1600–12800). Sources are linked in `FujiRecipe` and in each photo's receipt. The typical exposure
+compensation is shown in the app as guidance only; Grain never applies it automatically (the
+exposure control does).
+
+## Tuning (v0.2.3, extended in v0.3.0)
 
 Every RAW film can be tuned in the film sheet (`FujiRecipe.Tuning`, `FujiRecipe.with`,
 `TuningControl`, saved per film by `RecipeTuning` as `tune.<film key>`). The default is the film's
@@ -12,14 +34,20 @@ Reggie's Portra. *Reset this look* returns to it. Ranges follow Fujifilm's menus
 
 | Setting | Values |
 |---|---|
-| Dynamic range | DR-Auto, DR100, DR200, DR400 (capture headroom follows: −1/3, 0, −1, −2 EV) |
-| White balance | Auto, with WB shift R and B −9…+9 (fixed WB modes are planned for v0.3.0) |
-| Highlight, Shadow | −2…+4 in 0.5 steps |
-| Color | −4…+4 (not shown for Acros) |
+| Filter (Acros only, v0.3.0) | None, +Ye, +R, +G |
+| Dynamic range | DR-Auto, DR100, DR200, DR400, DR-P Weak, DR-P Strong (capture headroom follows: −1/3, 0, −1, −2, −1, −2 EV) |
+| White balance (v0.3.0) | Auto, Daylight, Shade, Fluorescent 1, 2, 3, Incandescent, Kelvin |
+| Color temperature (v0.3.0) | 2500–10000 K in 50 K steps (Kelvin only) |
+| WB shift | R and B −9…+9, in every white-balance mode |
+| Highlight, Shadow | −2…+4 in 0.5 steps (locked, "Set by DR-P", under D-Range Priority) |
+| Color | −4…+4 (not shown for black and white) |
 | Sharpness, High ISO NR | −4…+4 |
 | Clarity | −5…+5 |
 | Grain | Off, Weak/Strong × Small/Large |
-| Color Chrome Effect, FX Blue | Off, Weak, Strong |
+| Color Chrome Effect, FX Blue | Off, Weak, Strong (not shown for black and white) |
+
+A setting that another one overrides stays visible but muted, with the reason (Highlight and
+Shadow under DR-P, Color temperature outside Kelvin).
 
 The receipt's `recipe` block records the effective settings, `tuned`, and the default values when
 tuned; the JPEG description says "tuned". Clarity (new in v0.2.3) is a mid-band local-contrast
@@ -45,6 +73,93 @@ F-Log2 and the LUT, so the film simulation renders the glow like any other light
 At 0 the development is bit-identical to v0.2.2. The extras affect the developed photo only, not
 the viewfinder.
 
+## White balance (v0.3.0)
+
+**Auto** develops with the phone's as-shot white, exactly as before (bit-identical). A **fixed** mode
+develops for its own white point, so the light's colour shows as it would on a Fujifilm camera set
+the same way (e.g. Daylight under warm bulbs looks warm; CineStill's Fluorescent 3 turns daylight
+teal-blue).
+
+Fujifilm publishes only the preset names (Fluorescent 1/2/3 are daylight, warm-white and cool-white
+tubes), not their white points. The presets were measured from Fujifilm's own data: every Fujifilm
+RAF stores the camera's preset gain table (RAFData tag 0xc000: G, R, B triplets for Daylight, Shade,
+Fluorescent 1–3, Incandescent, then a colour-temperature table). Public sample RAFs from
+raw.pixls.us were read (images not kept or published):
+
+| Camera | Daylight | Shade | Fl. 1 | Fl. 2 | Fl. 3 | Incandescent | D65 (standard) |
+|---|---|---|---|---|---|---|---|
+| X-T5 (R, B at G = 302) | 565, 560 | 618, 486 | 718, 485 | 611, 601 | 580, 746 | 381, 842 | 646, 494 |
+| X-T4 | 554, 574 | 605, 496 | 712, 505 | 606, 627 | 580, 789 | 375, 878 | 632, 506 |
+| GFX100 II | 531, 540 | 586, 460 | 685, 455 | 575, 551 | 540, 723 | 353, 830 | 607, 475 |
+
+The gains were converted to white points two ways: with each camera's DNG colour matrix, and by
+interpolating between Fujifilm's own standard-A and D65 gains (the two disagree by about
+10 mired). A GFX100 II frame shot at Kelvin 5500 lands on the camera's own colour-temperature table.
+Grain uses the compromise values (CCT on the Planckian locus, Duv in CIE 1960 uv; uncertainty about
+±150 K, roughly one WB-shift step):
+
+| Mode | CCT | Duv |
+|---|---|---|
+| Daylight | 4850 K | 0 |
+| Shade | 6000 K | 0 |
+| Fluorescent 1 | 6450 K | +0.0075 |
+| Fluorescent 2 | 4950 K | +0.0078 |
+| Fluorescent 3 | 4300 K | +0.015 |
+| Incandescent | 2856 K (standard A) | 0 |
+| Kelvin | the set value | 0 |
+
+Development: the white point (`ColorMath.whiteXy`, Kim et al. Planckian locus) is turned into the
+phone's camera neutral with the phone's own DNG calibration (`ColorMath.neutralForXy`), and the
+colour matrix is built for that known white. The search a DNG reader does from a neutral is skipped
+on purpose: this phone's two calibration matrices (D65 and A) disagree enough that one neutral can
+have two self-consistent white points (a 4850 K neutral reads back as about 7200 K). The WB shift
+applies on top in every mode (0.04 log2 per step, an approximation). Because the phone's sensor
+differs from Fujifilm's, the same preset gives different raw gains on the phone; the white point,
+not the gain numbers, is what is matched.
+
+The viewfinder and the reference JPEG use the nearest Camera2 preset (Daylight and Fluorescent 2 →
+DAYLIGHT, Shade → SHADE, Fluorescent 1 → CLOUDY_DAYLIGHT, Fluorescent 3 → FLUORESCENT, Incandescent →
+INCANDESCENT; Kelvin by range); hold-to-compare shows the phone's auto white balance. The developed
+photo always uses the exact white point.
+
+## D-Range Priority (v0.3.0)
+
+D-Range Priority replaces Dynamic Range and the Highlight/Shadow tone curve, as on the cameras (the
+app locks Highlight and Shadow under DR-P). Fujifilm publishes no curve, so Grain follows Fuji X
+Weekly's comparisons: DR-P Weak looks nearly identical to DR400 with Highlight −2 and Shadow −2,
+with the RAW exposed like DR200; DR-P Strong is the same flat curve one DR step higher, with the RAW
+exposed like DR400.
+
+- **Weak**: DR400 tone with Highlight −2, Shadow −2; capture −1 EV.
+- **Strong**: the same, plus one more stop of highlights compressed into the white when the RAW
+  holds it (the shoulder maps white + 1 EV to white); capture −2 EV. When the RAW clips earlier, the
+  RAW clip point maps to white as for every film.
+- Fujifilm's slight mid-contrast boost under DR-P is not modelled.
+
+## Acros filters (v0.3.0)
+
+Acros +Ye, +R and +G are offered as a tuning *Filter* on black-and-white films (Tri-X 400 is published
+with plain Acros). Fujifilm publishes no filter data. Two simpler designs were rejected after probing
+the official Acros LUT:
+
+- mixing the colours linearly and handing the LUT a grey: the Acros LUT renders saturated colours up
+  to about 35 % darker than a linear mix, so every colour would brighten even with no filter;
+- filtering the light before the LUT: the LUT is not scale-invariant for coloured input, so +R would
+  bend the tone curve of greys (−0.95 EV at white).
+
+Grain's filter keeps the LUT's own rendering: after the Acros LUT, each pixel's output is turned back
+into its equivalent grey on the LUT's grey curve, scaled by the filter's brightness ratio (filtered
+mix ÷ the LUT's own mix, probed around grey; exactly 1 for neutrals) and re-rendered on the same
+curve. Filter transmissions (R, G, B): +Ye 1, 0.9, 0.1; +R 1, 0.25, 0.02; +G 0.4, 1, 0.4. On the
+phone test photo, +R lightens a red figure and a wooden desk, +G darkens red, greys stay exact.
+
+## Black and white
+
+Color, Color Chrome Effect and FX Blue are not applied to a black-and-white film (they act on
+colour), so the app hides them for Acros and the receipt says "not applied to black and white" for a
+published value such as Tri-X's Color Chrome Effect Strong. White balance and WB shift still matter:
+they change how colours translate to greys.
+
 ## Film simulations on their own (v0.2.2)
 
 Each film simulation in the imported pack is also offered on its own (`FujiRecipe.SIMULATIONS`,
@@ -63,11 +178,13 @@ the simulations differ; photos are always developed from RAW.
 
 1. **Capture** (`GrainCamera`, `RawSupport`): Camera2 `RAW_SENSOR` and the phone's JPEG come from the
    same exposure, paired by sensor timestamp. AE runs normally, with headroom for DR-Auto
-   (−1/3 EV; DR200 −1, DR400 −2). The lens-shading map is requested. The capture records black and
+   (−1/3 EV; DR200 and DR-P Weak −1, DR400 and DR-P Strong −2). Auto-WB films request auto white
+   balance; fixed-WB films the nearest Camera2 preset. The lens-shading map is requested. The capture records black and
    white levels (dynamic if reported), the as-shot neutral, colour/forward/calibration matrices,
    illuminants, ISO, exposure and the noise profile. The DNG is written with `DngCreator`.
 2. **Sensor to scene** (`develop/RawDeveloper`, `ColorMath`):
-   - black subtraction, lens-shading gains and white balance;
+   - black subtraction, lens-shading gains and white balance (the as-shot white for Auto, the mode's
+     measured white point for a fixed white balance, then the WB shift);
    - Malvar–He–Cutler demosaic, with a soft highlight roll-off toward neutral where green clips;
    - DNG colour processing: the forward-matrix path if present, otherwise the colour matrix plus a
      Bradford adaptation, interpolated between the two illuminants by CCT;
@@ -78,10 +195,12 @@ the simulations differ; photos are always developed from RAW.
    - F-Log2 encoding (data sheet v1.1), plus stills offsets fitted on public RAF/JPEG pairs: a short
      highlight shoulder, a small shadow lift, and Highlight/Shadow/DR modifiers;
    - if the RAW clips before the curve's white point, the shoulder is expanded so clipped areas
-     still reach white.
+     still reach white; DR-P uses DR400 with Highlight/Shadow −2, Strong also folding one more stop
+     of highlights into the white.
 5. **Film simulation**: Fujifilm's official 33-point `FLog2_to_<SIM>` LUT (trilinear). You import it
    from the free *GFX ETERNA 55* pack. It is stored privately in the app and is never committed,
-   bundled or exported.
+   bundled or exported. On Acros, an optional filter (+Ye/+R/+G) re-renders each pixel's
+   equivalent grey on the LUT's own grey curve.
 6. **Noise** (v0.2.1, before the LUT, in the F-Log2 code domain):
    - noise curve: the camera's `SENSOR_NOISE_PROFILE` (green) is the baseline, scaled ×5.3 because
      on this phone it under-reports noise variance about five-fold (measured on the first two test
@@ -98,7 +217,8 @@ the simulations differ; photos are always developed from RAW.
    - FX Blue = depth on blues;
    - grain = cached tileable luminance-weighted textures; the amount is reduced where the image's
      own noise already provides texture (never below a quarter of the recipe amount);
-   - WB shift = 0.04 log2 per step.
+   - WB shift = 0.04 log2 per step;
+   - not applied to black and white: Color, Color Chrome and FX Blue.
 8. **Output**: a JPEG at quality 95 with EXIF copied from the phone JPEG. The receipt's
    `development` block records every number used, including per-stage timings.
 
@@ -126,7 +246,16 @@ Local JUnit tests (`RawEngineTest`) check:
   halo around a clipped lamp is red-dominant and local and bloom is neutral, that Clarity lowers or
   raises local contrast without moving the mean, that tuning clamps to the camera ranges, that every
   app control position round-trips, and that the tone curve stays monotonic for every
-  Highlight/Shadow/DR combination.
+  Highlight/Shadow/DR combination;
+- (v0.3.0) that a fixed white point round-trips exactly on this phone's two matrices across
+  2500–10000 K (the case the DNG search gets wrong), that Kelvin gains are ordered, that a fixed
+  white balance ignores the as-shot white and renders its own light neutral (Incandescent blue,
+  Shade warm, Kelvin = the same Planckian white, WB shift still applied), that DR-P Weak equals DR400
+  with H/S −2 and ignores Highlight/Shadow while Strong only darkens highlights, that Acros filters
+  leave greys bit-identical and keep the picture black and white while +R lightens red and +G
+  darkens it, that the six recipes carry their published settings, and that the new settings clamp.
+
+On the phone test DNG (ISO 2742, indoor), Reggie's Portra develops bit-identically to v0.2.3.
 
 ## First phone test (v0.2.0 → v0.2.1)
 
@@ -150,5 +279,13 @@ must be re-measured with the receipt's `timingMs`.
 - Daylight and low-ISO scenes (the first test was indoor at ISO 2300–2700).
 - Skin, sky and foliage colour against known Classic Chrome renderings.
 - Landscape shots now save upright.
+- (v0.3.0) The fixed-white-balance recipes in daylight and under lamps: Gold 200 and Kodachrome 64
+  (Daylight) should look neutral-to-warm in sun, CineStill 800T (Fluorescent 3) close to neutral
+  under warm artificial light and teal in daylight.
+- (v0.3.0) Vibrant Arizona (DR-P Strong) on a bright, high-contrast scene: highlights should hold
+  more detail than Kodak Gold 200 (DR400).
 
-Desktop harness: `tools/DevelopRaw.java` develops a raw Bayer dump with any `.cube` file. No Android is needed.
+Desktop harness: `tools/DevelopRaw.java` develops a raw Bayer dump with any `.cube` file. No Android
+is needed. `-Drecipe=<key>` picks a published recipe (e.g. `kodak-gold-200`, `vibrant-arizona`) or
+`sim-<LUT name>`; `-Dwb`, `-Dkelvin`, `-Ddr`, `-Dfilter`, `-DshiftR/-DshiftB`, `-Dhl/-Dsh`,
+`-Dhalation`, `-Dbloom`, `-Dclarity` override single settings.
