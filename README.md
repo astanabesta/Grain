@@ -12,9 +12,9 @@ Cream/olive/orange Grain design. Real Camera2 still capture. Recipes request sup
 
 This repository now contains the standalone Grain project. The previous project's files were replaced in a normal commit; earlier Git history was preserved.
 
-1. Open **Actions → Build Grain APK** in this repository.
+1. Open **Actions → Build and Release Grain APK** in this repository.
 2. A push to `main` starts the build automatically. You can also choose **Run workflow**.
-3. After a green run, download **grain-photo-debug-N** under Artifacts.
+3. After a green run, download the APK from the **v0.1.1 GitHub Release**. The Actions artifact **grain-photo-debug-N** is also retained.
 4. Extract the artifact ZIP and install `app-debug.apk` on your Redmi Note 13 Pro Plus.
 5. Allow installation from your browser/file manager when Android asks, then grant **Camera** access.
 
@@ -86,3 +86,7 @@ bash tools/check-source.sh
 This checks Java syntax and 1,227 crop/curve cases without an Android SDK. It does **not** compile/link the Android app. GitHub Actions runs the Android build and JUnit tests.
 
 See [Architecture](docs/ARCHITECTURE.md), [Repository audit](docs/REPO_AUDIT.md), and [Device test plan](docs/DEVICE_TEST_PLAN.md).
+
+## APK release
+
+A successful main-branch build automatically creates/updates the `v0.1.1` prerelease and attaches the debug APK and checksum. It does not publish the old project’s APK. Debug signing is cached between CI builds; supply `GRAIN_DEBUG_KEYSTORE_BASE64` for a durable key independent of cache eviction.
