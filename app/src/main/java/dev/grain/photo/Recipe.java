@@ -44,7 +44,23 @@ public final class Recipe {
     };
     // Each Fujifilm film simulation on its own (ids stay fixed: never reorder, only append).
     String[][] sims = FujiRecipe.SIMULATIONS;
-    Recipe[] all = new Recipe[fixed.length + sims.length];
+    // Published recipes after the simulations (ids 17..22).
+    FujiRecipe[] recipes = {
+      FujiRecipe.KODAK_GOLD_200, FujiRecipe.KODACHROME_64, FujiRecipe.PACIFIC_BLUES,
+      FujiRecipe.VIBRANT_ARIZONA, FujiRecipe.CINESTILL_800T, FujiRecipe.KODAK_TRI_X_400
+    };
+    String[] looks = {
+      "Ritchie Roesch’s published recipe: golden warmth, nostalgic yellows and reds.",
+      "Ritchie Roesch’s published recipe: a crisp slide-film look, firm shadows, distinct reds and blues.",
+      "Ritchie Roesch’s published recipe: a stylised summer palette, blue-teal with warm neutrals and"
+          + " deep shadows.",
+      "Ritchie Roesch’s published recipe: bright, warm and pastel-leaning, a sun-washed cinematic feel.",
+      "Ritchie Roesch’s published recipe for artificial light: cool night ambience against coloured"
+          + " lights, soft and grainy.",
+      "Anders Lindborg’s recipe (Ritchie Roesch’s X100V version): gritty, textured black and white with"
+          + " strong shadows."
+    };
+    Recipe[] all = new Recipe[fixed.length + sims.length + recipes.length];
     System.arraycopy(fixed, 0, all, 0, fixed.length);
     for (int i = 0; i < sims.length; i++) {
       int id = fixed.length + i;
@@ -56,7 +72,34 @@ public final class Recipe {
                   + " Fujifilm’s official LUT at standard settings, developed from this phone’s RAW.",
               true);
     }
+    for (int i = 0; i < recipes.length; i++) {
+      int id = fixed.length + sims.length + i;
+      all[id] =
+          new Recipe(
+              id,
+              recipes[i],
+              looks[i]
+                  + " Developed from this phone’s RAW with Fujifilm’s official "
+                  + recipes[i].filmLabel
+                  + " LUT.",
+              false);
+    }
     return all;
+  }
+
+  /**
+   * The order films are listed in: the ISP looks, the published recipes (Reggie's Portra first),
+   * then the plain film simulations. Ids are unchanged.
+   */
+  public static final Recipe[] DISPLAY_ORDER = displayOrder();
+
+  private static Recipe[] displayOrder() {
+    Recipe[] out = new Recipe[ALL.length];
+    int n = 0;
+    for (Recipe r : ALL) if (!r.raw) out[n++] = r;
+    for (Recipe r : ALL) if (r.raw && !r.standard) out[n++] = r;
+    for (Recipe r : ALL) if (r.raw && r.standard) out[n++] = r;
+    return out;
   }
 
   public final int id, referenceIso, whiteBalance, edgeMode, noiseMode;
@@ -103,15 +146,58 @@ public final class Recipe {
   }
 
   /**
-   * RAW capture headroom for a film's Dynamic Range setting (DR-Auto captures 1/3 EV under);
-   * development meters the scene itself.
+   * RAW capture headroom for a film's Dynamic Range setting (DR-Auto captures 1/3 EV under; D-Range
+   * Priority Weak like DR200, Strong like DR400); development meters the scene itself.
    */
   public static float rawCaptureBias(FujiRecipe f) {
-    return f.dynamicRange == FujiRecipe.DynamicRange.DR400
-        ? -2f
-        : f.dynamicRange == FujiRecipe.DynamicRange.DR200
-            ? -1f
-            : f.dynamicRange == FujiRecipe.DynamicRange.AUTO ? -1f / 3 : 0f;
+    switch (f.dynamicRange) {
+      case DR400:
+      case DRP_STRONG:
+        return -2f;
+      case DR200:
+      case DRP_WEAK:
+        return -1f;
+      case AUTO:
+        return -1f / 3;
+      default:
+        return 0f;
+    }
+  }
+
+  /**
+   * Camera2 white balance for the viewfinder and reference JPEG of a RAW film: the nearest preset
+   * to a fixed Fujifilm white balance (the RAW development uses the exact white point), else auto.
+   */
+  public static int awbModeFor(FujiRecipe f) {
+    if (f == null) return CaptureRequest.CONTROL_AWB_MODE_AUTO;
+    switch (f.wbMode) {
+      case DAYLIGHT:
+      case FLUORESCENT_2:
+        return CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT;
+      case SHADE:
+        return CaptureRequest.CONTROL_AWB_MODE_SHADE;
+      case FLUORESCENT_1:
+        return CaptureRequest.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT;
+      case FLUORESCENT_3:
+        return CaptureRequest.CONTROL_AWB_MODE_FLUORESCENT;
+      case INCANDESCENT:
+        return CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT;
+      case KELVIN:
+        int k = f.kelvin;
+        return k <= 3300
+            ? CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT
+            : k <= 3800
+                ? CaptureRequest.CONTROL_AWB_MODE_WARM_FLUORESCENT
+                : k <= 4600
+                    ? CaptureRequest.CONTROL_AWB_MODE_FLUORESCENT
+                    : k <= 5800
+                        ? CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT
+                        : k <= 7000
+                            ? CaptureRequest.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT
+                            : CaptureRequest.CONTROL_AWB_MODE_SHADE;
+      default:
+        return CaptureRequest.CONTROL_AWB_MODE_AUTO;
+    }
   }
 
   public static int rawRecipeCount() {

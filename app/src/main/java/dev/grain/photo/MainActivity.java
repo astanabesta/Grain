@@ -452,7 +452,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     if (filmRow == null) return;
     if (!visible(Recipe.ALL[recipe])) recipe = 0;
     filmRow.removeAllViews();
-    for (Recipe f : Recipe.ALL) {
+    for (Recipe f : Recipe.DISPLAY_ORDER) {
       if (!visible(f)) continue;
       TextView chip = button((f.raw ? "◆  " : "•  ") + f.name, 10, () -> selectRecipe(f.id));
       chip.setMinHeight(0);
@@ -492,6 +492,10 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
         message("RAW isn’t available here: " + camera.rawUnavailableReason());
       else if (!luts.has(r.fuji.filmSimulation))
         message("Import Fujifilm’s LUT pack to use " + r.name + " (Tune → Import)");
+      else if (!r.fuji.exposureNote.isEmpty())
+        message(
+            r.name + " · the recipe is usually shot at " + r.fuji.exposureNote
+                + " (set it with the exposure control) · developed from RAW");
       else message(r.name + " · preview is the phone’s view; the look is developed from RAW");
     }
   }
@@ -746,7 +750,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
       artwork = BitmapFactory.decodeStream(in, null, artworkOptions);
     } catch (Exception ignored) {
     }
-    for (Recipe f : Recipe.ALL) {
+    for (Recipe f : Recipe.DISPLAY_ORDER) {
       if (!visible(f)) continue;
       LinearLayout tile = column();
       tile.setTag(f.id);
@@ -979,23 +983,28 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
           badge.setTextColor(isTuned ? ORANGE : MUTED);
         };
     showBadge.run();
+    // every row refreshes after a change: one setting can switch another off (DR-P locks Highlight
+    // and Shadow; Color temperature applies only to Kelvin)
+    ArrayList<Runnable> rows = new ArrayList<>();
     Runnable changed =
         () -> {
           tuning.save(r, work);
           showBadge.run();
           updateLabels();
+          for (Runnable shown : rows) shown.run();
+          // the viewfinder follows a fixed white balance with the nearest Camera2 preset
+          if (r.id == recipe && camera != null) camera.update(snapshot());
         };
     fixedSetting(panel, "Film simulation", r.fuji.filmLabel);
-    fixedSetting(panel, "White balance", r.fuji.whiteBalance);
     for (TuningControl setting : TuningControl.fujifilm(r.fuji))
-      stepper(panel, setting, work, defaults, changed);
+      rows.add(stepper(panel, setting, work, defaults, changed));
     TextView extrasTitle = text("GRAIN EXTRAS · NOT FUJIFILM SETTINGS", 9, MUTED);
     extrasTitle.setTypeface(Typeface.MONOSPACE);
     extrasTitle.setGravity(Gravity.START);
     extrasTitle.setPadding(0, dp(14), 0, dp(4));
     panel.addView(extrasTitle, new LinearLayout.LayoutParams(-1, -2));
     for (TuningControl setting : TuningControl.extras())
-      stepper(panel, setting, work, defaults, changed);
+      rows.add(stepper(panel, setting, work, defaults, changed));
     TextView extrasNote =
         paragraph(
             "No Fujifilm film simulation has halation or bloom, so both start Off. Halation: a"
@@ -1004,20 +1013,31 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
                 + " Both are made from the RAW light before the film simulation.");
     extrasNote.setPadding(0, dp(6), 0, 0);
     panel.addView(extrasNote);
-    TextView credit =
-        paragraph(
-            r.standard
-                ? "Default: Fujifilm " + r.fuji.filmLabel + " at standard settings (every setting"
-                    + " 0 / Off). LUT: Fujifilm’s official F-Log2 pack."
-                : "Default: the recipe by " + r.fuji.author + " as published — " + r.fuji.source);
+    String creditText =
+        r.standard
+            ? "Default: Fujifilm " + r.fuji.filmLabel + " at standard settings (every setting"
+                + " 0 / Off, Auto white balance). LUT: Fujifilm’s official F-Log2 pack."
+            : "Default: the recipe by " + r.fuji.author + " as published — " + r.fuji.source;
+    if (!r.fuji.exposureNote.isEmpty())
+      creditText +=
+          "\nTypical exposure compensation: " + r.fuji.exposureNote
+              + ". A guide only: Grain doesn’t apply it, set it with the exposure control.";
+    if (r.fuji.monochrome() && (r.fuji.colorChrome > 0 || r.fuji.colorChromeBlue > 0))
+      creditText +=
+          "\nThe published Color Chrome settings don’t change a black-and-white picture in Grain,"
+              + " so they aren’t shown.";
+    TextView credit = paragraph(creditText);
     credit.setPadding(0, dp(2), 0, 0);
     panel.addView(credit);
     TextView note =
         paragraph(
-            "Tuning changes the developed photo only; the viewfinder shows the phone’s normal"
-                + " preview. Each photo is developed from the sensor RAW with Fujifilm’s LUT plus"
-                + " Grain’s stills tone model. Dynamic range, WB shift, Clarity, Grain, Color"
-                + " Chrome, FX Blue and the extras are Grain’s approximations.");
+            "Tuning changes the developed photo; the viewfinder is the phone’s preview, with the"
+                + " nearest white-balance preset when the film uses a fixed white balance. Each"
+                + " photo is developed from the sensor RAW with Fujifilm’s LUT plus Grain’s stills"
+                + " tone model. Fixed white balances use Fujifilm’s preset white points measured"
+                + " from Fujifilm RAW files. Dynamic range and D-Range Priority, WB shift,"
+                + " Clarity, Grain, Color Chrome, FX Blue, the Acros filters and the extras are"
+                + " Grain’s approximations.");
     panel.addView(note);
   }
 
@@ -1031,8 +1051,11 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     panel.addView(line);
   }
 
-  /** A setting row: name, then − value + (orange when it differs from the film's default). */
-  private void stepper(
+  /**
+   * A setting row: name, then − value + (orange when it differs from the film's default; muted with
+   * the reason while another setting overrides it). Returns the row's refresh.
+   */
+  private Runnable stepper(
       LinearLayout panel,
       TuningControl setting,
       FujiRecipe.Tuning work,
@@ -1060,18 +1083,27 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     Runnable show =
         () -> {
           int i = setting.at(work);
-          value.setText(setting.labels[i]);
-          value.setTextColor(i == standard ? INK : ORANGE);
-          value.setContentDescription(
-              setting.name + " " + setting.labels[i]
-                  + (i == standard ? ", default" : ", changed from " + setting.labels[standard]));
-          minus.setEnabled(i > 0);
-          minus.setAlpha(i > 0 ? 1f : .3f);
-          plus.setEnabled(i < last);
-          plus.setAlpha(i < last ? 1f : .3f);
+          boolean on = setting.enabled(work);
+          key.setTextColor(on ? INK : MUTED);
+          if (!on) {
+            value.setText(setting.disabledLabel);
+            value.setTextColor(MUTED);
+            value.setContentDescription(setting.name + ": " + setting.disabledLabel);
+          } else {
+            value.setText(setting.labels[i]);
+            value.setTextColor(i == standard ? INK : ORANGE);
+            value.setContentDescription(
+                setting.name + " " + setting.labels[i]
+                    + (i == standard ? ", default" : ", changed from " + setting.labels[standard]));
+          }
+          minus.setEnabled(on && i > 0);
+          minus.setAlpha(on && i > 0 ? 1f : .3f);
+          plus.setEnabled(on && i < last);
+          plus.setAlpha(on && i < last ? 1f : .3f);
         };
     minus.setOnClickListener(
         v -> {
+          if (!setting.enabled(work)) return;
           int i = setting.at(work);
           if (i <= 0) return;
           setting.set(work, i - 1);
@@ -1080,6 +1112,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
         });
     plus.setOnClickListener(
         v -> {
+          if (!setting.enabled(work)) return;
           int i = setting.at(work);
           if (i >= last) return;
           setting.set(work, i + 1);
@@ -1088,6 +1121,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
         });
     show.run();
     panel.addView(line);
+    return show;
   }
 
   private void pickLuts(Runnable after) {

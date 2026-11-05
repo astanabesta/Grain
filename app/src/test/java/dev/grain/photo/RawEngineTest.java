@@ -563,14 +563,450 @@ public class RawEngineTest {
     assertEquals("Weak", shown.get("Color Chrome FX Blue"));
     assertEquals("Off", shown.get("Halation"));
     assertEquals("Off", shown.get("Bloom"));
-    assertEquals(13, dev.grain.photo.develop.TuningControl.fujifilm(reggie).get(3).labels.length);
+    assertEquals(13, control(reggie, "Highlight").labels.length);
+    assertEquals("Auto", shown.get("White balance"));
     for (dev.grain.photo.develop.TuningControl c :
         dev.grain.photo.develop.TuningControl.fujifilm(FujiRecipe.standard("ACROS", "Acros")))
       assertNotEquals("no Color control for Acros", "Color", c.name);
     FujiRecipe velvia = FujiRecipe.standard("Velvia", "Velvia");
     for (dev.grain.photo.develop.TuningControl c : dev.grain.photo.develop.TuningControl.fujifilm(velvia)) {
+      if (!c.enabled(velvia.tuning())) continue; // Color temperature: Kelvin only
       String v = c.labels[c.at(velvia.tuning())];
-      assertTrue(c.name + " standard is " + v, v.equals("0") || v.equals("Off") || v.equals("DR-Auto"));
+      assertTrue(
+          c.name + " standard is " + v,
+          v.equals("0") || v.equals("Off") || v.equals("DR-Auto") || v.equals("Auto"));
     }
+  }
+
+  static dev.grain.photo.develop.TuningControl control(FujiRecipe film, String name) {
+    for (dev.grain.photo.develop.TuningControl c : dev.grain.photo.develop.TuningControl.fujifilm(film))
+      if (c.name.equals(name)) return c;
+    return null;
+  }
+
+  // ---------------------------------------------------------------- v0.3.0: WB, DR-P, Acros filters
+
+  /** This phone's DNG calibration (Redmi Note 13 Pro+ camera0): D65 and A matrices. */
+  static final double[] PHONE_CM1 = {
+    0.6667938232, -0.1588897705, -0.08573913574, -0.5739440918, 1.389785767, 0.1430206299,
+    -0.137878418, 0.2651519775, 0.6036224365
+  };
+  static final double[] PHONE_CM2 = {
+    1.531463623, -0.4696044922, -0.215057373, -0.4762268066, 1.445327759, 0.006698608398,
+    -0.07174682617, 0.2387237549, 0.2329559326
+  };
+  static final double[] PHONE_FM1 = {
+    0.6731414795, 0.1950378418, 0.09602355957, 0.276184082, 0.8182067871, -0.09440612793,
+    0.02165222168, -0.2324523926, 1.036010742
+  };
+  static final double[] PHONE_FM2 = {
+    0.5744934082, 0.1840057373, 0.2057037354, 0.1938171387, 0.7453765869, 0.06079101562,
+    -0.01449584961, -0.5286865234, 1.368408203
+  };
+
+  /**
+   * A fixed white balance round-trips: the neutral for a white point develops with exactly that
+   * white, across Fujifilm's Kelvin range, even where this phone's two matrices would let the DNG
+   * search settle on a second, wrong white (e.g. 4850 K read back as ~7200 K).
+   */
+  @Test
+  public void fixedWhitePointRoundTripsOnThePhoneMatrices() {
+    for (int k = FujiRecipe.KELVIN_MIN; k <= FujiRecipe.KELVIN_MAX; k += 250)
+      for (double duv : new double[] {0, 0.0075, 0.015}) {
+        double[] xy = ColorMath.whiteXy(k, duv);
+        double[] n = ColorMath.neutralForXy(xy[0], xy[1], PHONE_CM1, PHONE_CM2, null, null, 21, 17);
+        assertEquals(1.0, n[1], 1e-12);
+        ColorMath.Result r =
+            ColorMath.cameraToRec2020(n, xy, PHONE_CM1, PHONE_CM2, PHONE_FM1, PHONE_FM2, null, null, 21, 17);
+        assertEquals("x at " + k, xy[0], r.whiteX, 1e-12);
+        assertEquals("y at " + k, xy[1], r.whiteY, 1e-12);
+        double[] m = r.cameraToRec2020;
+        for (int row = 0; row < 3; row++)
+          assertEquals("white stays white at " + k, 1.0, m[row * 3] + m[row * 3 + 1] + m[row * 3 + 2], 1e-9);
+        // the Planckian white sits on the locus (McCamy's CCT readout is approximate: compare in mired)
+        if (duv == 0) assertEquals(1e6 / k, 1e6 / ColorMath.cctFromXy(xy[0], xy[1]), 2);
+        // Duv moves the white off the locus by the asked distance in CIE 1960 uv
+        double[] uvW = ColorMath.uv(xy[0], xy[1]), p = ColorMath.planckXy(k), uvP = ColorMath.uv(p[0], p[1]);
+        assertEquals(duv, Math.hypot(uvW[0] - uvP[0], uvW[1] - uvP[1]), 1e-6);
+        if (duv > 0) assertTrue("positive Duv is above the locus (greener)", uvW[1] > uvP[1]);
+      }
+    // the case that broke the DNG search: same neutral, white given vs searched
+    double[] xy = ColorMath.planckXy(4850);
+    double[] n = ColorMath.neutralForXy(xy[0], xy[1], PHONE_CM1, PHONE_CM2, null, null, 21, 17);
+    ColorMath.Result given =
+        ColorMath.cameraToRec2020(n, xy, PHONE_CM1, PHONE_CM2, PHONE_FM1, PHONE_FM2, null, null, 21, 17);
+    assertEquals(4850, given.cct, 30);
+  }
+
+  /** Warmer whites need less red gain and more blue gain, monotonically (Kelvin ordering). */
+  @Test
+  public void kelvinWhitesAreOrdered() {
+    double prevR = 0, prevB = Double.MAX_VALUE;
+    for (int k = FujiRecipe.KELVIN_MIN; k <= FujiRecipe.KELVIN_MAX; k += 50) {
+      double[] xy = ColorMath.planckXy(k);
+      double[] n = ColorMath.neutralForXy(xy[0], xy[1], PHONE_CM1, PHONE_CM2, null, null, 21, 17);
+      double gainR = 1 / n[0], gainB = 1 / n[2];
+      assertTrue("red gain rises with Kelvin at " + k, gainR > prevR);
+      assertTrue("blue gain falls with Kelvin at " + k, gainB < prevB);
+      prevR = gainR;
+      prevB = gainB;
+    }
+    // presets in the same order as their white points
+    FujiRecipe.WhiteBalance[] warmToCool = {
+      FujiRecipe.WhiteBalance.INCANDESCENT, FujiRecipe.WhiteBalance.FLUORESCENT_3,
+      FujiRecipe.WhiteBalance.DAYLIGHT, FujiRecipe.WhiteBalance.SHADE
+    };
+    for (int i = 1; i < warmToCool.length; i++) assertTrue(warmToCool[i].cct > warmToCool[i - 1].cct);
+  }
+
+  static final class Developed {
+    int[] px;
+    Map<String, Object> stats;
+  }
+
+  interface ColourScene {
+    /** RAW level of a CFA channel (0 R, 1 G, 2 B) at (x, y), relative to white (above 1 clips). */
+    double level(int x, int y, int c);
+  }
+
+  static Developed developColour(
+      int w, int h, ColourScene scene, double[] asShot, FujiRecipe recipe, CubeLut lut, double fixedGain)
+      throws Exception {
+    short[] data = new short[w * h];
+    RawFrame f = new RawFrame(data, w, h, w);
+    for (int y = 0; y < h; y++)
+      for (int x = 0; x < w; x++) {
+        double v = scene.level(x, y, f.color(x, y));
+        data[y * w + x] = (short) Math.round(64 + Math.max(0, Math.min(1, v)) * (1023 - 64));
+      }
+    f.neutral = asShot;
+    f.colorMatrix1 = CM;
+    f.iso = 100;
+    RawDeveloper.Options o = new RawDeveloper.Options();
+    o.grain = false;
+    o.threads = 2;
+    o.fixedGain = fixedGain;
+    Developed d = new Developed();
+    d.px = new int[w * h];
+    d.stats =
+        RawDeveloper.develop(f, recipe, lut, o, (y, rows, argb, width) ->
+            System.arraycopy(argb, 0, d.px, y * width, rows * width));
+    return d;
+  }
+
+  static FujiRecipe whiteBalance(FujiRecipe r, FujiRecipe.WhiteBalance mode, int kelvin) {
+    FujiRecipe.Tuning t = r.tuning();
+    t.wbMode = mode;
+    t.kelvin = kelvin;
+    return r.with(t);
+  }
+
+  static double mean(int[] px, int w, int x0, int x1, int y0, int y1, int ch) {
+    double s = 0;
+    int shift = 16 - 8 * ch;
+    for (int y = y0; y < y1; y++) for (int x = x0; x < x1; x++) s += (px[y * w + x] >> shift) & 255;
+    return s / ((x1 - x0) * (y1 - y0));
+  }
+
+  /**
+   * A fixed white balance ignores the phone's as-shot white and develops a surface lit by its own
+   * white point as neutral; a warmer preset on the same light renders it blue, a cooler one warm.
+   */
+  @Test
+  public void fixedWhiteBalanceUsesItsWhitePointNotTheAsShotWhite() throws Exception {
+    int w = 128, h = 96;
+    double[] xy = ColorMath.whiteXy(4850, 0);
+    double[] lit = ColorMath.neutralForXy(xy[0], xy[1], CM, null, null, null, 21, 21);
+    ColourScene grey = (x, y, c) -> 0.12 * lit[c];
+    FujiRecipe daylight = whiteBalance(PLAIN, FujiRecipe.WhiteBalance.DAYLIGHT, 5500);
+    Developed a = developColour(w, h, grey, new double[] {0.5, 1, 0.625}, daylight, identity(33), 1.5);
+    Developed b = developColour(w, h, grey, new double[] {0.7, 1, 0.4}, daylight, identity(33), 1.5);
+    assertArrayEquals("as-shot white must not matter", a.px, b.px);
+    double[] neutral = (double[]) a.stats.get("whiteBalanceNeutral");
+    assertEquals(lit[0], neutral[0], 1e-5);
+    assertEquals(lit[2], neutral[2], 1e-5);
+    double r = mean(a.px, w, 8, w - 8, 8, h - 8, 0), g = mean(a.px, w, 8, w - 8, 8, h - 8, 1);
+    double bl = mean(a.px, w, 8, w - 8, 8, h - 8, 2);
+    assertEquals("neutral R", g, r, 1.0);
+    assertEquals("neutral B", g, bl, 1.0);
+    // Auto follows the as-shot white instead
+    Developed autoA = developColour(w, h, grey, new double[] {0.5, 1, 0.625}, PLAIN, identity(33), 1.5);
+    Developed autoB = developColour(w, h, grey, new double[] {0.7, 1, 0.4}, PLAIN, identity(33), 1.5);
+    assertFalse(java.util.Arrays.equals(autoA.px, autoB.px));
+    // Incandescent on daylight-ish light: blue; Shade: warm. Kelvin equals the same Planckian white.
+    Developed inc =
+        developColour(w, h, grey, lit, whiteBalance(PLAIN, FujiRecipe.WhiteBalance.INCANDESCENT, 5500), identity(33), 1.5);
+    Developed shade =
+        developColour(w, h, grey, lit, whiteBalance(PLAIN, FujiRecipe.WhiteBalance.SHADE, 5500), identity(33), 1.5);
+    assertTrue(mean(inc.px, w, 8, w - 8, 8, h - 8, 2) > mean(inc.px, w, 8, w - 8, 8, h - 8, 0) + 20);
+    assertTrue(mean(shade.px, w, 8, w - 8, 8, h - 8, 0) > mean(shade.px, w, 8, w - 8, 8, h - 8, 2) + 3);
+    Developed k4850 =
+        developColour(w, h, grey, lit, whiteBalance(PLAIN, FujiRecipe.WhiteBalance.KELVIN, 4850), identity(33), 1.5);
+    assertArrayEquals(a.px, k4850.px);
+    // the WB shift still applies on top of a fixed white balance
+    FujiRecipe.Tuning t = daylight.tuning();
+    t.wbShiftRed = 6;
+    Developed shifted = developColour(w, h, grey, lit, daylight.with(t), identity(33), 1.5);
+    assertTrue(mean(shifted.px, w, 8, w - 8, 8, h - 8, 0) > r + 3);
+  }
+
+  static FujiRecipe range(FujiRecipe r, FujiRecipe.DynamicRange dr, double highlight, double shadow) {
+    FujiRecipe.Tuning t = r.tuning();
+    t.dynamicRange = dr;
+    t.highlight = highlight;
+    t.shadow = shadow;
+    return r.with(t);
+  }
+
+  /**
+   * D-Range Priority: Weak is DR400 with Highlight and Shadow -2; Strong also folds one more stop of
+   * highlights into white when the RAW holds it. Under DR-P the Highlight/Shadow values are ignored.
+   */
+  @Test
+  public void dRangePriorityIsDr400FlatToneAndStrongCompressesHighlights() throws Exception {
+    int w = 256, h = 64;
+    Scene ramp = (x, y) -> 0.002 * Math.pow(2, 9.0 * x / (w - 1)); // 0.002 .. 1.02 of RAW white
+    int[] weak = developScene(w, h, ramp, range(PLAIN, FujiRecipe.DynamicRange.DRP_WEAK, 0, 0));
+    int[] dr400 = developScene(w, h, ramp, range(PLAIN, FujiRecipe.DynamicRange.DR400, -2, -2));
+    assertArrayEquals("DR-P Weak = DR400 with H/S -2", dr400, weak);
+    int[] weakTuned = developScene(w, h, ramp, range(PLAIN, FujiRecipe.DynamicRange.DRP_WEAK, 3, 4));
+    assertArrayEquals("Highlight/Shadow are set by DR-P", weak, weakTuned);
+    assertEquals(-2, RawDeveloper.DRP_HIGHLIGHT, 0);
+    assertEquals(-2, RawDeveloper.DRP_SHADOW, 0);
+    // a RAW with headroom (clips > 1 EV above the film's white): Strong maps one more stop of the
+    // scene under white, so the upper tones are darker; Weak keeps the plain curve
+    ColourScene wide =
+        (x, y, c) -> 0.0005 * Math.pow(2, 11.0 * x / 255) * (c == 0 ? 0.5 : c == 2 ? 0.625 : 1);
+    double[] asShot = {0.5, 1, 0.625};
+    Developed sw =
+        developColour(256, 64, wide, asShot, range(PLAIN, FujiRecipe.DynamicRange.DRP_WEAK, 0, 0), whiteAt(33, 0.6), 8);
+    Developed ss =
+        developColour(256, 64, wide, asShot, range(PLAIN, FujiRecipe.DynamicRange.DRP_STRONG, 0, 0), whiteAt(33, 0.6), 8);
+    double clipEv = ((Number) ss.stats.get("rawClipEv")).doubleValue();
+    double whiteEv = ((Number) ss.stats.get("curveWhiteEv")).doubleValue();
+    assertTrue("test RAW has headroom: clip " + clipEv + " white " + whiteEv, clipEv > whiteEv + 1);
+    assertEquals(1.0, ((Number) sw.stats.get("shoulderScale")).doubleValue(), 1e-9);
+    double strongShoulder = ((Number) ss.stats.get("shoulderScale")).doubleValue();
+    assertTrue("Strong compresses: " + strongShoulder, strongShoulder < 0.95);
+    int brighter = 0, darker = 0;
+    for (int x = 8; x < 248; x++) {
+      int a = (sw.px[32 * 256 + x] >> 8) & 255, b = (ss.px[32 * 256 + x] >> 8) & 255;
+      if (b > a + 1) brighter++;
+      if (b < a - 1) darker++;
+    }
+    assertTrue("Strong is darker in the highlights", darker > 10);
+    assertEquals("and never brighter", 0, brighter);
+    // the Strong shoulder is monotonic (column means: the dither is per pixel; checked over the upper
+    // half, where the noise-free test RAW is well clear of its 1-DN quantisation steps)
+    double prev = -1;
+    for (int x = 128; x < 252; x += 4) {
+      double g = mean(ss.px, 256, x, x + 1, 8, 56, 1);
+      assertTrue("monotonic at " + x + ": " + g + " after " + prev, g >= prev - 0.5);
+      prev = Math.max(prev, g);
+    }
+  }
+
+  /** A test cube that reaches white at the given F-Log2 code (about +3 EV for 0.6), like a film LUT. */
+  static CubeLut whiteAt(int n, double code) {
+    StringBuilder b = new StringBuilder("LUT_3D_SIZE " + n + "\n");
+    for (int bl = 0; bl < n; bl++)
+      for (int g = 0; g < n; g++)
+        for (int r = 0; r < n; r++)
+          b.append(Math.min(1, r / (n - 1.0) / code)).append(' ')
+              .append(Math.min(1, g / (n - 1.0) / code)).append(' ')
+              .append(Math.min(1, bl / (n - 1.0) / code)).append('\n');
+    try {
+      return CubeLut.parse(new StringReader(b.toString()));
+    } catch (Exception e) {
+      throw new AssertionError(e);
+    }
+  }
+
+  /** A black-and-white test cube: grey = F-Log2 code of the linear mix 0.25 R + 0.60 G + 0.15 B. */
+  static CubeLut monoCube(int n) {
+    StringBuilder b = new StringBuilder("LUT_3D_SIZE " + n + "\n");
+    for (int bl = 0; bl < n; bl++)
+      for (int g = 0; g < n; g++)
+        for (int r = 0; r < n; r++) {
+          double y =
+              0.25 * Math.max(0, FLog2.decode(r / (n - 1.0)))
+                  + 0.60 * Math.max(0, FLog2.decode(g / (n - 1.0)))
+                  + 0.15 * Math.max(0, FLog2.decode(bl / (n - 1.0)));
+          double c = Math.max(0, Math.min(1, FLog2.encode(y)));
+          b.append(c).append(' ').append(c).append(' ').append(c).append('\n');
+        }
+    try {
+      return CubeLut.parse(new StringReader(b.toString()));
+    } catch (Exception e) {
+      throw new AssertionError(e);
+    }
+  }
+
+  static FujiRecipe filter(FujiRecipe r, int filter) {
+    FujiRecipe.Tuning t = r.tuning();
+    t.monoFilter = filter;
+    return r.with(t);
+  }
+
+  /**
+   * Acros filters: greys keep the LUT's exact rendering; +R lightens red, +G darkens it, +Ye sits
+   * between; the picture stays black and white.
+   */
+  @Test
+  public void acrosFiltersChangeColoursButNotGreys() throws Exception {
+    int w = 384, h = 64;
+    CubeLut mono = monoCube(33);
+    double[] n = {0.5, 1, 0.625};
+    // left: grey; right: red (camera levels before white balance). Chroma processing spreads colour
+    // a few dozen pixels across the edge, so greys are checked well away from it.
+    ColourScene scene =
+        (x, y, c) -> x < w / 2 ? 0.10 * n[c] : (c == 0 ? 0.16 : c == 1 ? 0.03 : 0.02);
+    FujiRecipe acros = FujiRecipe.standard("ACROS", "Acros");
+    Developed none = developColour(w, h, scene, n, acros, mono, 1.5);
+    Developed ye = developColour(w, h, scene, n, filter(acros, 1), mono, 1.5);
+    Developed red = developColour(w, h, scene, n, filter(acros, 2), mono, 1.5);
+    Developed green = developColour(w, h, scene, n, filter(acros, 3), mono, 1.5);
+    double[] weights = (double[]) red.stats.get("monoLutWeights");
+    assertEquals(0.25, weights[0], 0.02);
+    assertEquals(0.60, weights[1], 0.02);
+    assertEquals(0.15, weights[2], 0.02);
+    for (Developed d : new Developed[] {ye, red, green}) {
+      for (int y = 4; y < h - 4; y++)
+        for (int x = 4; x < w / 2 - 64; x++)
+          assertEquals("grey unchanged at " + x + "," + y, none.px[y * w + x], d.px[y * w + x]);
+      for (int p : d.px) {
+        int r = (p >> 16) & 255, g = (p >> 8) & 255, b = p & 255;
+        assertTrue("black and white", r == g && g == b);
+      }
+    }
+    double base = mean(none.px, w, w / 2 + 64, w - 4, 4, h - 4, 1);
+    double withYe = mean(ye.px, w, w / 2 + 64, w - 4, 4, h - 4, 1);
+    double withRed = mean(red.px, w, w / 2 + 64, w - 4, 4, h - 4, 1);
+    double withGreen = mean(green.px, w, w / 2 + 64, w - 4, 4, h - 4, 1);
+    assertTrue("+R lightens red: " + base + " -> " + withRed, withRed > base + 8);
+    assertTrue("+Ye lightens red less: " + withYe, withYe > base + 2 && withYe < withRed);
+    assertTrue("+G darkens red: " + withGreen, withGreen < base - 2);
+    // a colour film ignores the filter setting
+    assertEquals(0, filter(FujiRecipe.standard("Velvia", "Velvia"), 2).monoFilter);
+  }
+
+  /** The six v0.3.0 recipes carry their published settings, and every control shows them. */
+  @Test
+  public void publishedRecipesMatchFujiXWeekly() {
+    FujiRecipe gold = FujiRecipe.KODAK_GOLD_200;
+    assertEquals("CLASSIC-CHROME", gold.filmSimulation);
+    assertEquals(FujiRecipe.WhiteBalance.DAYLIGHT, gold.wbMode);
+    assertEquals(4, gold.wbShiftRed);
+    assertEquals(-5, gold.wbShiftBlue);
+    assertEquals(FujiRecipe.DynamicRange.DR400, gold.dynamicRange);
+    assertEquals(-1.5, gold.highlight, 0);
+    assertEquals(0.5, gold.shadow, 0);
+    assertEquals(3, gold.color);
+    assertEquals(2, gold.grainRoughness);
+    assertFalse(gold.grainLarge);
+    assertEquals(1, gold.colorChrome);
+    assertEquals(0, gold.colorChromeBlue);
+    assertEquals(-2, gold.sharpness);
+    assertEquals(-4, gold.noiseReduction);
+    assertEquals(-2, gold.clarity);
+
+    FujiRecipe koda = FujiRecipe.KODACHROME_64;
+    assertEquals(FujiRecipe.DynamicRange.DR200, koda.dynamicRange);
+    assertEquals(2, koda.wbShiftRed);
+    assertEquals(-5, koda.wbShiftBlue);
+    assertEquals(3, koda.clarity);
+    assertEquals(1, koda.sharpness);
+    assertEquals(2, koda.colorChrome);
+
+    FujiRecipe pacific = FujiRecipe.PACIFIC_BLUES;
+    assertEquals("CLASSIC-Neg.", pacific.filmSimulation);
+    assertEquals(FujiRecipe.WhiteBalance.KELVIN, pacific.wbMode);
+    assertEquals(5800, pacific.kelvin);
+    assertEquals("5800K", pacific.whiteBalance);
+    assertEquals(-2, pacific.highlight, 0);
+    assertEquals(3, pacific.shadow, 0);
+    assertEquals(4, pacific.color);
+    assertTrue(pacific.grainLarge);
+
+    FujiRecipe arizona = FujiRecipe.VIBRANT_ARIZONA;
+    assertEquals(FujiRecipe.DynamicRange.DRP_STRONG, arizona.dynamicRange);
+    assertEquals(4350, arizona.kelvin);
+    assertEquals(6, arizona.wbShiftRed);
+    assertEquals(-8, arizona.wbShiftBlue);
+    assertEquals(0, arizona.colorChrome);
+    assertEquals(1, arizona.colorChromeBlue);
+    assertFalse("Highlight is set by DR-P", control(arizona, "Highlight").enabled(arizona.tuning()));
+    assertEquals("Set by DR-P", control(arizona, "Shadow").disabledLabel);
+    assertEquals("DR-P Strong", control(arizona, "Dynamic range").labels[control(arizona, "Dynamic range").at(arizona.tuning())]);
+    assertEquals("4350K", control(arizona, "Color temperature").labels[control(arizona, "Color temperature").at(arizona.tuning())]);
+
+    FujiRecipe cine = FujiRecipe.CINESTILL_800T;
+    assertEquals("ETERNA", cine.filmSimulation);
+    assertEquals(FujiRecipe.WhiteBalance.FLUORESCENT_3, cine.wbMode);
+    assertEquals(-6, cine.wbShiftRed);
+    assertEquals(-4, cine.wbShiftBlue);
+    assertEquals(-5, cine.clarity);
+    assertEquals(-3, cine.sharpness);
+    assertFalse("Color temperature is Kelvin only", control(cine, "Color temperature").enabled(cine.tuning()));
+
+    FujiRecipe trix = FujiRecipe.KODAK_TRI_X_400;
+    assertTrue(trix.monochrome());
+    assertEquals(0, trix.monoFilter);
+    assertEquals(9, trix.wbShiftRed);
+    assertEquals(-9, trix.wbShiftBlue);
+    assertEquals(4, trix.clarity);
+    assertEquals(3, trix.shadow, 0);
+    assertEquals("None", control(trix, "Filter").labels[control(trix, "Filter").at(trix.tuning())]);
+    assertNull("no Color for black and white", control(trix, "Color"));
+    assertNull("no Color Chrome Effect for black and white", control(trix, "Color Chrome Effect"));
+    assertNull("no FX Blue for black and white", control(trix, "Color Chrome FX Blue"));
+    assertNull("only black and white films have a filter", control(gold, "Filter"));
+
+    for (FujiRecipe r : FujiRecipe.PUBLISHED) {
+      assertTrue(r.key, r.source.startsWith("https://fujixweekly.com/"));
+      assertTrue(r.key + " is its own default", r.sameSettings(r.with(r.tuning())));
+      for (dev.grain.photo.develop.TuningControl c : dev.grain.photo.develop.TuningControl.fujifilm(r))
+        for (int p = 0; p < c.labels.length; p++) {
+          FujiRecipe.Tuning t = r.tuning();
+          c.set(t, p);
+          assertEquals(r.key + " " + c.name + " position " + p, p, c.at(r.with(t).tuning()));
+        }
+      if (r != FujiRecipe.REGGIES_PORTRA) assertFalse(r.key + " typical EV", r.exposureNote.isEmpty());
+    }
+    // Reggie's receipt text is unchanged by the new white-balance model
+    assertEquals("Auto; R +2, B −4", FujiRecipe.REGGIES_PORTRA.settings()[2][1]);
+  }
+
+  /** Out-of-range tuning is clamped to the camera ranges; labels parse like the camera menus. */
+  @Test
+  public void whiteBalanceAndFilterTuningClamps() {
+    FujiRecipe.Tuning t = PLAIN.tuning();
+    t.wbMode = FujiRecipe.WhiteBalance.KELVIN;
+    t.kelvin = 1000;
+    assertEquals(FujiRecipe.KELVIN_MIN, PLAIN.with(t).kelvin);
+    t.kelvin = 25000;
+    assertEquals(FujiRecipe.KELVIN_MAX, PLAIN.with(t).kelvin);
+    t.kelvin = 4355;
+    assertEquals("Fujifilm's 10 K steps", 4360, PLAIN.with(t).kelvin);
+    assertEquals("4360K", PLAIN.with(t).whiteBalance);
+    t.wbMode = null;
+    assertEquals(FujiRecipe.WhiteBalance.AUTO, PLAIN.with(t).wbMode);
+    FujiRecipe acros = FujiRecipe.standard("ACROS", "Acros");
+    FujiRecipe.Tuning a = acros.tuning();
+    a.monoFilter = 9;
+    assertEquals(FujiRecipe.MONO_FILTERS.length - 1, acros.with(a).monoFilter);
+    a.monoFilter = -3;
+    assertEquals(0, acros.with(a).monoFilter);
+    assertEquals(FujiRecipe.WhiteBalance.KELVIN, FujiRecipe.WhiteBalance.parse("5800K"));
+    assertEquals(FujiRecipe.WhiteBalance.FLUORESCENT_3, FujiRecipe.WhiteBalance.parse("fluorescent 3"));
+    assertEquals(FujiRecipe.WhiteBalance.AUTO, FujiRecipe.WhiteBalance.parse(null));
+    assertEquals(FujiRecipe.WhiteBalance.AUTO, FujiRecipe.WhiteBalance.parse("As shot"));
+    String[] labels = new String[FujiRecipe.DynamicRange.values().length];
+    for (int i = 0; i < labels.length; i++) labels[i] = FujiRecipe.DynamicRange.values()[i].label;
+    assertArrayEquals(new String[] {"DR-Auto", "DR100", "DR200", "DR400", "DR-P Weak", "DR-P Strong"}, labels);
+    // the Kelvin value only counts while the white balance is Kelvin
+    FujiRecipe.Tuning k = FujiRecipe.REGGIES_PORTRA.tuning();
+    k.kelvin = 7000;
+    assertTrue(FujiRecipe.REGGIES_PORTRA.with(k).sameSettings(FujiRecipe.REGGIES_PORTRA));
   }
 }

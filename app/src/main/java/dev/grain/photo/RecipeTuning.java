@@ -85,7 +85,10 @@ final class RecipeTuning {
         .put("wbShiftRed", t.wbShiftRed)
         .put("wbShiftBlue", t.wbShiftBlue)
         .put("halation", t.halation)
-        .put("bloom", t.bloom);
+        .put("bloom", t.bloom)
+        .put("whiteBalance", t.wbMode.name())
+        .put("kelvin", t.kelvin)
+        .put("filter", t.monoFilter);
   }
 
   /** Reads saved settings over the film's defaults; missing or unknown values keep the default. */
@@ -110,6 +113,13 @@ final class RecipeTuning {
     t.wbShiftBlue = j.optInt("wbShiftBlue", t.wbShiftBlue);
     t.halation = j.optInt("halation", t.halation);
     t.bloom = j.optInt("bloom", t.bloom);
+    try {
+      t.wbMode = FujiRecipe.WhiteBalance.valueOf(j.optString("whiteBalance", t.wbMode.name()));
+    } catch (IllegalArgumentException ignored) {
+      // keep the default
+    }
+    t.kelvin = j.optInt("kelvin", t.kelvin);
+    t.monoFilter = j.optInt("filter", t.monoFilter);
     return t;
   }
 }

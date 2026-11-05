@@ -40,6 +40,23 @@ public final class RawDeveloper {
   /** Approximation: no public measurement of Fujifilm's WB-shift step exists. */
   public static final double WB_SHIFT_LOG2_PER_STEP = 0.04;
 
+  /**
+   * D-Range Priority (approximation; Fujifilm publishes no curve). Fuji X Weekly's comparisons:
+   * DR-P Weak renders like DR400 with Highlight -2 and Shadow -2 (RAW exposure like DR200); DR-P
+   * Strong applies the same flat curve one DR step higher (RAW exposure like DR400). So both use the
+   * DR400 tone with H/S -2, and Strong compresses one more stop of highlights into the white.
+   */
+  public static final double DRP_HIGHLIGHT = -2, DRP_SHADOW = -2, DRP_STRONG_EXTRA_EV = 1;
+
+  /**
+   * Acros filter transmissions (R, G, B) applied to the Acros LUT's own channel weights: +Ye cuts
+   * blue, +R cuts green and blue, +G cuts red and blue. Approximations of yellow / red / green
+   * contrast filters; Fujifilm publishes no numbers.
+   */
+  static final double[][] MONO_FILTER_TRANSMISSION = {
+    {1, 1, 1}, {1, 0.9, 0.1}, {1, 0.25, 0.02}, {0.4, 1, 0.4}
+  };
+
   /** Approximations of effects Fujifilm does not publish (see docs/RAW-ENGINE.md). */
   static final float CCE_C0 = 0.18f, CCE_C1 = 0.50f, CCE_STRONG = 0.045f, BLUE_STRONG = 0.05f;
 
@@ -198,6 +215,15 @@ public final class RawDeveloper {
     float[] qY, qU, qV, qS;
     final float lowKeep, cKeep, epsLow, epsChroma;
     final float chroma, cceDepth, blueDepth, grainAmp;
+    /**
+     * Acros filter (+Ye/+R/+G): after the LUT's own black-and-white conversion, each pixel's
+     * equivalent grey is scaled by the filter's linear brightness ratio (filtered mix / the LUT's
+     * own mix) and re-rendered on the LUT's grey curve. Neutrals keep the LUT's exact tone.
+     */
+    final boolean monoFilter;
+    final float[] monoMix = new float[3], monoW = new float[3];
+    float[] greyCurve, greyInverse, codeLinear;
+    ToneTable linearCode;
     final float[] nrA, nrB;
     final float nrKeep, sharpen, epsFine;
     final float[] debugLuma, debugNoise, debugQuarter;
@@ -225,7 +251,35 @@ public final class RawDeveloper {
         colorK[k] = f.color(x, y);
         shadeK[k] = f.shadingChannel(x, y);
       }
-      double nR = f.neutral[0], nG = f.neutral[1], nB = f.neutral[2];
+      // --- white balance: the phone's as-shot (auto) white, or a fixed Fujifilm mode's white point
+      double[] neutral = f.neutral, whiteXy = null;
+      FujiRecipe.WhiteBalance wbMode = r.wbMode;
+      if (wbMode == FujiRecipe.WhiteBalance.AUTO) {
+        stats.put("whiteBalance", "Auto (the phone's as-shot white)");
+      } else {
+        double targetCct = wbMode == FujiRecipe.WhiteBalance.KELVIN ? r.kelvin : wbMode.cct;
+        double targetDuv = wbMode == FujiRecipe.WhiteBalance.KELVIN ? 0 : wbMode.duv;
+        whiteXy = ColorMath.whiteXy(targetCct, targetDuv);
+        neutral =
+            ColorMath.neutralForXy(
+                whiteXy[0], whiteXy[1], f.colorMatrix1, f.colorMatrix2, f.calibration1, f.calibration2,
+                f.illuminant1, f.illuminant2);
+        stats.put("whiteBalance", r.whiteBalance + " (fixed: " + Math.round(targetCct) + " K, Duv " + targetDuv + ")");
+        stats.put("whiteBalanceTargetXy", new double[] {round(whiteXy[0], 5), round(whiteXy[1], 5)});
+        stats.put("whiteBalanceNeutral", roundAll(neutral, 5));
+        double[] asShot = f.neutral;
+        if (asShot != null && asShot.length == 3 && asShot[0] > 0 && asShot[1] > 0 && asShot[2] > 0)
+          try {
+            ColorMath.Result scene =
+                ColorMath.cameraToRec2020(
+                    asShot, f.colorMatrix1, f.colorMatrix2, f.forwardMatrix1, f.forwardMatrix2,
+                    f.calibration1, f.calibration2, f.illuminant1, f.illuminant2);
+            stats.put("asShotCct", Math.round(scene.cct));
+          } catch (RuntimeException ignored) {
+            // informational only
+          }
+      }
+      double nR = neutral[0], nG = neutral[1], nB = neutral[2];
       if (!(nR > 0 && nG > 0 && nB > 0)) throw new IllegalArgumentException("Invalid neutral");
       double shiftR = Math.pow(2, WB_SHIFT_LOG2_PER_STEP * r.wbShiftRed);
       double shiftB = Math.pow(2, WB_SHIFT_LOG2_PER_STEP * r.wbShiftBlue);
@@ -238,7 +292,8 @@ public final class RawDeveloper {
 
       ColorMath.Result cm =
           ColorMath.cameraToRec2020(
-              f.neutral,
+              neutral,
+              whiteXy,
               f.colorMatrix1,
               f.colorMatrix2,
               f.forwardMatrix1,
@@ -278,6 +333,25 @@ public final class RawDeveloper {
       gain = Math.max(1 / 64.0, Math.min(512, gain));
       if (o.fixedGain > 0) gain = o.fixedGain;
       for (int i = 0; i < 9; i++) m[i] = (float) (cm.cameraToRec2020[i] * gain);
+      monoFilter = r.monochrome() && r.monoFilter > 0 && r.monoFilter < MONO_FILTER_TRANSMISSION.length;
+      if (monoFilter) {
+        double[] w = monoWeights(lut), t = MONO_FILTER_TRANSMISSION[r.monoFilter], mix = new double[3];
+        double sum = 0;
+        for (int c = 0; c < 3; c++) {
+          mix[c] = w[c] * t[c];
+          sum += mix[c];
+        }
+        for (int c = 0; c < 3; c++) {
+          mix[c] /= sum;
+          monoMix[c] = (float) mix[c];
+          monoW[c] = (float) w[c];
+        }
+        buildGreyTables(lut);
+        stats.put("monoFilter", FujiRecipe.MONO_FILTERS[r.monoFilter]
+            + " (approximation: filtered/unfiltered linear mix applied to the LUT's black-and-white rendering)");
+        stats.put("monoLutWeights", roundAll(w, 4));
+        stats.put("monoFilterMix", roundAll(mix, 4));
+      }
       stats.put("meterLogAverage", round(logAverage, 6));
       stats.put("meterKey", METERING_KEY);
       stats.put("exposureEv", o.exposureEv);
@@ -288,7 +362,11 @@ public final class RawDeveloper {
       // --- dynamic range and the white point
       double gEv = Math.log(gain) / Math.log(2);
       double clipEv = Math.log(gain * clipFactor / 0.18) / Math.log(2);
-      ToneModel.Curve probe = ToneModel.curve(0, r.highlight, r.shadow, o.stillsTone, 1);
+      // D-Range Priority replaces DR and the tone curve (approximation, see DRP_* constants)
+      boolean drp = r.dynamicRange.priority();
+      double highlight = drp ? DRP_HIGHLIGHT : r.highlight, shadow = drp ? DRP_SHADOW : r.shadow;
+      double extraEv = r.dynamicRange == FujiRecipe.DynamicRange.DRP_STRONG ? DRP_STRONG_EXTRA_EV : 0;
+      ToneModel.Curve probe = ToneModel.curve(0, highlight, shadow, o.stillsTone, 1);
       double whiteEv = ToneModel.whiteEv(probe, lut);
       double above = fractionAbove(hist, whiteEv - gEv);
       int steps;
@@ -297,6 +375,8 @@ public final class RawDeveloper {
           steps = 1;
           break;
         case DR400:
+        case DRP_WEAK:
+        case DRP_STRONG:
           steps = 2;
           break;
         case DR100:
@@ -307,19 +387,26 @@ public final class RawDeveloper {
       }
       stats.put(
           "dynamicRange",
-          (r.dynamicRange == FujiRecipe.DynamicRange.AUTO ? "Auto: DR" : "DR") + (100 << steps));
+          drp
+              ? r.dynamicRange.label + " (approximation: DR400 tone with Highlight " + FujiRecipe.signed(DRP_HIGHLIGHT)
+                  + ", Shadow " + FujiRecipe.signed(DRP_SHADOW)
+                  + (extraEv > 0 ? ", highlight range +" + extraEv + " EV" : "") + ")"
+              : (r.dynamicRange == FujiRecipe.DynamicRange.AUTO ? "Auto: DR" : "DR") + (100 << steps));
       if (r.dynamicRange == FujiRecipe.DynamicRange.AUTO)
         stats.put("dynamicRangeAutoRule", "DR200 when >1% of the frame would render white at DR100 (approximation)");
       stats.put("sceneFractionAboveWhite", round(above, 5));
       stats.put("curveWhiteEv", round(whiteEv, 3));
       stats.put("rawClipEv", round(clipEv, 3));
       double shoulder = 1;
-      if (o.stillsTone && clipEv < whiteEv) {
-        double target = Math.max(ToneModel.KNEE_EV + 0.75, clipEv);
-        shoulder = (whiteEv - ToneModel.KNEE_EV) / (target - ToneModel.KNEE_EV);
+      if (o.stillsTone) {
+        // The shoulder maps the RAW clip point to white when the RAW clips early; DR-P Strong also
+        // stretches the curve's white over extraEv more scene range when the RAW has it.
+        double wanted = whiteEv + extraEv;
+        double target = clipEv < wanted ? Math.max(ToneModel.KNEE_EV + 0.75, clipEv) : wanted;
+        if (target != whiteEv) shoulder = (whiteEv - ToneModel.KNEE_EV) / (target - ToneModel.KNEE_EV);
       }
       stats.put("shoulderScale", round(shoulder, 4));
-      final ToneModel.Curve curve = ToneModel.curve(steps, r.highlight, r.shadow, o.stillsTone, shoulder);
+      final ToneModel.Curve curve = ToneModel.curve(steps, highlight, shadow, o.stillsTone, shoulder);
       tone =
           new ToneTable(
               x -> {
@@ -419,13 +506,16 @@ public final class RawDeveloper {
       stats.put("sharpenAmount", round(sharpen, 3));
       stats.put("noiseMidGreyCode", round(sigmaMid, 5));
 
-      chroma = (float) (1 + ToneModel.COLOR_KAPPA * r.color);
-      cceDepth = r.colorChrome == 2 ? CCE_STRONG : r.colorChrome == 1 ? CCE_STRONG / 2 : 0;
-      blueDepth = r.colorChromeBlue == 2 ? BLUE_STRONG : r.colorChromeBlue == 1 ? BLUE_STRONG / 2 : 0;
+      boolean mono = r.monochrome();
+      chroma = mono ? 1f : (float) (1 + ToneModel.COLOR_KAPPA * r.color);
+      cceDepth = mono ? 0 : r.colorChrome == 2 ? CCE_STRONG : r.colorChrome == 1 ? CCE_STRONG / 2 : 0;
+      blueDepth = mono ? 0 : r.colorChromeBlue == 2 ? BLUE_STRONG : r.colorChromeBlue == 1 ? BLUE_STRONG / 2 : 0;
       post = chroma != 1f || cceDepth > 0 || blueDepth > 0;
       stats.put("colorChromaScale", round(chroma, 4));
       stats.put("colorChromeDepth", cceDepth);
       stats.put("colorChromeBlueDepth", blueDepth);
+      if (mono)
+        stats.put("colorEffects", "Color, Color Chrome Effect and FX Blue are not applied to a black-and-white film");
 
       float amp = !o.grain || r.grainRoughness == 0 ? 0 : r.grainRoughness == 2 ? GRAIN_STRONG : GRAIN_WEAK;
       if (r.grainLarge) amp *= 1.15f;
@@ -860,6 +950,61 @@ public final class RawDeveloper {
       }
     }
 
+    static final int GREY_N = 4096;
+
+    /** The LUT's grey response (codes 0..1), its inverse, and F-Log2 decode/encode tables. */
+    void buildGreyTables(CubeLut l) {
+      int n = GREY_N;
+      greyCurve = new float[n];
+      codeLinear = new float[n];
+      float[] out = new float[3];
+      for (int i = 0; i < n; i++) {
+        float c = i / (float) (n - 1);
+        l.sample(c, c, c, out);
+        greyCurve[i] = i == 0 ? out[1] : Math.max(greyCurve[i - 1], out[1]);
+        codeLinear[i] = (float) Math.max(0, FLog2.decode(c));
+      }
+      greyInverse = new float[n];
+      int k = 0;
+      for (int i = 0; i < n; i++) {
+        float y = i / (float) (n - 1);
+        while (k < n - 1 && greyCurve[k + 1] < y) k++;
+        float c;
+        if (y <= greyCurve[0]) c = 0;
+        else if (k >= n - 1) c = 1;
+        else {
+          float a = greyCurve[k], b = greyCurve[k + 1];
+          c = (k + (b > a ? (y - a) / (b - a) : 0)) / (n - 1);
+        }
+        greyInverse[i] = Math.min(1, Math.max(0, c));
+      }
+      linearCode =
+          new ToneTable(
+              x -> {
+                double v = FLog2.encode(Math.max(0, x));
+                return v < 0 ? 0 : v > 1 ? 1 : v;
+              });
+    }
+
+    static float table(float[] t, float v) {
+      float p = (v <= 0 ? 0 : v >= 1 ? 1 : v) * (t.length - 1);
+      int i = (int) p;
+      if (i >= t.length - 1) return t[t.length - 1];
+      float f = p - i;
+      return t[i] + f * (t[i + 1] - t[i]);
+    }
+
+    /** Acros filter for one pixel: LUT input codes and the LUT's black-and-white output y. */
+    float filterMono(float c0, float c1, float c2, float y) {
+      float lr = table(codeLinear, c0), lg = table(codeLinear, c1), lb = table(codeLinear, c2);
+      float den = monoW[0] * lr + monoW[1] * lg + monoW[2] * lb;
+      if (!(den > 1e-7f)) return y;
+      float rho = (monoMix[0] * lr + monoMix[1] * lg + monoMix[2] * lb) / den;
+      if (Math.abs(rho - 1) < 1e-4f) return y;
+      float le = table(codeLinear, table(greyInverse, y));
+      return table(greyCurve, linearCode.apply(le * rho));
+    }
+
     /** Gain of one shading channel along row y into out[0..W). */
     void shadingRow(int ch, int y, float[] tmp, float[] out) {
       if (!shading) {
@@ -1254,7 +1399,7 @@ public final class RawDeveloper {
     void finishRow(int r, int y) {
       final float amp = j.grainAmp;
       final float[] ga = j.grainA, gb = j.grainB;
-      final boolean post = j.post, cce = j.cceDepth > 0 || j.blueDepth > 0;
+      final boolean post = j.post, cce = j.cceDepth > 0 || j.blueDepth > 0, mono = j.monoFilter;
       final float chroma = j.chroma, cceDepth = j.cceDepth, blueDepth = j.blueDepth;
       int src = (r + HALO) * W, dst = r * W;
       int rowA = ((y + j.grainOy) & 1023) << 10, rowB = j.mod997[y + j.grainOy] * 997;
@@ -1262,6 +1407,7 @@ public final class RawDeveloper {
       for (int x = 0; x < W; x++) {
         j.lut.sample(cr[src + x], cg[src + x], cb[src + x], lutOut);
         float vr = lutOut[0], vg = lutOut[1], vb = lutOut[2];
+        if (mono) vr = vg = vb = j.filterMono(cr[src + x], cg[src + x], cb[src + x], vg);
         if (post) {
           // display-code opponent space (BT.709 luma): cheap stand-in for a perceptual space
           float Yd = 0.2126f * vr + 0.7152f * vg + 0.0722f * vb;
@@ -1498,6 +1644,30 @@ public final class RawDeveloper {
   }
 
   /** Radius of three box passes whose combined Gaussian has the given sigma (at least 1). */
+  /**
+   * Channel weights of a black-and-white LUT, probed around grey in scene-linear F-Gamut: the change
+   * of its output per relative change of each input channel at 9 %, 18 % and 36 % grey. Falls back to
+   * BT.2020 luminance weights for a LUT that does not respond like a monochrome mix.
+   */
+  static double[] monoWeights(CubeLut lut) {
+    double[] w = new double[3];
+    float[] out = new float[3];
+    double eps = 0.25;
+    for (double grey : new double[] {0.09, 0.18, 0.36})
+      for (int c = 0; c < 3; c++) {
+        double[] lo = {grey, grey, grey}, hi = {grey, grey, grey};
+        lo[c] = grey / (1 + eps);
+        hi[c] = grey * (1 + eps);
+        lut.sample((float) FLog2.encode(hi[0]), (float) FLog2.encode(hi[1]), (float) FLog2.encode(hi[2]), out);
+        double up = out[1];
+        lut.sample((float) FLog2.encode(lo[0]), (float) FLog2.encode(lo[1]), (float) FLog2.encode(lo[2]), out);
+        w[c] += up - out[1];
+      }
+    double sum = w[0] + w[1] + w[2];
+    if (!(w[0] > 0 && w[1] > 0 && w[2] >= 0 && sum > 0)) return new double[] {0.2627, 0.6780, 0.0593};
+    return new double[] {w[0] / sum, w[1] / sum, w[2] / sum};
+  }
+
   static int boxRadius(double sigma) {
     return Math.max(1, (int) Math.round((-1 + Math.sqrt(1 + 4 * sigma * sigma)) / 2));
   }

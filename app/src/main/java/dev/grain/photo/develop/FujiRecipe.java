@@ -3,15 +3,70 @@ package dev.grain.photo.develop;
 /**
  * A published Fujifilm film-simulation recipe, expressed in the camera's own menu units. Grain
  * applies the film simulation with Fujifilm's official F-Log2 LUT; the other settings are modelled
- * (see {@link RawDeveloper} and docs/RAW-ENGINE.md for what is measured and what is approximate).
+ * (see {@link RawDeveloper} and docs/RAW_FUJI_RECIPES.md for what is measured and what is
+ * approximate).
  */
 public final class FujiRecipe {
+  /** Dynamic Range and D-Range Priority, in the cameras' menu order. Never reorder (saved by name). */
   public enum DynamicRange {
-    AUTO,
-    DR100,
-    DR200,
-    DR400
+    AUTO("DR-Auto"),
+    DR100("DR100"),
+    DR200("DR200"),
+    DR400("DR400"),
+    DRP_WEAK("DR-P Weak"),
+    DRP_STRONG("DR-P Strong");
+
+    public final String label;
+
+    DynamicRange(String label) {
+      this.label = label;
+    }
+
+    /** D-Range Priority: Highlight and Shadow are set by the mode, as on the cameras. */
+    public boolean priority() {
+      return this == DRP_WEAK || this == DRP_STRONG;
+    }
   }
+
+  /**
+   * Fujifilm white-balance modes. A fixed mode develops for its white point instead of the phone's
+   * as-shot (auto) white. Preset white points (CCT on the Planckian locus plus Duv, CIE 1960) were
+   * measured from the preset gain tables inside public Fujifilm RAF files (X-T5, X-T4, GFX100 II;
+   * see docs/RAW_FUJI_RECIPES.md): Fujifilm publishes names only. Never reorder (saved by name).
+   */
+  public enum WhiteBalance {
+    AUTO("Auto", 0, 0),
+    DAYLIGHT("Daylight", 4850, 0),
+    SHADE("Shade", 6000, 0),
+    FLUORESCENT_1("Fluorescent 1", 6450, 0.0075),
+    FLUORESCENT_2("Fluorescent 2", 4950, 0.0078),
+    FLUORESCENT_3("Fluorescent 3", 4300, 0.015),
+    INCANDESCENT("Incandescent", 2856, 0),
+    KELVIN("Kelvin", 0, 0);
+
+    public final String label;
+    /** Preset white point: correlated colour temperature (K) and Duv; 0 for Auto and Kelvin. */
+    public final int cct;
+
+    public final double duv;
+
+    WhiteBalance(String label, int cct, double duv) {
+      this.label = label;
+      this.cct = cct;
+      this.duv = duv;
+    }
+
+    /** Parses a menu label ("Auto", "Daylight", "Fluorescent 3", "5800K"); unknown = Auto. */
+    public static WhiteBalance parse(String label) {
+      if (label == null) return AUTO;
+      String l = label.trim();
+      for (WhiteBalance w : values()) if (w.label.equalsIgnoreCase(l)) return w;
+      return l.matches("\\d{4,5}\\s*[Kk]") ? KELVIN : AUTO;
+    }
+  }
+
+  /** Acros filter variants (Fujifilm: ACROS+Ye, +R, +G), as positions 0..3. */
+  public static final String[] MONO_FILTERS = {"None", "+Ye", "+R", "+G"};
 
   public final String key, name, author, source, filmSimulation, filmLabel;
   public final DynamicRange dynamicRange;
@@ -22,7 +77,19 @@ public final class FujiRecipe {
   /** true = large grain. */
   public final boolean grainLarge;
   public final int wbShiftRed, wbShiftBlue;
+  /** White-balance mode; {@link #kelvin} is used when the mode is {@link WhiteBalance#KELVIN}. */
+  public final WhiteBalance wbMode;
+  /** Colour temperature for Kelvin white balance (2500..10000 K, 10 K steps). */
+  public final int kelvin;
+  /** The white balance as the camera menu shows it: "Auto", "Daylight", "5800K", ... */
   public final String whiteBalance;
+  /** Acros filter, 0 none .. 3 (see {@link #MONO_FILTERS}); always 0 for colour films. */
+  public final int monoFilter;
+  /**
+   * The exposure compensation the recipe's author typically uses, as published ("" if none).
+   * Guidance only: Grain never applies it automatically.
+   */
+  public final String exposureNote;
   /**
    * Grain extras, not Fujifilm settings (no Fujifilm film simulation has them): 0 = off, 1..10.
    * Halation re-exposes mainly the red record around bright light; bloom spreads highlight light.
@@ -34,6 +101,10 @@ public final class FujiRecipe {
 
   public static final int COLOR_MAX = 4, SHARPNESS_MAX = 4, NR_MAX = 4, CLARITY_MAX = 5;
   public static final int WB_SHIFT_MAX = 9, EXTRA_MAX = 10;
+  /** Kelvin white balance range; the app steps it by {@link #KELVIN_STEP}. */
+  public static final int KELVIN_MIN = 2500, KELVIN_MAX = 10000, KELVIN_STEP = 50;
+
+  public static final int KELVIN_DEFAULT = 5500;
 
   public FujiRecipe(
       String key,
@@ -84,13 +155,45 @@ public final class FujiRecipe {
       int wbShiftBlue,
       int halation,
       int bloom) {
+    this(key, name, author, source, filmSimulation, filmLabel, dynamicRange, highlight, shadow, color,
+        sharpness, noiseReduction, clarity, grainRoughness, grainLarge, colorChrome, colorChromeBlue,
+        WhiteBalance.parse(whiteBalance), kelvinOf(whiteBalance), wbShiftRed, wbShiftBlue, halation,
+        bloom, 0, "");
+  }
+
+  private FujiRecipe(
+      String key,
+      String name,
+      String author,
+      String source,
+      String filmSimulation,
+      String filmLabel,
+      DynamicRange dynamicRange,
+      double highlight,
+      double shadow,
+      int color,
+      int sharpness,
+      int noiseReduction,
+      int clarity,
+      int grainRoughness,
+      boolean grainLarge,
+      int colorChrome,
+      int colorChromeBlue,
+      WhiteBalance wbMode,
+      int kelvin,
+      int wbShiftRed,
+      int wbShiftBlue,
+      int halation,
+      int bloom,
+      int monoFilter,
+      String exposureNote) {
     this.key = key;
     this.name = name;
     this.author = author;
     this.source = source;
     this.filmSimulation = filmSimulation;
     this.filmLabel = filmLabel;
-    this.dynamicRange = dynamicRange;
+    this.dynamicRange = dynamicRange == null ? DynamicRange.AUTO : dynamicRange;
     this.highlight = highlight;
     this.shadow = shadow;
     this.color = color;
@@ -101,11 +204,119 @@ public final class FujiRecipe {
     this.grainLarge = grainLarge;
     this.colorChrome = colorChrome;
     this.colorChromeBlue = colorChromeBlue;
-    this.whiteBalance = whiteBalance;
+    this.wbMode = wbMode == null ? WhiteBalance.AUTO : wbMode;
+    this.kelvin = kelvin(kelvin);
+    this.whiteBalance = this.wbMode == WhiteBalance.KELVIN ? this.kelvin + "K" : this.wbMode.label;
     this.wbShiftRed = wbShiftRed;
     this.wbShiftBlue = wbShiftBlue;
     this.halation = halation;
     this.bloom = bloom;
+    this.monoFilter = monochrome() ? Math.max(0, Math.min(MONO_FILTERS.length - 1, monoFilter)) : 0;
+    this.exposureNote = exposureNote == null ? "" : exposureNote;
+  }
+
+  /** The Kelvin value in a label such as "5800K", else {@link #KELVIN_DEFAULT}. */
+  static int kelvinOf(String label) {
+    if (label != null) {
+      String digits = label.trim().replaceAll("\\s*[Kk]$", "");
+      if (digits.matches("\\d{4,5}")) return kelvin(Integer.parseInt(digits));
+    }
+    return KELVIN_DEFAULT;
+  }
+
+  /** Clamped to Fujifilm's range, in its 10 K steps. */
+  static int kelvin(int k) {
+    int c = Math.max(KELVIN_MIN, Math.min(KELVIN_MAX, k));
+    return (int) Math.round(c / 10.0) * 10;
+  }
+
+  /**
+   * Fluent definition of a published recipe, in the order Fuji X Weekly lists settings. Defaults are
+   * Fujifilm's standard settings (DR-Auto, Auto WB, everything 0 / Off).
+   */
+  public static final class Builder {
+    private final String key, name, author, source, lut, label;
+    private DynamicRange dynamicRange = DynamicRange.AUTO;
+    private double highlight, shadow;
+    private int color, sharpness, noiseReduction, clarity;
+    private int grainRoughness, colorChrome, colorChromeBlue;
+    private boolean grainLarge;
+    private WhiteBalance wbMode = WhiteBalance.AUTO;
+    private int kelvin = KELVIN_DEFAULT;
+    private int wbShiftRed, wbShiftBlue, monoFilter;
+    private String exposureNote = "";
+
+    public Builder(String key, String name, String author, String source, String lut, String label) {
+      this.key = key;
+      this.name = name;
+      this.author = author;
+      this.source = source;
+      this.lut = lut;
+      this.label = label;
+    }
+
+    public Builder dynamicRange(DynamicRange d) {
+      dynamicRange = d;
+      return this;
+    }
+
+    public Builder whiteBalance(WhiteBalance mode, int shiftRed, int shiftBlue) {
+      wbMode = mode;
+      wbShiftRed = shiftRed;
+      wbShiftBlue = shiftBlue;
+      return this;
+    }
+
+    public Builder kelvin(int k, int shiftRed, int shiftBlue) {
+      kelvin = k;
+      return whiteBalance(WhiteBalance.KELVIN, shiftRed, shiftBlue);
+    }
+
+    public Builder tone(double highlight, double shadow) {
+      this.highlight = highlight;
+      this.shadow = shadow;
+      return this;
+    }
+
+    public Builder color(int color) {
+      this.color = color;
+      return this;
+    }
+
+    public Builder detail(int sharpness, int noiseReduction, int clarity) {
+      this.sharpness = sharpness;
+      this.noiseReduction = noiseReduction;
+      this.clarity = clarity;
+      return this;
+    }
+
+    public Builder grain(int roughness, boolean large) {
+      grainRoughness = roughness;
+      grainLarge = large;
+      return this;
+    }
+
+    public Builder colorChrome(int effect, int blue) {
+      colorChrome = effect;
+      colorChromeBlue = blue;
+      return this;
+    }
+
+    public Builder filter(int filter) {
+      monoFilter = filter;
+      return this;
+    }
+
+    public Builder exposure(String note) {
+      exposureNote = note;
+      return this;
+    }
+
+    public FujiRecipe build() {
+      return new FujiRecipe(key, name, author, source, lut, label, dynamicRange, highlight, shadow,
+          color, sharpness, noiseReduction, clarity, grainRoughness, grainLarge, colorChrome,
+          colorChromeBlue, wbMode, kelvin, wbShiftRed, wbShiftBlue, 0, 0, monoFilter, exposureNote);
+    }
   }
 
   /** The adjustable settings of a film, edited in the app and applied with {@link #with}. */
@@ -116,6 +327,9 @@ public final class FujiRecipe {
     public int grainRoughness, colorChrome, colorChromeBlue;
     public boolean grainLarge;
     public int wbShiftRed, wbShiftBlue;
+    public WhiteBalance wbMode = WhiteBalance.AUTO;
+    public int kelvin = KELVIN_DEFAULT;
+    public int monoFilter;
     public int halation, bloom;
   }
 
@@ -134,6 +348,9 @@ public final class FujiRecipe {
     t.colorChromeBlue = colorChromeBlue;
     t.wbShiftRed = wbShiftRed;
     t.wbShiftBlue = wbShiftBlue;
+    t.wbMode = wbMode;
+    t.kelvin = kelvin;
+    t.monoFilter = monoFilter;
     t.halation = halation;
     t.bloom = bloom;
     return t;
@@ -159,14 +376,20 @@ public final class FujiRecipe {
         t.grainLarge && t.grainRoughness > 0,
         Math.max(0, Math.min(2, t.colorChrome)),
         Math.max(0, Math.min(2, t.colorChromeBlue)),
-        whiteBalance,
+        t.wbMode == null ? WhiteBalance.AUTO : t.wbMode,
+        t.kelvin,
         clamp(t.wbShiftRed, WB_SHIFT_MAX),
         clamp(t.wbShiftBlue, WB_SHIFT_MAX),
         Math.max(0, Math.min(EXTRA_MAX, t.halation)),
-        Math.max(0, Math.min(EXTRA_MAX, t.bloom)));
+        Math.max(0, Math.min(EXTRA_MAX, t.bloom)),
+        monochrome() ? Math.max(0, Math.min(MONO_FILTERS.length - 1, t.monoFilter)) : 0,
+        exposureNote);
   }
 
-  /** True when every adjustable setting matches (identity strings are not compared). */
+  /**
+   * True when every adjustable setting matches (identity strings are not compared; the colour
+   * temperature only counts for Kelvin white balance).
+   */
   public boolean sameSettings(FujiRecipe o) {
     return dynamicRange == o.dynamicRange
         && highlight == o.highlight
@@ -179,8 +402,11 @@ public final class FujiRecipe {
         && grainLarge == o.grainLarge
         && colorChrome == o.colorChrome
         && colorChromeBlue == o.colorChromeBlue
+        && wbMode == o.wbMode
+        && (wbMode != WhiteBalance.KELVIN || kelvin == o.kelvin)
         && wbShiftRed == o.wbShiftRed
         && wbShiftBlue == o.wbShiftBlue
+        && monoFilter == o.monoFilter
         && halation == o.halation
         && bloom == o.bloom;
   }
@@ -217,6 +443,129 @@ public final class FujiRecipe {
           "Auto",
           2,
           -4);
+
+  private static final String ROESCH = "Ritchie Roesch (Fuji X Weekly)";
+
+  /** Kodak Gold 200, Fuji X Weekly (X-Trans V), as published. */
+  public static final FujiRecipe KODAK_GOLD_200 =
+      new Builder(
+              "kodak-gold-200",
+              "Kodak Gold 200",
+              ROESCH,
+              "https://fujixweekly.com/2023/10/24/kodak-gold-200-fujifilm-x-t5-x-trans-v-film-simulation-recipe/",
+              "CLASSIC-CHROME",
+              "Classic Chrome")
+          .dynamicRange(DynamicRange.DR400)
+          .whiteBalance(WhiteBalance.DAYLIGHT, 4, -5)
+          .tone(-1.5, 0.5)
+          .color(3)
+          .detail(-2, -4, -2)
+          .grain(2, false)
+          .colorChrome(1, 0)
+          .exposure("+2/3 to +1 EV")
+          .build();
+
+  /** Kodachrome 64, Fuji X Weekly (X-Trans V), as published. */
+  public static final FujiRecipe KODACHROME_64 =
+      new Builder(
+              "kodachrome-64",
+              "Kodachrome 64",
+              ROESCH,
+              "https://fujixweekly.com/2022/11/28/kodachrome-64-fujifilm-x-t5-x-trans-v-film-simulation-recipe/",
+              "CLASSIC-CHROME",
+              "Classic Chrome")
+          .dynamicRange(DynamicRange.DR200)
+          .whiteBalance(WhiteBalance.DAYLIGHT, 2, -5)
+          .tone(0, 0.5)
+          .color(2)
+          .detail(1, -4, 3)
+          .grain(1, false)
+          .colorChrome(2, 0)
+          .exposure("0 to +2/3 EV")
+          .build();
+
+  /** Pacific Blues, Fuji X Weekly (X-Trans V), as published. */
+  public static final FujiRecipe PACIFIC_BLUES =
+      new Builder(
+              "pacific-blues",
+              "Pacific Blues",
+              ROESCH,
+              "https://fujixweekly.com/2022/12/06/pacific-blues-fujifilm-x-t5-x-trans-v-film-simulation-recipe/",
+              "CLASSIC-Neg.",
+              "Classic Neg.")
+          .dynamicRange(DynamicRange.DR400)
+          .kelvin(5800, 1, -3)
+          .tone(-2, 3)
+          .color(4)
+          .detail(-2, -4, -3)
+          .grain(2, true)
+          .colorChrome(2, 1)
+          .exposure("+2/3 to +1 EV")
+          .build();
+
+  /** Vibrant Arizona, Fuji X Weekly (X-Trans V), as published. Tone is set by D-Range Priority. */
+  public static final FujiRecipe VIBRANT_ARIZONA =
+      new Builder(
+              "vibrant-arizona",
+              "Vibrant Arizona",
+              ROESCH,
+              "https://fujixweekly.com/2023/04/25/getting-a-wes-anderson-look-from-your-fujifilm-camera-4-new-film-simulation-recipes/",
+              "CLASSIC-CHROME",
+              "Classic Chrome")
+          .dynamicRange(DynamicRange.DRP_STRONG)
+          .kelvin(4350, 6, -8)
+          .color(4)
+          .detail(-2, -4, -3)
+          .grain(1, false)
+          .colorChrome(0, 1)
+          .exposure("+2/3 to +1 1/3 EV")
+          .build();
+
+  /** CineStill 800T, Fuji X Weekly (X-Trans V), as published; made for artificial light. */
+  public static final FujiRecipe CINESTILL_800T =
+      new Builder(
+              "cinestill-800t",
+              "CineStill 800T",
+              ROESCH,
+              "https://fujixweekly.com/2024/04/16/cinestill-800t-fujifilm-x-trans-v-film-simulation-recipe/",
+              "ETERNA",
+              "Eterna")
+          .dynamicRange(DynamicRange.DR400)
+          .whiteBalance(WhiteBalance.FLUORESCENT_3, -6, -4)
+          .tone(0, 2)
+          .color(4)
+          .detail(-3, -4, -5)
+          .grain(2, true)
+          .colorChrome(2, 1)
+          .exposure("−1/3 to +2/3 EV")
+          .build();
+
+  /**
+   * Kodak Tri-X 400 by Anders Lindborg, Ritchie Roesch's X100V version, as published (plain Acros;
+   * the +Ye/+R/+G filters are optional tuning). Published ISO 1600-12800.
+   */
+  public static final FujiRecipe KODAK_TRI_X_400 =
+      new Builder(
+              "kodak-tri-x-400",
+              "Kodak Tri-X 400",
+              "Anders Lindborg; X100V adaptation by " + ROESCH,
+              "https://fujixweekly.com/2020/06/18/fujifilm-x100v-film-simulation-recipe-kodak-tri-x-400/",
+              "ACROS",
+              "Acros")
+          .dynamicRange(DynamicRange.DR200)
+          .whiteBalance(WhiteBalance.DAYLIGHT, 9, -9)
+          .tone(0, 3)
+          .detail(1, -4, 4)
+          .grain(2, true)
+          .colorChrome(2, 0)
+          .exposure("+1/3 to +1 EV")
+          .build();
+
+  /** The published recipes Grain develops, in the order they are listed (ids in Recipe). */
+  public static final FujiRecipe[] PUBLISHED = {
+    REGGIES_PORTRA, KODAK_GOLD_200, KODACHROME_64, PACIFIC_BLUES, VIBRANT_ARIZONA, CINESTILL_800T,
+    KODAK_TRI_X_400
+  };
 
   /** Fujifilm's LUT download page, credited for the plain film simulations. */
   public static final String FUJIFILM_LUTS = "https://www.fujifilm-x.com/en-in/support/download/lut/";
@@ -292,21 +641,25 @@ public final class FujiRecipe {
 
   /** Human-readable settings, in the order Fujifilm cameras list them. */
   public String[][] settings() {
-    return new String[][] {
-      {"Film simulation", filmLabel},
-      {"Dynamic range", dynamicRange == DynamicRange.AUTO ? "DR-Auto" : dynamicRange.name()},
-      {"White balance", whiteBalance + "; R " + signed(wbShiftRed) + ", B " + signed(wbShiftBlue)},
-      {"Highlight", signed(highlight)},
-      {"Shadow", signed(shadow)},
-      {"Color", monochrome() ? "n/a (black and white)" : signed(color)},
-      {"Sharpness", signed(sharpness)},
-      {"High ISO NR", signed(noiseReduction)},
-      {"Clarity", signed(clarity)},
-      {"Grain", grainRoughness == 0 ? "Off" : level(grainRoughness) + " / " + (grainLarge ? "Large" : "Small")},
-      {"Color Chrome Effect", level(colorChrome)},
-      {"Color Chrome FX Blue", level(colorChromeBlue)},
-      {"Halation (Grain extra)", halation == 0 ? "Off" : String.valueOf(halation)},
-      {"Bloom (Grain extra)", bloom == 0 ? "Off" : String.valueOf(bloom)}
-    };
+    boolean mono = monochrome(), drp = dynamicRange.priority();
+    String notForMono = " (not applied to black and white)";
+    java.util.List<String[]> rows = new java.util.ArrayList<>();
+    rows.add(new String[] {"Film simulation", filmLabel + (monoFilter > 0 ? MONO_FILTERS[monoFilter] : "")});
+    rows.add(new String[] {"Dynamic range", dynamicRange.label});
+    rows.add(new String[] {"White balance", whiteBalance + "; R " + signed(wbShiftRed) + ", B " + signed(wbShiftBlue)});
+    rows.add(new String[] {"Highlight", drp ? "set by D-Range Priority" : signed(highlight)});
+    rows.add(new String[] {"Shadow", drp ? "set by D-Range Priority" : signed(shadow)});
+    rows.add(new String[] {"Color", mono ? "n/a (black and white)" : signed(color)});
+    rows.add(new String[] {"Sharpness", signed(sharpness)});
+    rows.add(new String[] {"High ISO NR", signed(noiseReduction)});
+    rows.add(new String[] {"Clarity", signed(clarity)});
+    rows.add(new String[] {"Grain", grainRoughness == 0 ? "Off" : level(grainRoughness) + " / " + (grainLarge ? "Large" : "Small")});
+    rows.add(new String[] {"Color Chrome Effect", level(colorChrome) + (mono && colorChrome > 0 ? notForMono : "")});
+    rows.add(new String[] {"Color Chrome FX Blue", level(colorChromeBlue) + (mono && colorChromeBlue > 0 ? notForMono : "")});
+    rows.add(new String[] {"Halation (Grain extra)", halation == 0 ? "Off" : String.valueOf(halation)});
+    rows.add(new String[] {"Bloom (Grain extra)", bloom == 0 ? "Off" : String.valueOf(bloom)});
+    if (!exposureNote.isEmpty())
+      rows.add(new String[] {"Exposure compensation (typical, not applied)", exposureNote});
+    return rows.toArray(new String[0][]);
   }
 }

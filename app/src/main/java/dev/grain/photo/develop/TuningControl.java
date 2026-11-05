@@ -3,6 +3,7 @@ package dev.grain.photo.develop;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.ObjIntConsumer;
+import java.util.function.Predicate;
 import java.util.function.ToIntFunction;
 
 /**
@@ -13,18 +14,38 @@ import java.util.function.ToIntFunction;
 public final class TuningControl {
   public final String name;
   public final String[] labels;
+  /** Shown instead of the value while the setting does not apply (e.g. Highlight under DR-P). */
+  public final String disabledLabel;
   private final ToIntFunction<FujiRecipe.Tuning> index;
   private final ObjIntConsumer<FujiRecipe.Tuning> apply;
+  private final Predicate<FujiRecipe.Tuning> enabled;
 
   private TuningControl(
       String name,
       String[] labels,
       ToIntFunction<FujiRecipe.Tuning> index,
       ObjIntConsumer<FujiRecipe.Tuning> apply) {
+    this(name, labels, index, apply, null, null);
+  }
+
+  private TuningControl(
+      String name,
+      String[] labels,
+      ToIntFunction<FujiRecipe.Tuning> index,
+      ObjIntConsumer<FujiRecipe.Tuning> apply,
+      Predicate<FujiRecipe.Tuning> enabled,
+      String disabledLabel) {
     this.name = name;
     this.labels = labels;
     this.index = index;
     this.apply = apply;
+    this.enabled = enabled;
+    this.disabledLabel = disabledLabel;
+  }
+
+  /** False while another setting overrides this one (the value is kept, but not applied). */
+  public boolean enabled(FujiRecipe.Tuning t) {
+    return enabled == null || enabled.test(t);
   }
 
   /** Position of the current value, 0 .. labels.length - 1. */
@@ -37,16 +58,49 @@ public final class TuningControl {
     apply.accept(t, Math.max(0, Math.min(labels.length - 1, position)));
   }
 
-  /** Fujifilm's settings of a film, in the order the cameras list them (no Color for Acros). */
+  /**
+   * Fujifilm's settings of a film. Black-and-white films get the Acros filter and no Color, Color
+   * Chrome Effect or FX Blue (Grain does not apply those to black and white).
+   */
   public static List<TuningControl> fujifilm(FujiRecipe film) {
     List<TuningControl> s = new ArrayList<>();
     String[] levels = {"Off", "Weak", "Strong"};
+    boolean mono = film.monochrome();
+    if (mono)
+      s.add(
+          new TuningControl(
+              "Filter",
+              FujiRecipe.MONO_FILTERS.clone(),
+              t -> t.monoFilter,
+              (t, i) -> t.monoFilter = i));
+    FujiRecipe.DynamicRange[] ranges = FujiRecipe.DynamicRange.values();
+    String[] rangeLabels = new String[ranges.length];
+    for (int i = 0; i < ranges.length; i++) rangeLabels[i] = ranges[i].label;
     s.add(
         new TuningControl(
             "Dynamic range",
-            new String[] {"DR-Auto", "DR100", "DR200", "DR400"},
+            rangeLabels,
             t -> t.dynamicRange.ordinal(),
             (t, i) -> t.dynamicRange = FujiRecipe.DynamicRange.values()[i]));
+    FujiRecipe.WhiteBalance[] modes = FujiRecipe.WhiteBalance.values();
+    String[] modeLabels = new String[modes.length];
+    for (int i = 0; i < modes.length; i++) modeLabels[i] = modes[i].label;
+    s.add(
+        new TuningControl(
+            "White balance",
+            modeLabels,
+            t -> t.wbMode.ordinal(),
+            (t, i) -> t.wbMode = FujiRecipe.WhiteBalance.values()[i]));
+    String[] kelvins = new String[(FujiRecipe.KELVIN_MAX - FujiRecipe.KELVIN_MIN) / FujiRecipe.KELVIN_STEP + 1];
+    for (int i = 0; i < kelvins.length; i++) kelvins[i] = (FujiRecipe.KELVIN_MIN + i * FujiRecipe.KELVIN_STEP) + "K";
+    s.add(
+        new TuningControl(
+            "Color temperature",
+            kelvins,
+            t -> Math.round((t.kelvin - FujiRecipe.KELVIN_MIN) / (float) FujiRecipe.KELVIN_STEP),
+            (t, i) -> t.kelvin = FujiRecipe.KELVIN_MIN + i * FujiRecipe.KELVIN_STEP,
+            t -> t.wbMode == FujiRecipe.WhiteBalance.KELVIN,
+            "Kelvin only"));
     s.add(
         new TuningControl(
             "WB shift red",
@@ -59,9 +113,23 @@ public final class TuningControl {
             signed(FujiRecipe.WB_SHIFT_MAX),
             t -> t.wbShiftBlue + FujiRecipe.WB_SHIFT_MAX,
             (t, i) -> t.wbShiftBlue = i - FujiRecipe.WB_SHIFT_MAX));
-    s.add(new TuningControl("Highlight", tones(), t -> position(t.highlight), (t, i) -> t.highlight = toneAt(i)));
-    s.add(new TuningControl("Shadow", tones(), t -> position(t.shadow), (t, i) -> t.shadow = toneAt(i)));
-    if (!film.monochrome())
+    s.add(
+        new TuningControl(
+            "Highlight",
+            tones(),
+            t -> position(t.highlight),
+            (t, i) -> t.highlight = toneAt(i),
+            t -> !t.dynamicRange.priority(),
+            "Set by DR-P"));
+    s.add(
+        new TuningControl(
+            "Shadow",
+            tones(),
+            t -> position(t.shadow),
+            (t, i) -> t.shadow = toneAt(i),
+            t -> !t.dynamicRange.priority(),
+            "Set by DR-P"));
+    if (!mono)
       s.add(
           new TuningControl(
               "Color",
@@ -95,10 +163,12 @@ public final class TuningControl {
               t.grainRoughness = (i + 1) / 2;
               t.grainLarge = i == 2 || i == 4;
             }));
-    s.add(new TuningControl("Color Chrome Effect", levels, t -> t.colorChrome, (t, i) -> t.colorChrome = i));
-    s.add(
-        new TuningControl(
-            "Color Chrome FX Blue", levels, t -> t.colorChromeBlue, (t, i) -> t.colorChromeBlue = i));
+    if (!mono) {
+      s.add(new TuningControl("Color Chrome Effect", levels, t -> t.colorChrome, (t, i) -> t.colorChrome = i));
+      s.add(
+          new TuningControl(
+              "Color Chrome FX Blue", levels, t -> t.colorChromeBlue, (t, i) -> t.colorChromeBlue = i));
+    }
     return s;
   }
 
