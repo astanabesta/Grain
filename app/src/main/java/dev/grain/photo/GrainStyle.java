@@ -224,7 +224,7 @@ public final class GrainStyle {
         p.setColor(0xfff4f1e8);
         p.setTextAlign(Paint.Align.CENTER);
         p.setTextSize(dp(getContext(), 29));
-        p.setTypeface(Typeface.create("serif", 0));
+        p.setTypeface(Typeface.create("serif", Typeface.NORMAL));
         c.drawText(state, x, y + dp(getContext(), 10), p);
       } else if ("·".equals(state)) {
         p.setColor(0xfff4f1e8);
