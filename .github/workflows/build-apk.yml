@@ -34,19 +34,45 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
-      - name: Keep personal debug signing stable across builds
-        uses: actions/cache@v4
+      - name: Signing key location
+        run: echo "GRAIN_KEYSTORE=$HOME/grain-signing/grain.keystore" >> "$GITHUB_ENV"
+      # One personal key for every build, so a new APK installs over the old one. It is created
+      # once, on main, and kept in the Actions cache (refreshed by every build). The optional
+      # GRAIN_DEBUG_KEYSTORE_BASE64 secret overrides it.
+      - name: Restore personal signing key
+        uses: actions/cache/restore@v4
         with:
-          path: ~/.android/debug.keystore
-          key: grain-personal-debug-key-v1-${{ github.repository_id }}
-      - name: Restore personal debug signing key (optional)
+          path: ~/grain-signing/grain.keystore
+          key: grain-signing-v2-${{ github.repository_id }}
+      - name: Use the secret key, or create the personal key once
+        id: signing
         env:
           DEBUG_KEY: ${{ secrets.GRAIN_DEBUG_KEYSTORE_BASE64 }}
+        shell: bash
         run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$GRAIN_KEYSTORE")"
+          CREATED=false
           if [ -n "$DEBUG_KEY" ]; then
-            mkdir -p "$HOME/.android"
-            printf '%s' "$DEBUG_KEY" | base64 --decode > "$HOME/.android/debug.keystore"
+            printf '%s' "$DEBUG_KEY" | base64 --decode > "$GRAIN_KEYSTORE"
+            echo "Signing with the GRAIN_DEBUG_KEYSTORE_BASE64 secret"
+          elif [ -s "$GRAIN_KEYSTORE" ]; then
+            echo "Signing with the cached personal key"
+          else
+            keytool -genkeypair -keystore "$GRAIN_KEYSTORE" -storetype PKCS12 -alias androiddebugkey \
+              -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10950 \
+              -dname "CN=Grain Photo personal build, O=Grain, C=BD"
+            CREATED=true
+            echo "::warning title=Signing::Created a new personal signing key. Installing this APK over an older build needs an uninstall first."
           fi
+          echo "created=$CREATED" >> "$GITHUB_OUTPUT"
+          keytool -list -v -keystore "$GRAIN_KEYSTORE" -storepass android -alias androiddebugkey | grep -m1 'SHA256:' | sed 's/^[[:space:]]*/Certificate /'
+      - name: Keep the new personal key (main only)
+        if: steps.signing.outputs.created == 'true' && github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        uses: actions/cache/save@v4
+        with:
+          path: ~/grain-signing/grain.keystore
+          key: grain-signing-v2-${{ github.repository_id }}
       - name: Unit tests, lint, and installable release APK
         shell: bash
         run: |
@@ -94,6 +120,13 @@ jobs:
           sed "s/vVERSION/$TAG/g" .github/release-notes.md > release-files/RELEASE_NOTES.md
           PUBLISHED=0
           : > release-files/publication.log
+          # Re-publishing a version from a newer commit replaces that release and moves its tag.
+          OLD_SHA=$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" --jq '.object.sha' 2>/dev/null || true)
+          if [ -n "$OLD_SHA" ] && [ "$OLD_SHA" != "$GITHUB_SHA" ]; then
+            echo "Replacing $TAG (was $OLD_SHA)" >> release-files/publication.log
+            gh release delete "$TAG" --cleanup-tag --yes >> release-files/publication.log 2>&1 || true
+            sleep 5
+          fi
           for ATTEMPT in 1 2 3 4; do
             if gh release view "$TAG" > /dev/null 2>> release-files/publication.log; then
               break
