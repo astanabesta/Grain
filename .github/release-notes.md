@@ -1,26 +1,21 @@
-## Grain Photo vVERSION — faster, cleaner RAW development (device-test beta)
+## Grain Photo vVERSION — all Fujifilm film simulations (device-test beta)
 
 Install **Grain-vVERSION.apk** on the Redmi Note 13 Pro+.
+- **From v0.2.1:** it installs as an update. Your photos and imported LUTs stay.
+- **From v0.2.0 or older:** first save the photos you want to keep (photo → **Save to device gallery**), uninstall Grain, install this APK, then re-import the LUT pack (*Tune → Import LUT pack*). Earlier builds were each signed with a different key; from v0.2.1 on, every build uses the same one.
 
-### One-time uninstall (signing fix)
-Every earlier Grain APK was accidentally signed with a new key, so Android always needed the old app removed first. From this version on, builds keep one personal key, so **future updates install over this one**.
-1. In Grain, open each photo you want to keep → **Save to device gallery** (photos already saved to Pictures/Grain are safe).
-2. Uninstall Grain, then install this APK.
-3. Re-import the Fujifilm LUT pack (*Tune → Import LUT pack*; the ZIP is probably still in your Downloads).
+### New: every film simulation in your LUT pack
+- Fujifilm's GFX ETERNA 55 pack has **12 LUTs**. **10 are film simulations**: Provia, Velvia, Astia, Classic Chrome, Reala Ace, Pro Neg. Std, Classic Neg., Eterna, Eterna Bleach Bypass and Acros. The other 2 (FLog2-709 and WDR-709) are technical video conversions, not film looks. Grain now says "10 film simulations + 2 video LUTs" instead of "12 film simulations".
+- All 10 now appear as ◆ films in the film strip and the film sheet, as soon as the pack is imported. Each one is developed from RAW with Fujifilm's official LUT at **standard settings**: DR-Auto, Auto white balance, and every tone, colour, grain and Color Chrome setting at 0.
+- The film sheet's Fujifilm tiles now show each simulation's real character: a reference picture run through that LUT. They're approximate guides; your photos are always developed from RAW.
+- Reggie's Portra is unchanged (it's Classic Chrome with Reggie's published settings).
 
-### What changed after your first test shots
-- **Speed:** this is now a release build (not debuggable), so Android compiles the RAW developer properly. The engine itself is also leaner. Your first test took 21 s, then about 7 s; it should now be several times faster. Please check the receipt's `timingMs` to see the real number.
-- **Noise:** your phone's built-in noise profile reports about 5× less noise than the RAW really has. Grain now rescales it and measures the noise curve on every frame. Noise reduction now works at two scales: colour blotches and coarse mottling go, and a fine film-like grain stays. Strength follows the recipe's High ISO NR (Reggie's Portra: −4, so a light touch).
-- **Sharpness** is now applied from the recipe (Reggie's −2 = gentle).
-- **Grain** is lighter where the photo already has natural noise, so high-ISO shots don't get double grain.
-- **Sideways photos:** pictures taken with the phone held sideways or upside down are now saved the right way up (JPEG, original, phone JPEG and DNG).
-- **Receipts:** the empty tone-curve entry is gone, and Copy now copies the formatted JSON.
-
-### Unchanged
-- Reggie's Portra recipe, colour pipeline, Fujifilm LUT import, and the four ISP looks.
+### Also in this build (from v0.2.1)
+- Release build, so RAW development is much faster than v0.2.0.
+- Noise measured on every photo, with two-scale noise reduction.
+- Photos taken sideways are saved upright.
 
 ### Honest status
-- Tuned on two indoor shots at ISO 2300–2700. Daylight and low-ISO shots are still untested on the phone.
-- Noise reduction, grain, Color Chrome, FX Blue and the WB-shift step are Grain's approximations, not Fujifilm measurements.
+- The film simulation itself is Fujifilm's own LUT. The phone-to-F-Log2 step, the stills tone model, noise reduction and grain are Grain's own work. They were tuned on two indoor test shots so far; daylight is still untested.
 
-This is a personal device-test build, signed with the project's debug key. Export important photos before uninstalling. SHA256SUMS.txt verifies the APK download.
+This is a personal device-test build, signed with the project's personal key. SHA256SUMS.txt verifies the APK download.

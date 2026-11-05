@@ -1,7 +1,21 @@
-# Fujifilm recipes from RAW (v0.2.1, engine `grain-raw-2`)
+# Fujifilm recipes from RAW (v0.2.2, engine `grain-raw-2`)
 
 Grain's first Fujifilm recipe, **Reggie's Portra**, is developed from the phone's sensor RAW. It is not
 a filter on the phone's finished JPEG.
+
+## Film simulations on their own (v0.2.2)
+
+Each film simulation in the imported pack is also offered on its own (`FujiRecipe.SIMULATIONS`,
+`FujiRecipe.standard`): the same RAW pipeline at standard settings (DR-Auto, Auto WB, all tone,
+colour, NR, sharpness, grain and Color Chrome settings at 0). A simulation appears once its LUT is
+imported. The GFX ETERNA 55 v1.10 pack holds 12 F-Log2 33-point LUTs: 10 film simulations (PROVIA,
+Velvia, ASTIA, CLASSIC-CHROME, REALA-ACE, PRO-Neg.Std, CLASSIC-Neg., ETERNA, ETERNA-BB, ACROS) and
+two technical transforms (FLog2-709, WDR-709), which are video display conversions and are not
+offered as films. Pro Neg. Hi and Nostalgic Neg. are listed for packs that include them.
+
+The film sheet's Fujifilm tiles are `LutPreview` thumbnails: a reference sRGB picture, linearised,
+metered to mid-grey, converted to Rec.2020 and F-Log2, then run through the real LUT. They show how
+the simulations differ; photos are always developed from RAW.
 
 ## Pipeline
 

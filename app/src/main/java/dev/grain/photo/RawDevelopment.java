@@ -17,7 +17,7 @@ import org.json.JSONObject;
 
 /** Runs the RAW engine for one capture and encodes the result as an EXIF-tagged JPEG. */
 final class RawDevelopment {
-  static final String SOFTWARE = "Grain Photo 0.2.1";
+  static final String SOFTWARE = "Grain Photo 0.2.2";
 
   static final class Output {
     final byte[] jpeg;

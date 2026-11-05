@@ -7,43 +7,66 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 public final class Recipe {
-  public static final Recipe[] ALL = {
-    new Recipe(
-        0,
-        "Daylight",
-        400,
-        "Sun-warmed color. A gentle shoulder. An ordinary afternoon, kept.",
-        CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT),
-    new Recipe(
-        1,
-        "Coast",
-        200,
-        "Airy blues and restrained warmth. A little salt in the air.",
-        CaptureRequest.CONTROL_AWB_MODE_AUTO),
-    new Recipe(
-        2,
-        "Golden",
-        800,
-        "A honeyed response, without turning every shadow orange.",
-        CaptureRequest.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT),
-    new Recipe(
-        3,
-        "Afterhours",
-        1600,
-        "A deeper response for the other side of the day.",
-        CaptureRequest.CONTROL_AWB_MODE_AUTO),
-    new Recipe(
-        4,
-        FujiRecipe.REGGIES_PORTRA,
-        "Reggie Ballesteros’ published Fujifilm recipe: Classic Chrome, warm and gently muted."
-            + " Developed from this phone’s RAW with Fujifilm’s official Classic Chrome LUT.")
-  };
+  public static final Recipe[] ALL = build();
+
+  private static Recipe[] build() {
+    Recipe[] fixed = {
+      new Recipe(
+          0,
+          "Daylight",
+          400,
+          "Sun-warmed color. A gentle shoulder. An ordinary afternoon, kept.",
+          CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT),
+      new Recipe(
+          1,
+          "Coast",
+          200,
+          "Airy blues and restrained warmth. A little salt in the air.",
+          CaptureRequest.CONTROL_AWB_MODE_AUTO),
+      new Recipe(
+          2,
+          "Golden",
+          800,
+          "A honeyed response, without turning every shadow orange.",
+          CaptureRequest.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT),
+      new Recipe(
+          3,
+          "Afterhours",
+          1600,
+          "A deeper response for the other side of the day.",
+          CaptureRequest.CONTROL_AWB_MODE_AUTO),
+      new Recipe(
+          4,
+          FujiRecipe.REGGIES_PORTRA,
+          "Reggie Ballesteros’ published Fujifilm recipe: Classic Chrome, warm and gently muted."
+              + " Developed from this phone’s RAW with Fujifilm’s official Classic Chrome LUT.",
+          false)
+    };
+    // Each Fujifilm film simulation on its own (ids stay fixed: never reorder, only append).
+    String[][] sims = FujiRecipe.SIMULATIONS;
+    Recipe[] all = new Recipe[fixed.length + sims.length];
+    System.arraycopy(fixed, 0, all, 0, fixed.length);
+    for (int i = 0; i < sims.length; i++) {
+      int id = fixed.length + i;
+      all[id] =
+          new Recipe(
+              id,
+              FujiRecipe.standard(sims[i][0], sims[i][1]),
+              sims[i][2]
+                  + " Fujifilm’s official LUT at standard settings, developed from this phone’s RAW.",
+              true);
+    }
+    return all;
+  }
+
   public final int id, referenceIso, whiteBalance, edgeMode, noiseMode;
   public final float exposureBias;
   public final String name, description;
   /** Non-null for recipes developed from RAW with an official Fujifilm LUT. */
   public final FujiRecipe fuji;
   public final boolean raw;
+  /** A plain Fujifilm film simulation (standard settings), shown once its LUT is imported. */
+  public final boolean standard;
 
   private Recipe(int id, String name, int iso, String description, int wb) {
     this.id = id;
@@ -61,12 +84,14 @@ public final class Recipe {
     exposureBias = id == 0 || id == 2 ? -.3f : 0f;
     fuji = null;
     raw = false;
+    standard = false;
   }
 
   /** RAW-developed Fujifilm recipe. The ISP only shapes the preview and the reference JPEG. */
-  private Recipe(int id, FujiRecipe fuji, String description) {
+  private Recipe(int id, FujiRecipe fuji, String description, boolean standard) {
     this.id = id;
     this.fuji = fuji;
+    this.standard = standard;
     raw = true;
     name = fuji.name;
     referenceIso = 0;
@@ -104,7 +129,11 @@ public final class Recipe {
           .put("id", id)
           .put("name", name)
           .put("version", 1)
-          .put("kind", "RAW development + official Fujifilm F-Log2 LUT")
+          .put(
+              "kind",
+              standard
+                  ? "RAW development + official Fujifilm F-Log2 LUT, film simulation at standard settings"
+                  : "RAW development + official Fujifilm F-Log2 LUT")
           .put("author", fuji.author)
           .put("source", fuji.source)
           .put("filmSimulationLut", fuji.filmSimulation)

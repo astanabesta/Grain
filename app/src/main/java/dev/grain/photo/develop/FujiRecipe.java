@@ -91,6 +91,68 @@ public final class FujiRecipe {
           2,
           -4);
 
+  /** Fujifilm's LUT download page, credited for the plain film simulations. */
+  public static final String FUJIFILM_LUTS = "https://www.fujifilm-x.com/en-in/support/download/lut/";
+
+  /**
+   * Film simulations Grain offers on their own, in Fujifilm's menu order: LUT name (as in the
+   * official FLog2_to_&lt;name&gt;_33grid files), label, description. A simulation only appears once
+   * its LUT has been imported. The packs also hold technical F-Log2 to Rec.709 conversions
+   * (FLog2-709, WDR-709); those are video display transforms, not film simulations.
+   */
+  public static final String[][] SIMULATIONS = {
+    {"PROVIA", "Provia", "Fujifilm’s standard colour: natural, balanced contrast for almost any scene."},
+    {"Velvia", "Velvia", "High saturation and deeper contrast, made for landscapes and nature."},
+    {"ASTIA", "Astia", "Softer contrast with bright, clean colour; gentle on skin."},
+    {"CLASSIC-CHROME", "Classic Chrome", "Muted colour and firm shadows: a documentary, slide-film feel."},
+    {"REALA-ACE", "Reala Ace", "True-to-life colour with crisp, faithful tones."},
+    {"PRO-Neg.Hi", "Pro Neg. Hi", "Portrait colour with a little more contrast than Pro Neg. Std."},
+    {"PRO-Neg.Std", "Pro Neg. Std", "Soft, low-contrast colour for portraits and even light."},
+    {"CLASSIC-Neg.", "Classic Neg.", "Hard tones and shifted colour, after everyday colour-negative film."},
+    {"NOSTALGIC-Neg.", "Nostalgic Neg.", "Amber highlights and rich shadows, after 1970s colour prints."},
+    {"ETERNA", "Eterna", "Muted colour and soft shadows, designed for cinema."},
+    {"ETERNA-BB", "Eterna Bleach Bypass", "Low saturation and high contrast, like the bleach-bypass process."},
+    {"ACROS", "Acros", "Black and white with deep blacks and rich, fine gradation."}
+  };
+
+  /** True for the packs' technical F-Log2 to Rec.709 transforms, which are not film simulations. */
+  public static boolean isTechnical(String lutName) {
+    String n = lutName.toUpperCase(java.util.Locale.ROOT);
+    return n.endsWith("709") || n.startsWith("FLOG2") || n.startsWith("F-LOG");
+  }
+
+  /**
+   * A film simulation on its own, at standard settings: DR-Auto, Auto white balance, every tone,
+   * colour, grain and Color Chrome setting at 0 / Off.
+   */
+  public static FujiRecipe standard(String lutName, String label) {
+    return new FujiRecipe(
+        "sim-" + lutName.toLowerCase(java.util.Locale.ROOT),
+        label,
+        "Fujifilm",
+        FUJIFILM_LUTS,
+        lutName,
+        label,
+        DynamicRange.AUTO,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        false,
+        0,
+        0,
+        "Auto",
+        0,
+        0);
+  }
+
+  public boolean monochrome() {
+    return filmSimulation.toUpperCase(java.util.Locale.ROOT).startsWith("ACROS");
+  }
+
   public static String level(int value) {
     return value <= 0 ? "Off" : value == 1 ? "Weak" : "Strong";
   }
@@ -109,7 +171,7 @@ public final class FujiRecipe {
       {"White balance", whiteBalance + "; R " + signed(wbShiftRed) + ", B " + signed(wbShiftBlue)},
       {"Highlight", signed(highlight)},
       {"Shadow", signed(shadow)},
-      {"Color", signed(color)},
+      {"Color", monochrome() ? "n/a (black and white)" : signed(color)},
       {"Sharpness", signed(sharpness)},
       {"High ISO NR", signed(noiseReduction)},
       {"Clarity", signed(clarity)},

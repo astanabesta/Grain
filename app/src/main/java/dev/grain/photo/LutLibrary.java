@@ -6,6 +6,7 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.provider.OpenableColumns;
 import dev.grain.photo.develop.CubeLut;
+import dev.grain.photo.develop.FujiRecipe;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.DataInputStream;
@@ -107,12 +108,21 @@ final class LutLibrary {
     return out;
   }
 
+  /** Imported film simulations, without the packs' technical Rec.709 conversion LUTs. */
+  List<String> films() {
+    List<String> out = new ArrayList<>();
+    for (String s : available()) if (!FujiRecipe.isTechnical(s)) out.add(s);
+    return out;
+  }
+
   String summary() {
-    List<String> sims = available();
-    if (sims.isEmpty()) return "Not imported yet";
+    List<String> all = available();
+    if (all.isEmpty()) return "Not imported yet";
+    int films = films().size(), technical = all.size() - films;
     JSONObject m = manifest();
-    return sims.size() + " film simulation" + (sims.size() == 1 ? "" : "s") + " · "
-        + m.optString("model", m.optString("source", "Fujifilm"));
+    return films + " film simulation" + (films == 1 ? "" : "s")
+        + (technical > 0 ? " + " + technical + " video LUT" + (technical == 1 ? "" : "s") : "")
+        + " · " + m.optString("model", m.optString("source", "Fujifilm"));
   }
 
   /** Imports every F-Log2 33-grid LUT from a Fujifilm zip, or a single F-Log2 .cube file. */
