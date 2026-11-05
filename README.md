@@ -6,7 +6,9 @@
 
 Cream/olive/orange Grain design. Real Camera2 still capture. Recipes request supported white balance, tone curves, noise reduction and sharpening **before capture**, not a generic color filter added to a finished JPEG. Digital framing is applied afterward as a geometry-only crop.
 
-**Status: device-test beta.** v0.1.1 passed Android compilation, tests, lint and APK packaging in GitHub Actions. v0.1.2 corrects the double sensor-rotation path in the viewfinder; each APK is published only after its CI checks pass. No local Android SDK/build is used. Physical-phone validation and recipe calibration remain pending.
+**Status: device-test beta.** v0.1.1 passed Android compilation, tests, lint and APK packaging in GitHub Actions. v0.1.2 corrects the double sensor-rotation path in the viewfinder; each APK is published only after its CI checks pass. No local Android SDK/build is used. The user confirmed the v0.1.2 viewfinder is upright on the Redmi. v0.1.3 corrects coarse shadow-tone sampling and flags explicitly unfocused captures. Recipe color calibration remains pending.
+
+**v0.1.3 tone correction:** see [sampling diagnosis and remaining limitations](docs/TONE_SAMPLING.md).
 
 **Chroma / Fuji research:** Chroma contains recognizable Fuji-style LUT bases, but not the named recipe catalog sometimes implied by those names. See [research findings and recipe limitations](docs/CHROMA_RESEARCH.md). No third-party LUTs were imported.
 
@@ -16,7 +18,7 @@ This repository now contains the standalone Grain project. The previous project'
 
 1. Open **Actions → Build and Release Grain APK** in this repository.
 2. A push to `main` starts the build automatically. You can also choose **Run workflow**.
-3. After a green run, download the APK from the **v0.1.2 GitHub Release**. The Actions artifact **grain-photo-debug-N** is also retained.
+3. After a green run, download the APK from the **v0.1.3 GitHub Release**. The Actions artifact **grain-photo-debug-N** is also retained.
 4. Install the release APK directly. If using the Actions artifact instead, extract its ZIP first.
 5. Allow installation from your browser/file manager when Android asks, then grant **Camera** access.
 

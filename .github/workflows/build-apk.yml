@@ -96,9 +96,10 @@ jobs:
 
           Install the attached **Grain-vVERSION-debug.apk** on your Redmi Note 13 Pro Plus.
 
-          - Viewfinder fix: remove duplicate sensor rotation; preserve center crop and zoom.
-          - Preview geometry regression tests and orientation diagnostics.
-          - Chroma / Fuji recipe research in docs/CHROMA_RESEARCH.md; no LUTs imported.
+          - Fix overly coarse shadow-tone sampling in the ISP recipe curves.
+          - Record recipe curve version 2 and sampling strategy in capture receipts.
+          - Warn when the camera reports not focused at capture; no autofocus-lock fix claimed.
+          - Retain the v0.1.2 viewfinder rotation fix. No third-party LUTs imported.
           - Native Grain UI based on the final HTML design.
           - Camera2 JPEG still capture with experimental capture-time ISP recipes.
           - Zoom, framing, timer, private gallery, export and capture receipts.

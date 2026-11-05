@@ -31,6 +31,17 @@ public final class SmokeTest {
       for(int i=0;i<8;i++)if(Math.abs(corners[i]-expected[i])>.01)throw new AssertionError("Double preview rotation");
       count++;
     }
-    System.out.println("PASS: " + count + " crop/curve cases; no Android SDK used.");
+    float[] toe = CurveMath.channel(3, 0, 80, 32);
+    float sampled = 0;
+    for (int i = 2; i < toe.length; i += 2) {
+      if (.01f <= toe[i]) {
+        float t = (.01f - toe[i - 2]) / (toe[i] - toe[i - 2]);
+        sampled = toe[i - 1] + t * (toe[i + 1] - toe[i - 1]);
+        break;
+      }
+    }
+    if (Math.abs(sampled - .086242) > .001) throw new AssertionError("Shadow toe undersampled");
+    count++;
+    System.out.println("PASS: " + count + " crop/curve/preview cases; no Android SDK used.");
   }
 }

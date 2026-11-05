@@ -511,6 +511,11 @@ public final class GrainCamera {
               .put("sensorTimestampNs", timestamp)
               .put("actual", resultJson(pendingResult));
       JSONObject actual = receipt.getJSONObject("actual");
+      int afState = actual.optInt("afState", -1);
+      if (afState == CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED
+          || afState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED) {
+        receipt.put("focusWarning", "Camera reported not focused at capture. Tap the subject and retry.");
+      }
       receipt.put(
           "verification",
           "CaptureResult metadata is evidence of reported settings, not proof of exact pixel"
