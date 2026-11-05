@@ -47,12 +47,16 @@ final class RawSupport {
         && chars.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1) != null;
   }
 
+  /** Largest RAW_SENSOR size up to 26 MP (memory bound for on-device development); null if none. */
   static Size rawSize(StreamConfigurationMap map) {
     Size[] sizes = map.getOutputSizes(ImageFormat.RAW_SENSOR);
     if (sizes == null || sizes.length == 0) return null;
-    Size best = sizes[0];
-    for (Size s : sizes)
-      if ((long) s.getWidth() * s.getHeight() > (long) best.getWidth() * best.getHeight()) best = s;
+    Size best = null;
+    for (Size s : sizes) {
+      long area = (long) s.getWidth() * s.getHeight();
+      if (area <= 26_000_000L
+          && (best == null || area > (long) best.getWidth() * best.getHeight())) best = s;
+    }
     return best;
   }
 
