@@ -174,7 +174,8 @@ public final class GrainCamera {
       rawSize = null;
       if (front) rawUnavailable = "RAW recipes use the rear camera in this build";
       else if (!RawSupport.supported(chars, streams))
-        rawUnavailable = "Camera2 does not expose RAW_SENSOR with calibration for this camera";
+        rawUnavailable =
+            "Camera2 exposes no usable RAW_SENSOR stream here (Bayer, up to 26 MP, with colour calibration)";
       else {
         rawSize = RawSupport.rawSize(streams);
         rawReader =
