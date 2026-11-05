@@ -57,9 +57,16 @@ jobs:
           if [ "$CODE" -ne 0 ]; then
             python3 - <<'PY'
           from pathlib import Path
-          text='\n'.join(Path('build.log').read_text(errors='replace').splitlines()[-120:])[-18000:]
-          text=text.replace('%','%25').replace('\r','%0D').replace('\n','%0A')
-          print('::error title=Android build output::'+text)
+          reports=list(Path('app/build').rglob('lint-results-debug.txt'))
+          errors=[]
+          if reports:
+            lines=reports[0].read_text(errors='replace').splitlines()
+            for i,line in enumerate(lines):
+              if ': Error:' in line: errors.append('\n'.join(lines[i:i+8]))
+          if not errors: errors=['\n'.join(Path('build.log').read_text(errors='replace').splitlines()[-55:])[-3500:]]
+          for text in errors:
+            text=text[:3500].replace('%','%25').replace('\r','%0D').replace('\n','%0A')
+            print('::error title=Android build issue::'+text)
           PY
           fi
           exit "$CODE"

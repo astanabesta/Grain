@@ -11,6 +11,8 @@ import android.os.*;
 import android.provider.Settings;
 import android.view.*;
 import android.widget.*;
+import androidx.activity.ComponentActivity;
+import androidx.activity.OnBackPressedCallback;
 import java.io.File;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
@@ -18,7 +20,7 @@ import java.util.concurrent.Executors;
 import org.json.JSONObject;
 
 /** Grain's single-camera-screen interaction design, implemented without Flutter or a WebView. */
-public final class MainActivity extends Activity implements GrainCamera.Listener {
+public final class MainActivity extends ComponentActivity implements GrainCamera.Listener {
   private static final int PAPER = 0xfff4f1e8,
       INK = 0xff303c29,
       MUTED = 0xff87917c,
@@ -80,10 +82,9 @@ public final class MainActivity extends Activity implements GrainCamera.Listener
     store = new PhotoStore(this);
     store.purgeTrash();
     build();
-    if (Build.VERSION.SDK_INT >= 33)
-      getOnBackInvokedDispatcher()
-          .registerOnBackInvokedCallback(
-              android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::navigateBack);
+    getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+      @Override public void handleOnBackPressed() { navigateBack(); }
+    });
     camera = new GrainCamera(this, texture, this);
     texture.setSurfaceTextureListener(
         new TextureView.SurfaceTextureListener() {
@@ -1085,12 +1086,6 @@ public final class MainActivity extends Activity implements GrainCamera.Listener
       return true;
     }
     return super.onKeyDown(code, event);
-  }
-
-  @SuppressWarnings("deprecation")
-  @Override
-  public void onBackPressed() {
-    navigateBack();
   }
 
   private void navigateBack() {
