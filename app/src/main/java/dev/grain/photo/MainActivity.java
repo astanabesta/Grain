@@ -1000,6 +1000,8 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
                   message(
                       photo.metadata.optBoolean("recoveredFullFrame")
                           ? "Crop failed; your full-frame capture was recovered. Check its receipt."
+                          : receipt.has("focusWarning")
+                              ? "Saved, but the camera reported not focused. Tap the subject and retry."
                           : warn
                               ? "Saved. ISP limitations are recorded in this photo’s receipt."
                               : "A moment, kept.");

@@ -9,8 +9,11 @@ public final class CurveMath {
     float[] curve = new float[points * 2];
     double amount = Math.max(0, Math.min(100, strength)) / 100.0;
     for (int i = 0; i < points; i++) {
-      double x = (double) i / (points - 1);
-      double base = x <= .0031308 ? 12.92 * x : 1.055 * Math.pow(x, 1.0 / 2.4) - .055;
+      // Camera2 interpolates in linear-input space. Uniform linear knots put the first
+      // nonzero knot at 0.032 with 32 points, skipping most of the sRGB shadow toe.
+      // Space knots by encoded brightness instead; x remains a linear-light input.
+      double base = (double) i / (points - 1);
+      double x = base <= .04045 ? base / 12.92 : Math.pow((base + .055) / 1.055, 2.4);
       double lift = Math.pow(1 - base, 3) * base, shoulder = base * base * (1 - base);
       double y = base;
       switch (recipe) {
