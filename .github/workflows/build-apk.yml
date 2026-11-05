@@ -2,7 +2,7 @@ name: Build and Release Grain APK
 on:
   workflow_dispatch:
   push:
-    branches: [main, master]
+    branches: [main, master, 'dev/**']
   pull_request:
 permissions:
   contents: read
@@ -77,7 +77,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Publish Grain GitHub Release with APK
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -91,42 +91,29 @@ jobs:
           APK="release-files/Grain-$TAG-debug.apk"
           cp app/build/outputs/apk/debug/app-debug.apk "$APK"
           (cd release-files && sha256sum "Grain-$TAG-debug.apk" > SHA256SUMS.txt)
-          cat > release-files/RELEASE_NOTES.md <<'NOTES'
-          ## Grain Photo — personal-device beta
-
-          Install the attached **Grain-vVERSION-debug.apk** on your Redmi Note 13 Pro Plus.
-
-          - Fix overly coarse shadow-tone sampling in the ISP recipe curves.
-          - Record recipe curve version 2 and sampling strategy in capture receipts.
-          - Warn when the camera reports not focused at capture; no autofocus-lock fix claimed.
-          - Retain the v0.1.2 viewfinder rotation fix. No third-party LUTs imported.
-          - Native Grain UI based on the final HTML design.
-          - Camera2 JPEG still capture with experimental capture-time ISP recipes.
-          - Zoom, framing, timer, private gallery, export and capture receipts.
-
-          This is a **debug-signed device-test build**, not a production release. RAW and HEIF are not implemented. Camera response, orientation, preview matching and firmware support still require physical-device testing. Export important private photos before uninstalling.
-
-          Build checks: Android unit tests, lint and APK assembly must pass before publication. Source/build reports are available in GitHub Actions. SHA256SUMS.txt verifies the APK download.
-          NOTES
-          sed -i "s/vVERSION/$TAG/g" release-files/RELEASE_NOTES.md
+          sed "s/vVERSION/$TAG/g" .github/release-notes.md > release-files/RELEASE_NOTES.md
           PUBLISHED=0
-          for ATTEMPT in 1 2 3; do
-            if {
-              if gh release view "$TAG" > /dev/null 2>&1; then
-                gh release upload "$TAG" "$APK" release-files/SHA256SUMS.txt --clobber
-              else
-                gh release create "$TAG" "$APK" release-files/SHA256SUMS.txt \
-                  --target "$GITHUB_SHA" --title "Grain $TAG — Device-test beta" \
-                  --notes-file release-files/RELEASE_NOTES.md --prerelease
-              fi
-            } > release-files/publication.log 2>&1; then
-              cat release-files/publication.log
-              PUBLISHED=1
+          : > release-files/publication.log
+          for ATTEMPT in 1 2 3 4; do
+            if gh release view "$TAG" > /dev/null 2>> release-files/publication.log; then
               break
             fi
-            cat release-files/publication.log
-            sleep "$((ATTEMPT * 5))"
+            if gh release create "$TAG" --target "$GITHUB_SHA" --title "Grain $TAG — Device-test beta" \
+                --notes-file release-files/RELEASE_NOTES.md --prerelease >> release-files/publication.log 2>&1; then
+              break
+            fi
+            sleep "$((ATTEMPT * 6))"
           done
+          for ATTEMPT in 1 2 3 4 5; do
+            sleep "$((ATTEMPT * 4))"
+            if gh release upload "$TAG" "$APK" release-files/SHA256SUMS.txt --clobber >> release-files/publication.log 2>&1; then
+              if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "Grain-$TAG-debug.apk"; then
+                PUBLISHED=1
+                break
+              fi
+            fi
+          done
+          cat release-files/publication.log
           if [ "$PUBLISHED" -ne 1 ]; then
             python3 - <<'PYERR'
           from pathlib import Path

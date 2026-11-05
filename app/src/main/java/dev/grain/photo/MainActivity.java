@@ -13,6 +13,9 @@ import android.view.*;
 import android.widget.*;
 import androidx.activity.ComponentActivity;
 import androidx.activity.OnBackPressedCallback;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import dev.grain.photo.develop.CubeLut;
 import java.io.File;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
@@ -51,7 +54,11 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
   private PhotoStore store;
   private SharedPreferences preferences;
   private JSONObject capabilities = new JSONObject();
-  private int recipe, strengths[] = {80, 80, 80, 80}, timerSeconds;
+  private int recipe, strengths[] = new int[Recipe.ALL.length], timerSeconds;
+  private LutLibrary luts;
+  private ActivityResultLauncher<String[]> lutPicker;
+  private boolean keepRawFiles = true;
+  private Runnable afterLutImport;
   private String ratio = "3:4";
   private double zoom = 1;
   private float ev = 0;
@@ -78,14 +85,23 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
   public void onCreate(Bundle saved) {
     super.onCreate(saved);
     preferences = getSharedPreferences("grain", MODE_PRIVATE);
+    Arrays.fill(strengths, 80);
     loadPrefs();
     store = new PhotoStore(this);
     store.purgeTrash();
+    luts = new LutLibrary(this);
+    lutPicker =
+        registerForActivityResult(
+            new ActivityResultContracts.OpenDocument(),
+            uri -> {
+              if (uri != null) importLuts(uri);
+            });
     build();
     getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
       @Override public void handleOnBackPressed() { navigateBack(); }
     });
     camera = new GrainCamera(this, texture, this);
+    applyRawFilesPreference();
     texture.setSurfaceTextureListener(
         new TextureView.SurfaceTextureListener() {
           @Override
@@ -309,10 +325,12 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     strip.addView(filmRow);
     cameraPage.addView(strip, new LinearLayout.LayoutParams(-1, dp(53)));
     for (Recipe f : Recipe.ALL) {
-      TextView chip = button("•  " + f.name, 10, () -> selectRecipe(f.id));
+      TextView chip = button((f.raw ? "◆  " : "•  ") + f.name, 10, () -> selectRecipe(f.id));
       chip.setMinHeight(0);
+      chip.setSingleLine(true);
+      chip.setPadding(dp(12), 0, dp(12), 0);
       chip.setTag(f.id);
-      LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, dp(30), 1);
+      LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, dp(30));
       cp.setMargins(dp(3), 0, dp(3), 0);
       filmRow.addView(chip, cp);
     }
@@ -426,11 +444,23 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     savePrefs();
     updateLabels();
     camera.update(snapshot());
+    Recipe r = Recipe.ALL[id];
+    if (r.raw) {
+      if (ready && !camera.rawAvailable())
+        message("RAW isn’t available here: " + camera.rawUnavailableReason());
+      else if (!luts.has(r.fuji.filmSimulation))
+        message("Import Fujifilm’s LUT pack to use " + r.name + " (Tune → Import)");
+      else message(r.name + " · preview is the phone’s view; the look is developed from RAW");
+    }
   }
 
   private void updateLabels() {
     if (filmLabel == null) return;
-    filmLabel.setText("•  " + Recipe.ALL[recipe].name.toUpperCase(Locale.ROOT) + " / ISP");
+    Recipe current = Recipe.ALL[recipe];
+    filmLabel.setText(
+        current.raw
+            ? "◆  " + current.name.toUpperCase(Locale.ROOT) + " / RAW · " + current.fuji.filmLabel.toUpperCase(Locale.ROOT)
+            : "•  " + current.name.toUpperCase(Locale.ROOT) + " / ISP");
     ratioButton.setText(ratio);
     ratioButton.setCompoundDrawablesWithIntrinsicBounds(
         null, null, new GrainStyle.Symbol(this, "down", PAPER, 9), null);
@@ -454,7 +484,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
       timerButton.setTypeface(Typeface.MONOSPACE);
     }
     timerButton.setTextColor(timerSeconds == 0 ? INK : ORANGE);
-    tuneButton.setText("Tune film  " + strengths[recipe] + "%");
+    tuneButton.setText(current.raw ? "Recipe  " + (luts != null && luts.has(current.fuji.filmSimulation) ? "✓" : "· LUT needed") : "Tune film  " + strengths[recipe] + "%");
     for (int i = 0; i < filmRow.getChildCount(); i++) {
       TextView chip = (TextView) filmRow.getChildAt(i);
       boolean active = i == recipe;
@@ -655,6 +685,12 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     controls.addView(strengthRow);
     SeekBar strength = styledSlider(100, strengths[recipe]);
     controls.addView(strength, new LinearLayout.LayoutParams(-1, dp(32)));
+    LinearLayout recipePanel = column();
+    controls.addView(recipePanel, new LinearLayout.LayoutParams(-1, -2));
+    boolean rawNow = Recipe.ALL[recipe].raw;
+    strengthRow.setVisibility(rawNow ? View.GONE : View.VISIBLE);
+    strength.setVisibility(rawNow ? View.GONE : View.VISIBLE);
+    fillRecipePanel(recipePanel, Recipe.ALL[recipe], dialog);
     ArrayList<LinearLayout> tiles = new ArrayList<>();
     for (Recipe f : Recipe.ALL) {
       LinearLayout tile = column();
@@ -672,9 +708,10 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
       } catch (Exception ignored) {
       }
       float[][] artGrades = {
-        {1.03f, 1, .93f}, {.92f, 1.02f, 1.06f}, {1.1f, 1.01f, .84f}, {.74f, .8f, .88f}
+        {1.03f, 1, .93f}, {.92f, 1.02f, 1.06f}, {1.1f, 1.01f, .84f}, {.74f, .8f, .88f},
+        {1.05f, .98f, .86f}
       };
-      float[] grade = artGrades[f.id];
+      float[] grade = artGrades[Math.min(f.id, artGrades.length - 1)];
       art.setColorFilter(
           new ColorMatrixColorFilter(
               new float[] {
@@ -695,12 +732,14 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
       checkLp.setMargins(0, dp(5), dp(5), 0);
       picture.addView(check, checkLp);
       tile.addView(picture, new LinearLayout.LayoutParams(-1, dp(101)));
-      TextView title = text(f.name, 14, INK);
+      TextView title = text(f.name, f.name.length() > 10 ? 11 : 14, INK);
+      title.setSingleLine(true);
+      title.setEllipsize(android.text.TextUtils.TruncateAt.END);
       title.setTypeface(Typeface.SERIF);
       title.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
       title.setPadding(dp(3), 0, 0, 0);
       tile.addView(title, new LinearLayout.LayoutParams(-1, dp(29)));
-      TextView iso = text("ISP RECIPE", 8, MUTED);
+      TextView iso = text(f.raw ? "RAW · FUJIFILM LUT" : "ISP RECIPE", 8, f.raw ? ORANGE : MUTED);
       iso.setTypeface(Typeface.MONOSPACE);
       iso.setGravity(Gravity.START);
       iso.setPadding(dp(3), 0, 0, 0);
@@ -714,6 +753,9 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
             description.setText(f.description);
             strength.setProgress(strengths[recipe]);
             amount.setText(strengths[recipe] + "%");
+            strengthRow.setVisibility(f.raw ? View.GONE : View.VISIBLE);
+            strength.setVisibility(f.raw ? View.GONE : View.VISIBLE);
+            fillRecipePanel(recipePanel, f, dialog);
             for (int i = 0; i < tiles.size(); i++) styleFilmTile(tiles.get(i), i == recipe);
           });
       styleFilmTile(tile, f.id == recipe);
@@ -741,6 +783,10 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
             10,
             MUTED,
             () -> {
+              if (Recipe.ALL[recipe].raw) {
+                message("Fujifilm recipes are fixed as published.");
+                return;
+              }
               strengths[recipe] = 80;
               strength.setProgress(80);
               amount.setText("80%");
@@ -762,6 +808,121 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
       window.setGravity(Gravity.BOTTOM);
       window.setLayout(-1, -2);
     }
+  }
+
+  /** Film Lab body for RAW recipes: published settings, LUT status and import. */
+  private void fillRecipePanel(LinearLayout panel, Recipe r, Dialog dialog) {
+    panel.removeAllViews();
+    if (!r.raw) return;
+    boolean hasLut = luts.has(r.fuji.filmSimulation);
+    boolean hasRaw = !ready || camera.rawAvailable();
+    TextView state =
+        text(
+            !hasRaw
+                ? "RAW unavailable: " + camera.rawUnavailableReason()
+                : hasLut
+                    ? "Fujifilm " + r.fuji.filmLabel + " LUT ready · " + luts.summary()
+                    : "Needs Fujifilm’s free official LUT pack (" + r.fuji.filmLabel + " inside)",
+            10,
+            hasLut && hasRaw ? INK : ORANGE);
+    state.setGravity(Gravity.START);
+    panel.addView(state, new LinearLayout.LayoutParams(-1, -2));
+    LinearLayout actions = row();
+    actions.setPadding(0, dp(8), 0, dp(8));
+    TextView importButton =
+        button(
+            hasLut ? "Re-import pack" : "Import LUT pack",
+            10,
+            PAPER,
+            () -> pickLuts(() -> fillRecipePanel(panel, r, dialog)));
+    importButton.setBackground(bg(INK, 25, 0, 0));
+    actions.addView(importButton, new LinearLayout.LayoutParams(0, dp(36), 1));
+    View gap = new View(this);
+    actions.addView(gap, size(8, 1));
+    TextView get = button("Download from Fujifilm ↗", 10, INK, this::openLutDownload);
+    get.setBackground(bg(PAPER, 25, LINE, 1));
+    actions.addView(get, new LinearLayout.LayoutParams(0, dp(36), 1));
+    panel.addView(actions);
+    for (String[] item : r.fuji.settings()) {
+      LinearLayout line = row();
+      TextView key = text(item[0], 9, MUTED);
+      key.setGravity(Gravity.START);
+      line.addView(key, new LinearLayout.LayoutParams(0, dp(20), 1));
+      TextView value = text(item[1], 9, INK);
+      value.setGravity(Gravity.END);
+      line.addView(value, new LinearLayout.LayoutParams(-2, dp(20)));
+      panel.addView(line);
+    }
+    TextView credit = paragraph("Recipe by " + r.fuji.author + " — " + r.fuji.source);
+    credit.setPadding(0, dp(6), 0, 0);
+    panel.addView(credit);
+    TextView note =
+        paragraph(
+            "The viewfinder shows the phone’s normal preview. Each photo is developed from the"
+                + " sensor RAW with Fujifilm’s LUT plus Grain’s stills tone model. Grain, Color"
+                + " Chrome, FX Blue, WB shift and DR-Auto are Grain’s approximations.");
+    panel.addView(note);
+  }
+
+  private void pickLuts(Runnable after) {
+    afterLutImport = after;
+    try {
+      lutPicker.launch(new String[] {"application/zip", "application/x-zip-compressed", "application/octet-stream", "*/*"});
+    } catch (Exception e) {
+      message("No file picker available: " + e.getMessage());
+    }
+  }
+
+  private void openLutDownload() {
+    new AlertDialog.Builder(this)
+        .setTitle("Fujifilm’s official LUTs")
+        .setMessage(
+            "Download Fujifilm’s free \"GFX ETERNA 55\" 3D LUT pack (about 46 MB; it includes"
+                + " Classic Chrome). Then come back and tap Import LUT pack, and choose the"
+                + " downloaded zip. Grain stores the LUTs only inside the app.")
+        .setPositiveButton(
+            "Download zip",
+            (d, w) -> openUrl(LutLibrary.RECOMMENDED_PACK))
+        .setNeutralButton("Fujifilm page", (d, w) -> openUrl(LutLibrary.DOWNLOAD_PAGE))
+        .setNegativeButton("Cancel", null)
+        .show();
+  }
+
+  private void openUrl(String url) {
+    try {
+      startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+    } catch (Exception e) {
+      message("No browser available");
+    }
+  }
+
+  private void importLuts(Uri uri) {
+    message("Importing Fujifilm LUTs…");
+    files.execute(
+        () -> {
+          try {
+            LutLibrary.ImportResult result = luts.importFrom(getContentResolver(), uri, getCacheDir());
+            boolean chrome = luts.has("CLASSIC-CHROME");
+            runOnUiThread(
+                () -> {
+                  updateLabels();
+                  message(
+                      "Imported " + result.imported.size() + " Fujifilm LUTs"
+                          + (chrome ? " · Classic Chrome ready" : " · this pack has no Classic Chrome; use GFX ETERNA 55"));
+                  Runnable after = afterLutImport;
+                  afterLutImport = null;
+                  if (after != null) after.run();
+                });
+          } catch (Exception e) {
+            runOnUiThread(() -> message("LUT import failed: " + e.getMessage()));
+          }
+        });
+  }
+
+  private void applyRawFilesPreference() {
+    File dir = new File(getCacheDir(), "raw");
+    if (keepRawFiles && !dir.exists() && !dir.mkdirs()) keepRawFiles = false;
+    camera.setDngDirectory(keepRawFiles ? dir : null);
   }
 
   private void showSettings() {
@@ -819,12 +980,37 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
             });
     restart.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
     body.addView(restart, new LinearLayout.LayoutParams(-1, dp(43)));
+    sectionLabel(body, "FUJIFILM RECIPES (RAW)");
+    preferenceInfo(
+        body,
+        "Fujifilm LUTs",
+        "Official free pack, imported from your phone. Stays inside Grain.",
+        luts.summary());
+    TextView importLut = button("Import Fujifilm LUT pack ↗", 11, INK, () -> pickLuts(this::showSettings));
+    importLut.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+    body.addView(importLut, new LinearLayout.LayoutParams(-1, dp(43)));
+    TextView getLut = button("Where to download it ↗", 11, MUTED, this::openLutDownload);
+    getLut.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+    body.addView(getLut, new LinearLayout.LayoutParams(-1, dp(40)));
+    preferenceToggle(
+        body,
+        "Keep RAW test files",
+        "Saves the sensor DNG and the phone’s own JPEG with each Fujifilm-recipe photo.",
+        keepRawFiles,
+        v -> {
+          keepRawFiles = v;
+          savePrefs();
+          applyRawFilesPreference();
+        });
     sectionLabel(body, "YOUR PHOTOS. YOUR DEVICE.");
     preferenceInfo(body, "Photo storage", "No accounts. Nothing uploaded.", "Private on-device");
     preferenceInfo(
         body, "Preferences", "Film, strength, grid, ratio, timer.", "Remembered locally");
     preferenceInfo(
-        body, "Photo format", "Full-resolution stills, not video frames.", "JPEG · Camera2");
+        body,
+        "Photo format",
+        "Full-resolution stills. Fujifilm recipes develop the sensor RAW on the phone.",
+        camera.rawAvailable() ? "JPEG · RAW + DNG" : "JPEG · Camera2");
     TextView diagnostics = button("Camera diagnostics ↗", 11, INK, this::showDiagnostics);
     diagnostics.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
     body.addView(diagnostics, new LinearLayout.LayoutParams(-1, dp(45)));
@@ -864,9 +1050,10 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     note.addView(label);
     note.addView(
         paragraph(
-            "A real camera. Experimental ISP recipes. Your phone may override processing"
-                + " requests—each photo keeps a receipt. No RAW, HEIF, artificial grain, or"
-                + " unfiltered-original promises in this beta."));
+            "A real camera. ISP looks are experimental and your phone may override them. The"
+                + " Fujifilm recipe is developed from this phone’s RAW with Fujifilm’s own LUT;"
+                + " the stills tone model is fitted on public Fujifilm samples and still needs"
+                + " testing on your phone. Every photo keeps a receipt."));
     TextView signature = text("grain. / Made for the feeling of it.", 11, MUTED);
     signature.setTypeface(Typeface.SERIF);
     LinearLayout.LayoutParams sig = new LinearLayout.LayoutParams(-1, dp(56));
@@ -899,6 +1086,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
               : "Camera is not ready. Check permission or restart it.");
       return;
     }
+    if (!rawRecipeReady()) return;
     if (timerSeconds > 0) {
       counting = true;
       int token = ++countdownToken;
@@ -906,6 +1094,37 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
       return;
     }
     captureNow();
+  }
+
+  /** Fujifilm recipes need RAW on this camera and the imported LUT; explain instead of failing. */
+  private boolean rawRecipeReady() {
+    Recipe r = Recipe.ALL[recipe];
+    if (!r.raw) return true;
+    if (!camera.rawAvailable()) {
+      new AlertDialog.Builder(this)
+          .setTitle("RAW isn’t available")
+          .setMessage(
+              r.name + " is developed from the sensor RAW, but: " + camera.rawUnavailableReason()
+                  + ". Diagnostics has the full camera report.")
+          .setPositiveButton("OK", null)
+          .setNeutralButton("Diagnostics", (d, w) -> showDiagnostics())
+          .show();
+      return false;
+    }
+    if (!luts.has(r.fuji.filmSimulation)) {
+      new AlertDialog.Builder(this)
+          .setTitle("One-time setup")
+          .setMessage(
+              r.name + " uses Fujifilm’s official " + r.fuji.filmLabel + " LUT. Download Fujifilm’s"
+                  + " free LUT pack (GFX ETERNA 55, about 46 MB), then import the zip here. It stays"
+                  + " inside Grain.")
+          .setPositiveButton("Import zip", (d, w) -> pickLuts(null))
+          .setNeutralButton("Download", (d, w) -> openUrl(LutLibrary.RECOMMENDED_PACK))
+          .setNegativeButton("Cancel", null)
+          .show();
+      return false;
+    }
+    return true;
   }
 
   private void countdown(int remaining, int token) {
@@ -938,7 +1157,8 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     camera.neutralPreview(false);
     shutter.setText("·");
     shutter.setContentDescription("Capturing photo");
-    status.setText("Capturing full-resolution JPEG…");
+    status.setText(
+        Recipe.ALL[recipe].raw ? "Capturing RAW + phone JPEG…" : "Capturing full-resolution JPEG…");
     shutter.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
     camera.capture(snapshot());
   }
@@ -949,7 +1169,9 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     sourceWidth = w;
     sourceHeight = h;
     ready = true;
-    status.setText("JPEG " + caps.optString("selectedJpeg") + " · experimental ISP recipes");
+    status.setText(
+        "JPEG " + caps.optString("selectedJpeg")
+            + (caps.optBoolean("rawImplemented") ? " · RAW " + caps.optString("rawSelected") : " · no RAW"));
     updateLabels();
     camera.update(snapshot());
   }
@@ -1008,6 +1230,68 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
                 });
           } catch (Exception e) {
             runOnUiThread(() -> error("Could not save photo: " + e.getMessage()));
+          }
+        });
+  }
+
+  @Override
+  public void capturedRaw(
+      GrainCamera.RawCapture capture, GrainCamera.Snapshot settings, JSONObject receipt) {
+    if (isDestroyed() || isFinishing()) {
+      if (capture.dng != null && !capture.dng.delete()) android.util.Log.w("Grain", "Temp DNG kept");
+      return;
+    }
+    saving = true;
+    Recipe r = Recipe.ALL[settings.recipe];
+    status.setText("Developing " + r.name + " from RAW…");
+    files.execute(
+        () -> {
+          try {
+            long t = System.nanoTime();
+            CubeLut lut = luts.load(r.fuji.filmSimulation);
+            RawDevelopment.Output out =
+                RawDevelopment.develop(
+                    this, capture, r.fuji, lut, settings.ev, capture.frame.exposureNs ^ System.nanoTime());
+            long ms = (System.nanoTime() - t) / 1_000_000;
+            receipt.put("development", out.stats.put("totalMs", ms));
+            PhotoStore.Photo photo =
+                store.save(
+                    out.jpeg,
+                    settings.ratio,
+                    settings.zoom,
+                    settings.keepFull,
+                    receipt,
+                    capture.dng,
+                    keepRawFiles ? capture.phoneJpeg : null);
+            runOnUiThread(
+                () -> {
+                  if (isDestroyed()) return;
+                  saving = false;
+                  busy = false;
+                  shutter.setText("◉");
+                  shutter.setContentDescription("Take photo");
+                  status.setText(
+                      photo.metadata.optInt("width") + " × " + photo.metadata.optInt("height")
+                          + " · " + r.name + " · developed in " + String.format(Locale.US, "%.1f s", ms / 1000.0));
+                  updateThumb();
+                  message(
+                      receipt.has("focusWarning")
+                          ? "Saved, but the camera reported not focused. Tap the subject and retry."
+                          : r.name + " developed from RAW" + (photo.dng != null ? " · DNG kept" : ""));
+                });
+          } catch (Throwable e) {
+            if (capture.dng != null && capture.dng.exists() && !capture.dng.delete())
+              android.util.Log.w("Grain", "Temp DNG kept");
+            String why = e instanceof OutOfMemoryError ? "not enough memory" : String.valueOf(e.getMessage());
+            runOnUiThread(
+                () -> {
+                  saving = false;
+                  busy = false;
+                  shutter.setText("◉");
+                  shutter.setContentDescription("Take photo");
+                  status.setText("RAW development failed · camera still ready");
+                  message("RAW development failed: " + why);
+                });
           }
         });
   }
@@ -1282,8 +1566,9 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
         paragraph(
             String.format(
                 Locale.US,
-                "%.1f× DIGITAL CROP · JPEG",
-                photo.metadata.optDouble("digitalZoom", 1))));
+                photo.raw() ? "%.1f× DIGITAL CROP · DEVELOPED FROM RAW · %s" : "%.1f× DIGITAL CROP · JPEG%s",
+                photo.metadata.optDouble("digitalZoom", 1),
+                photo.raw() && r != null ? r.optString("filmSimulationLut", "") + " LUT" : "")));
     TextView save =
         button("Save to device gallery ↓", 13, PAPER, () -> export(photo, false, false));
     save.setBackground(bg(INK, 8, 0, 0));
@@ -1295,8 +1580,19 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
       body.addView(button("Save full-frame recipe capture", 12, () -> export(photo, true, false)));
       body.addView(
           paragraph(
-              "Full-frame means no framing crop or digital zoom. The camera’s recipe is already"
-                  + " baked in. This is not an unfiltered original."));
+              photo.raw()
+                  ? "Full-frame means no framing crop or digital zoom; the recipe is applied."
+                      + " The untouched sensor data is the DNG below."
+                  : "Full-frame means no framing crop or digital zoom. The camera’s recipe is"
+                      + " already baked in. This is not an unfiltered original."));
+    }
+    if (photo.dng != null || photo.phoneJpeg != null) {
+      TextView test = button("Save RAW test files (DNG · phone JPEG · receipt)", 12, () -> exportTestFiles(photo));
+      body.addView(test);
+      body.addView(
+          paragraph(
+              "For tuning: the DNG and phone JPEG go to Pictures/Grain, the receipt to"
+                  + " Download/Grain. Send them along with this photo."));
     }
     if (photo.metadata.optBoolean("recoveredFullFrame"))
       body.addView(
@@ -1367,6 +1663,19 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     showJson("Camera diagnostics", capabilities);
   }
 
+  private void exportTestFiles(PhotoStore.Photo photo) {
+    message("Saving test files…");
+    files.execute(
+        () -> {
+          try {
+            List<String> done = store.exportTestFiles(photo);
+            runOnUiThread(() -> message("Saved " + String.join(", ", done) + " · Pictures/Grain + Download/Grain"));
+          } catch (Exception e) {
+            runOnUiThread(() -> message("Could not save test files: " + e.getMessage()));
+          }
+        });
+  }
+
   private void showJson(String title, JSONObject json) {
     ScrollView scroll = new ScrollView(this);
     TextView text = text(json.toString(), 10, INK);
@@ -1407,9 +1716,10 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
   }
 
   private void loadPrefs() {
-    recipe = Math.max(0, Math.min(3, preferences.getInt("recipe", 0)));
-    for (int i = 0; i < 4; i++)
+    recipe = Math.max(0, Math.min(Recipe.ALL.length - 1, preferences.getInt("recipe", 0)));
+    for (int i = 0; i < strengths.length; i++)
       strengths[i] = Math.max(0, Math.min(100, preferences.getInt("strength" + i, 80)));
+    keepRawFiles = preferences.getBoolean("keepRawFiles", true);
     ratio = Framing.ratio(preferences.getString("ratio", "3:4"));
     grid = preferences.getBoolean("grid", false);
     keepFull = preferences.getBoolean("keepFull", true);
@@ -1427,8 +1737,9 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
             .putBoolean("grid", grid)
             .putBoolean("keepFull", keepFull)
             .putBoolean("larger", larger)
+            .putBoolean("keepRawFiles", keepRawFiles)
             .putInt("timer", timerSeconds);
-    for (int i = 0; i < 4; i++) edit.putInt("strength" + i, strengths[i]);
+    for (int i = 0; i < strengths.length; i++) edit.putInt("strength" + i, strengths[i]);
     edit.apply();
   }
 

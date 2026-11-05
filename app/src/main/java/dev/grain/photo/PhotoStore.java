@@ -19,14 +19,22 @@ public final class PhotoStore {
   public static final class Photo {
     public final String id;
     public final File image, original, receipt;
+    /** RAW recipes only: the sensor DNG and the phone's own JPEG of the same exposure. */
+    public final File dng, phoneJpeg;
     public final JSONObject metadata;
 
-    Photo(String id, File image, File original, File receipt, JSONObject metadata) {
+    Photo(String id, File image, File original, File receipt, File dng, File phoneJpeg, JSONObject metadata) {
       this.id = id;
       this.image = image;
       this.original = original;
       this.receipt = receipt;
+      this.dng = dng;
+      this.phoneJpeg = phoneJpeg;
       this.metadata = metadata;
+    }
+
+    public boolean raw() {
+      return metadata.optBoolean("raw", false);
     }
   }
 
@@ -42,9 +50,38 @@ public final class PhotoStore {
 
   public Photo save(byte[] jpeg, String ratio, double zoom, boolean keepFull, JSONObject metadata)
       throws Exception {
+    return save(jpeg, ratio, zoom, keepFull, metadata, null, null);
+  }
+
+  /** Saves a photo; for RAW recipes also keeps the DNG (moved in) and the phone's reference JPEG. */
+  public Photo save(
+      byte[] jpeg,
+      String ratio,
+      double zoom,
+      boolean keepFull,
+      JSONObject metadata,
+      File dng,
+      byte[] phoneJpeg)
+      throws Exception {
     String id = System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 8);
     File staging = new File(root, "." + id);
     if (!staging.mkdir()) throw new IOException("Cannot start photo save");
+    if (dng != null && dng.isFile()) {
+      File target = new File(staging, "sensor.dng");
+      if (!dng.renameTo(target)) {
+        copy(dng, target);
+        if (!dng.delete()) android.util.Log.w("Grain", "Temp DNG kept");
+      }
+      metadata.put("dngKept", true);
+    }
+    if (phoneJpeg != null) {
+      try (FileOutputStream out = new FileOutputStream(new File(staging, "phone-isp.jpg"))) {
+        out.write(phoneJpeg);
+        out.getFD().sync();
+      }
+      metadata.put("phoneJpegKept", true);
+    }
+    boolean rawPhoto = metadata.optBoolean("raw", false);
     try {
       File source = new File(staging, "capture.jpg");
       try (FileOutputStream out = new FileOutputStream(source)) {
@@ -100,7 +137,7 @@ public final class PhotoStore {
             if (value != null) output.setAttribute(tag, value);
           }
           output.setAttribute(ExifInterface.TAG_ORIENTATION, "1");
-          output.setAttribute(ExifInterface.TAG_SOFTWARE, "Grain Photo 0.1.1");
+          output.setAttribute(ExifInterface.TAG_SOFTWARE, RawDevelopment.SOFTWARE);
           output.saveAttributes();
         } finally {
           if (cropped != null && !cropped.isRecycled()) cropped.recycle();
@@ -118,7 +155,11 @@ public final class PhotoStore {
           .put("digitalZoom", zoom)
           .put("fullCaptureKept", keepFull)
           .put(
-              "originalMeaning", "Full unzoomed ISP-recipe JPEG, NOT unfiltered and NOT sensor RAW")
+              "originalMeaning",
+              rawPhoto
+                  ? "Full unzoomed Grain development of the RAW (recipe applied). The sensor RAW is"
+                      + " sensor.dng when kept"
+                  : "Full unzoomed ISP-recipe JPEG, NOT unfiltered and NOT sensor RAW")
           .put("geometryOnlyPostProcessing", !full)
           .put("savedAt", System.currentTimeMillis());
       if (keepFull) {
@@ -242,8 +283,15 @@ public final class PhotoStore {
       text = bytes.toString(StandardCharsets.UTF_8.name());
     }
     File original = new File(dir, "full-capture.jpg");
+    File dng = new File(dir, "sensor.dng"), phone = new File(dir, "phone-isp.jpg");
     return new Photo(
-        dir.getName(), image, original.exists() ? original : null, receipt, new JSONObject(text));
+        dir.getName(),
+        image,
+        original.exists() ? original : null,
+        receipt,
+        dng.isFile() ? dng : null,
+        phone.isFile() ? phone : null,
+        new JSONObject(text));
   }
 
   public Bitmap thumbnail(File file, int max) {
@@ -300,6 +348,64 @@ public final class PhotoStore {
       }
       ContentValues ready = new ContentValues();
       ready.put(MediaStore.Images.Media.IS_PENDING, 0);
+      context.getContentResolver().update(uri, ready, null, null);
+      return uri;
+    } catch (Exception error) {
+      context.getContentResolver().delete(uri, null, null);
+      throw error;
+    }
+  }
+
+  /**
+   * Exports the RAW test set: DNG and phone JPEG to Pictures/Grain, the receipt to Download/Grain.
+   * Returns a short list of what was written.
+   */
+  public List<String> exportTestFiles(Photo photo) throws Exception {
+    List<String> done = new ArrayList<>();
+    String base = "Grain_" + photo.id;
+    if (photo.dng != null) {
+      insert(photo.dng, base + "_sensor.dng", "image/x-adobe-dng", false);
+      done.add("DNG");
+    }
+    if (photo.phoneJpeg != null) {
+      insert(photo.phoneJpeg, base + "_phone.jpg", "image/jpeg", false);
+      done.add("phone JPEG");
+    }
+    insert(photo.image, base + ".jpg", "image/jpeg", false);
+    done.add("Grain JPEG");
+    insert(photo.receipt, base + "_receipt.json", "application/json", true);
+    done.add("receipt");
+    return done;
+  }
+
+  private Uri insert(File source, String name, String mime, boolean download) throws Exception {
+    ContentValues v = new ContentValues();
+    Uri collection;
+    if (download) {
+      v.put(MediaStore.Downloads.DISPLAY_NAME, name);
+      v.put(MediaStore.Downloads.MIME_TYPE, mime);
+      v.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Grain");
+      v.put(MediaStore.Downloads.IS_PENDING, 1);
+      collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI;
+    } else {
+      v.put(MediaStore.Images.Media.DISPLAY_NAME, name);
+      v.put(MediaStore.Images.Media.MIME_TYPE, mime);
+      v.put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Grain");
+      v.put(MediaStore.Images.Media.IS_PENDING, 1);
+      collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
+    }
+    Uri uri = context.getContentResolver().insert(collection, v);
+    if (uri == null) throw new IOException("Cannot create " + name);
+    try {
+      try (InputStream in = new FileInputStream(source);
+          OutputStream out = context.getContentResolver().openOutputStream(uri)) {
+        if (out == null) throw new IOException("No output stream for " + name);
+        byte[] b = new byte[65536];
+        int n;
+        while ((n = in.read(b)) != -1) out.write(b, 0, n);
+      }
+      ContentValues ready = new ContentValues();
+      ready.put(MediaStore.MediaColumns.IS_PENDING, 0);
       context.getContentResolver().update(uri, ready, null, null);
       return uri;
     } catch (Exception error) {
