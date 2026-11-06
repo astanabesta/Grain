@@ -8,6 +8,8 @@ https://github.com/user-attachments/assets/bb908564-cf9f-4cb9-adfe-f0d0ab7410e6
 
 **A separate, native Android recipe camera for your Redmi Note 13 Pro Plus.**
 
+**v0.5.0 — focus probe (device-test beta):** a diagnostic build for the next focusing work (multi-point AF, eye AF, manual focus). The Camera diagnostics panel now reports what your phone's Camera2 HAL actually exposes: the AF modes, `maxRegionsAf` / `maxRegionsAe`, the face-detect modes, `maxFaces`, `minFocusDistance`, which of `CONTROL_AF_REGIONS` / `CONTROL_AE_REGIONS` / `LENS_FOCUS_DISTANCE` / `STATISTICS_FACE_DETECT_MODE` it accepts, `manualSensor`, and a live FULL-face-detection capture. A new **Face landmarks (eye AF)** switch in Settings → Fujifilm recipes asks for FULL instead of SIMPLE (SIMPLE carries no landmarks), and every receipt now reports `faceEyes`, `faceIds` and `faceMouths` so we can see whether this phone's HAL fills them. Nothing in the capture pipeline changed — same RAW development, same recipes. Send the `focus` block and one face photo's receipt back and v0.5.0's eye AF gets built for what the phone really does.
+
 **v0.4.0 — the Fujifilm camera back:** the screen is now the back of a Fujifilm camera: a milled top
 plate, a viewfinder window with a glass glare, a film dial, a shutter-speed dial, a command dial, a
 five-way lever, a memo holder, a power switch and a knurled shutter button, with the preview sitting
