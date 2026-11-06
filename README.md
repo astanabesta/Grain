@@ -1,7 +1,7 @@
 # Grain Photo
 
 
-https://github.com/user-attachments/assets/a167faf0-27a8-4dbf-9627-14fa05a239da
+https://github.com/user-attachments/assets/grain
 
 
 **A separate, native Android recipe camera for your Redmi Note 13 Pro Plus.**
