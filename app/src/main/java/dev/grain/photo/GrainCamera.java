@@ -1414,9 +1414,12 @@ public final class GrainCamera {
         "faceDetectModes",
         ints(chars.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_FACE_DETECT_MODES)));
     put(focus, "maxFaces", chars.get(CameraCharacteristics.STATISTICS_INFO_MAX_FACE_COUNT));
-    Range<Float> closest = chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE);
-    if (closest != null) minFocusDistance = closest.getUpper();
-    put(focus, "minFocusDistance", minFocusDistance > 0 ? minFocusDistance : null);
+    // LENS_INFO_MINIMUM_FOCUS_DISTANCE is a plain Float, not a Range: the closest the lens goes.
+    Float closest = chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE);
+    if (closest != null) {
+      minFocusDistance = closest;
+      put(focus, "minFocusDistance", closest);
+    }
     JSONArray focusKeys = new JSONArray();
     for (CaptureRequest.Key<?> k :
         new CaptureRequest.Key<?>[] {
