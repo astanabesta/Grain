@@ -110,10 +110,13 @@ public final class MainActivity extends ComponentActivity
   private String ratio = "3:4";
   private double zoom = 1;
   private float ev = 0;
+  /** The AF area mode index; see AF_AREAS. */
+  private int afArea;
   private boolean grid,
       keepFull = true,
       faceExposure = true,
       faceLandmarks = false,
+      afLock,
       larger,
       front,
       busy,
@@ -152,6 +155,8 @@ public final class MainActivity extends ComponentActivity
     camera = new GrainCamera(this, texture, this);
     camera.setFaceDetection(faceExposure);
     camera.setFaceLandmarks(faceLandmarks);
+    camera.setAfArea(afArea);
+    camera.setAfLock(afLock);
     sound = new MediaActionSound();
     sound.load(MediaActionSound.SHUTTER_CLICK);
     sound.load(MediaActionSound.FOCUS_COMPLETE);
@@ -2041,6 +2046,8 @@ public final class MainActivity extends ComponentActivity
     larger = preferences.getBoolean("larger", false);
     faceExposure = preferences.getBoolean("faceExposure", true);
     faceLandmarks = preferences.getBoolean("faceLandmarks", false);
+    afArea = Math.max(0, Math.min(AF_AREAS.length - 1, preferences.getInt("afArea", 0)));
+    afLock = preferences.getBoolean("afLock", false);
     timerSeconds = preferences.getInt("timer", 0);
     if (timerSeconds != 3 && timerSeconds != 5) timerSeconds = 0;
     drive = preferences.getInt("drive", timerSeconds == 3 ? 1 : timerSeconds == 5 ? 2 : 0);
@@ -2067,6 +2074,8 @@ public final class MainActivity extends ComponentActivity
             .putBoolean("larger", larger)
             .putBoolean("faceExposure", faceExposure)
             .putBoolean("faceLandmarks", faceLandmarks)
+            .putInt("afArea", afArea)
+            .putBoolean("afLock", afLock)
             .putBoolean("keepRawFiles", keepRawFiles)
             .putInt("timer", timerSeconds)
             .putInt("drive", drive)
@@ -2496,6 +2505,7 @@ public final class MainActivity extends ComponentActivity
     o.histogram = showHistogram && ready ? histogramBins : null;
     o.afX = afX;
     o.afY = afY;
+    o.afArea = afArea;
     o.afState = afFeedback;
     o.busy = busy;
     back.refresh();
@@ -3256,6 +3266,8 @@ public final class MainActivity extends ComponentActivity
   // ───────────────────────────── MENU ─────────────────────────────
 
   private static final String[] MENU_TABS = {"I.Q.", "AF", "SHOOT", "SET UP"};
+  /** The AF area modes, in menu order; the index is the GrainCamera AF_* constant. */
+  private static final String[] AF_AREAS = {"SINGLE", "MULTI", "ZONE", "CENTER", "FACE"};
   private static final String[] MENU_TITLES = {"IMAGE QUALITY", "AF / FACE", "SHOOTING", "SET UP"};
 
   private static final class Item {
@@ -3314,6 +3326,30 @@ public final class MainActivity extends ComponentActivity
           savePrefs();
           pushOsd();
         }, false));
+        items.add(
+            new Item(
+                "AF AREA",
+                () -> AF_AREAS[afArea],
+                d -> {
+                  afArea = (afArea + (d < 0 ? AF_AREAS.length - 1 : 1)) % AF_AREAS.length;
+                  camera.setAfArea(afArea);
+                  camera.update(snapshot());
+                  savePrefs();
+                  pushOsd();
+                },
+                false));
+        items.add(
+            new Item(
+                "AF LOCK",
+                () -> onOff(afLock),
+                d -> {
+                  afLock = !afLock;
+                  camera.setAfLock(afLock);
+                  camera.update(snapshot());
+                  savePrefs();
+                  pushOsd();
+                },
+                false));
         items.add(new Item("FOCUS POINT", () -> afX == .5f && afY == .5f ? "CENTRE" : "MOVED · RESET", d -> {
           afX = .5f;
           afY = .5f;

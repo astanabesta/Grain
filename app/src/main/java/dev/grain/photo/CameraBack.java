@@ -56,7 +56,7 @@ final class CameraBack extends ViewGroup {
     final List<String> icons = new ArrayList<>();
     boolean isoAuto = true, aeLock, grid, showHistogram = true, showLevel = true, busy, infoOff,
         manual, exposureWarn;
-    int battery = -1, afState;
+    int battery = -1, afState, afArea;
     double exposure;
     float level = Float.NaN, afX = .5f, afY = .5f;
     int[] histogram;
@@ -1606,6 +1606,25 @@ final class CameraBack extends ViewGroup {
         c.drawLine(img.centerX() + gap, img.centerY(), img.centerX() + len, img.centerY(), p);
         p.clearShadowLayer();
         c.restore();
+      }
+      if (o.afArea == 1 && img.width() > 0) {
+        // MULTI: the grid the lens searches, drawn where the AF region actually is.
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(Math.max(1, .9f * u));
+        p.setColor(0xb0ffffff);
+        for (int n = 1; n < 3; n++) {
+          c.drawLine(img.left + img.width() * n / 3, img.top, img.left + img.width() * n / 3,
+              img.bottom, p);
+          c.drawLine(img.left, img.top + img.height() * n / 3, img.right, img.top + img.height() * n / 3,
+              p);
+        }
+      }
+      if (o.afArea == 2) {
+        float zs = Math.min(img.width(), img.height()) * .25f;
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(Math.max(1, .9f * u));
+        p.setColor(0xb0ffffff);
+        c.drawRect(ax - zs, ay - zs, ax + zs, ay + zs, p);
       }
       p.setStyle(Paint.Style.STROKE);
       p.setStrokeWidth(Math.max(1, 1.4f * u));
