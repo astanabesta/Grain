@@ -63,6 +63,13 @@ public final class RawDeveloper {
   static final float GRAIN_WEAK = 0.012f, GRAIN_STRONG = 0.020f;
   /** Display-code (B'-Y', R'-Y') direction of OKLab hue ~264 degrees (sky/deep blue). */
   static final float BLUE_U = 0.949f, BLUE_V = -0.314f;
+  /**
+   * Development.FIRST_VERSION (Grain v0.2.0), kept exactly: Color Chrome Effect chroma ramp and
+   * FX Blue hue (~264 degrees) in OKLab, and the largest colour-noise box radius.
+   */
+  static final float FV_CCE_C0 = 0.07f, FV_CCE_C1 = 0.19f, FV_BLUE_A = -0.1045f, FV_BLUE_B = -0.9945f;
+
+  static final int FV_MAX_RADIUS = 4;
   static final int STRIP = 64, HALO = 5, GF_R = 2, NR_TABLE = 256;
   /** Quarter-resolution guided-filter radii (in 4 x 4 blocks) for luma and for chroma. */
   static final int QR = 2, QRC = 3;
@@ -157,9 +164,10 @@ public final class RawDeveloper {
       job.quarter(pool, threads);
       stats.put("quarterMs", Math.round((System.nanoTime() - tq) / 1e6));
       stats.put("quarterDenoiseMs", job.quarterDenoiseMs);
-      stats.put(
-          "chromaNoise",
-          new double[] {round(job.chromaNoiseU, 2), round(job.chromaNoiseV, 2), job.chromaNoiseBlocks});
+      if (!job.firstVersion)
+        stats.put(
+            "chromaNoise",
+            new double[] {round(job.chromaNoiseU, 2), round(job.chromaNoiseV, 2), job.chromaNoiseBlocks});
       AtomicInteger next = new AtomicInteger();
       int strips = (f.height + STRIP - 1) / STRIP;
       List<Callable<Void>> tasks = new ArrayList<>();
@@ -226,6 +234,16 @@ public final class RawDeveloper {
     ToneTable linearCode;
     final float[] nrA, nrB;
     final float nrKeep, sharpen, epsFine;
+    /**
+     * Development.FIRST_VERSION: colour noise box radius (v0.2.0 rule), and whether the luma stage
+     * runs at all (High ISO NR above -4, Sharpness other than -2, or Clarity); sRGB tables for the
+     * OKLab colour effects.
+     */
+    final boolean firstVersion;
+
+    final int nrRadius;
+    boolean fvNoise;
+    final float[] srgbDecode, srgbEncode;
     final float[] debugLuma, debugNoise, debugQuarter;
     final float[] grainA, grainB;
     final int grainOx, grainOy;
@@ -447,10 +465,27 @@ public final class RawDeveloper {
         noiseSource += " x" + HAL_NOISE_SCALE + ", adjusted by frame measurement (" + (int) measured[2] + " bins)";
       } else noiseSource += " x" + HAL_NOISE_SCALE;
       int nrStep = Math.max(-4, Math.min(4, r.noiseReduction));
-      double kNr = Math.max(0, LUMA_NR_K * Math.pow(2, 0.125 * nrStep) * o.lumaNr);
+      firstVersion = r.development == FujiRecipe.Development.FIRST_VERSION;
+      // First version: no luma NR at -4 (as v0.2.0); each step up adds 1/8 of Clean's fine luma NR
+      double lumaShare = firstVersion ? (nrStep + 4) / 8.0 : 1;
+      double kNr = Math.max(0, LUMA_NR_K * Math.pow(2, 0.125 * nrStep) * o.lumaNr * lumaShare);
       nrKeep = (float) Math.max(0, Math.min(0.6, 0.2 - 0.05 * nrStep));
       epsFine = (float) (kNr * kNr);
-      sharpen = (float) (Math.max(0, Math.min(1.2, SHARPEN_BASE + SHARPEN_STEP * r.sharpness)) * o.sharpen);
+      // First version: none at Sharpness -2 (v0.2.0 never sharpened); +-0.1 per step, softer below
+      sharpen =
+          (float)
+              ((firstVersion
+                      ? Math.max(-0.2, Math.min(1.2, SHARPEN_STEP * (r.sharpness + 2)))
+                      : Math.max(0, Math.min(1.2, SHARPEN_BASE + SHARPEN_STEP * r.sharpness)))
+                  * o.sharpen);
+      int isoNr = Math.max(50, f.iso);
+      int baseRadius = isoNr <= 200 ? 1 : isoNr <= 800 ? 2 : isoNr <= 3200 ? 3 : 4;
+      nrRadius =
+          !firstVersion
+              ? 0
+              : r.noiseReduction <= -4
+                  ? baseRadius
+                  : Math.min(FV_MAX_RADIUS, baseRadius + Math.max(0, r.noiseReduction + 4) / 3);
       nrA = new float[NR_TABLE + 1];
       nrB = new float[NR_TABLE + 1];
       noiseTables(curve, gain, nS, nO, NOISE_MIX * NOISE_MIX, nrA, nrB);
@@ -529,7 +564,11 @@ public final class RawDeveloper {
           kNr > 0 ? Math.sqrt(nrKeep * nrKeep + Math.pow((1 - nrKeep) * GF_RESIDUAL, 2)) : 1;
       double noiseOut = lutSlope * sigmaMid * residual;
       double ampEff =
-          amp <= 0 ? 0 : Math.sqrt(Math.max(GRAIN_FLOOR * GRAIN_FLOOR * amp * amp, amp * amp - noiseOut * noiseOut));
+          amp <= 0
+              ? 0
+              : firstVersion
+                  ? amp // v0.2.0: the recipe amount, whatever the sensor noise
+                  : Math.sqrt(Math.max(GRAIN_FLOOR * GRAIN_FLOOR * amp * amp, amp * amp - noiseOut * noiseOut));
       grainAmp = (float) ampEff;
       float sigma = r.grainLarge ? 1.1f : 0.55f;
       float[][] tex = grainTextures(sigma);
@@ -573,6 +612,30 @@ public final class RawDeveloper {
                 + CLIP_BOOST + "x their clipped value (assumption)");
       }
       if (claritySteps != 0) stats.put("clarityModel", "mid-band local contrast, approximation; k=" + round(clarityK, 3));
+      fvNoise = firstVersion && (epsFine > 0 || sharpen != 0 || clarityK != 0);
+      if (firstVersion && post) {
+        srgbDecode = new float[4097];
+        srgbEncode = new float[2049];
+        for (int i = 0; i <= 4096; i++) {
+          double c = i / 4096.0;
+          srgbDecode[i] = (float) (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+        }
+        for (int i = 0; i <= 2048; i++) {
+          double u = i / 2048.0, lin = u * u;
+          srgbEncode[i] = (float) (lin <= 0.0031308 ? 12.92 * lin : 1.055 * Math.pow(lin, 1 / 2.4) - 0.055);
+        }
+      } else {
+        srgbDecode = null;
+        srgbEncode = null;
+      }
+      if (firstVersion) {
+        stats.put(
+            "development",
+            "First version (Grain v0.2.0): colour noise box radius " + nrRadius + ", luma NR share "
+                + round(lumaShare, 3) + ", sharpen " + round(sharpen, 3)
+                + ", full recipe grain, Color Chrome / Color in OKLab");
+        stats.put("chromaNoiseRadius", nrRadius);
+      } else stats.put("development", "Clean");
 
       stats.put("lut", lut.title.isEmpty() ? r.filmSimulation : lut.title);
       stats.put("lutGamut", lut.gamut);
@@ -598,11 +661,46 @@ public final class RawDeveloper {
         buildGlow();
         quarterCodes();
       }
-      quarterDenoise();
+      if (firstVersion) quarterFirstVersion();
+      else quarterDenoise();
       quarterDenoiseMs = Math.round((System.nanoTime() - t) / 1e6);
     }
 
     long quarterDenoiseMs;
+
+    /**
+     * First version: no low-frequency noise reduction (chroma kept as is, luma uncorrected); only
+     * the Clarity band, from the quarter-resolution luma.
+     */
+    void quarterFirstVersion() {
+      int n = qW * qH;
+      java.util.Arrays.fill(kq, 1f);
+      if (clarityK != 0) {
+        if (colSum == null) colSum = new float[qW];
+        band = new float[n];
+        gauss(qY, band, clarityR, new float[n]);
+        for (int i = 0; i < n; i++) band[i] = qY[i] - band[i];
+      }
+      qY = qU = qV = qS = null;
+    }
+
+    float decode(float c) {
+      if (c <= 0) return 0;
+      if (c >= 1) return 1;
+      float p = c * 4096;
+      int i = (int) p;
+      if (i >= 4096) i = 4095;
+      return srgbDecode[i] + (p - i) * (srgbDecode[i + 1] - srgbDecode[i]);
+    }
+
+    float encode(float lin) {
+      if (lin <= 0) return 0;
+      if (lin >= 1) return 1;
+      float p = (float) Math.sqrt(lin) * 2048;
+      int i = (int) p;
+      if (i >= 2048) i = 2047;
+      return srgbEncode[i] + (p - i) * (srgbEncode[i + 1] - srgbEncode[i]);
+    }
 
     /** Codes of each 4 x 4 RAW block: mean R, G, B -> highlight rule -> matrix -> tone. */
     void quarterRows(int by0, int by1) {
@@ -1129,7 +1227,10 @@ public final class RawDeveloper {
       long t1 = System.nanoTime();
       for (int r = 0; r < rowsMid; r++) demosaicRow(r, reflect(y0 - HALO + r, j.H));
       long t2 = System.nanoTime();
-      noise(rowsMid);
+      if (j.firstVersion) {
+        if (j.nrRadius > 0) chromaBlur(rowsMid, j.nrRadius);
+        if (j.fvNoise) noise(rowsMid);
+      } else noise(rowsMid);
       long t3 = System.nanoTime();
       for (int r = 0; r < n; r++) finishRow(r, y0 + r);
       long t4 = System.nanoTime();
@@ -1395,11 +1496,55 @@ public final class RawDeveloper {
 
     int stripY0;
 
+    /**
+     * First version (v0.2.0), unchanged: box-blur the opponent codes (r - Y, b - Y), Y = (r + 2g +
+     * b) / 4 kept, over the strip's own rows (rad <= HALO).
+     */
+    void chromaBlur(int rowsMid, int rad) {
+      float inv = 1f / (2 * rad + 1);
+      for (int r = 0; r < rowsMid; r++) {
+        int o = r * W;
+        float su = 0, sv = 0;
+        for (int k = -rad; k <= rad; k++) {
+          int x = Math.max(0, Math.min(W - 1, k));
+          float Y = 0.25f * (cr[o + x] + 2 * cg[o + x] + cb[o + x]);
+          su += cr[o + x] - Y;
+          sv += cb[o + x] - Y;
+        }
+        for (int x = 0; x < W; x++) {
+          tu[o + x] = su * inv;
+          tv[o + x] = sv * inv;
+          int xa = Math.min(W - 1, x + rad + 1), xr = Math.max(0, x - rad);
+          float Ya = 0.25f * (cr[o + xa] + 2 * cg[o + xa] + cb[o + xa]);
+          float Yr = 0.25f * (cr[o + xr] + 2 * cg[o + xr] + cb[o + xr]);
+          su += (cr[o + xa] - Ya) - (cr[o + xr] - Yr);
+          sv += (cb[o + xa] - Ya) - (cb[o + xr] - Yr);
+        }
+      }
+      for (int r = HALO; r < rowsMid - HALO; r++) {
+        int o = r * W;
+        for (int x = 0; x < W; x++) {
+          float su = 0, sv = 0;
+          for (int k = -rad; k <= rad; k++) {
+            int q = (r + k) * W + x;
+            su += tu[q];
+            sv += tv[q];
+          }
+          float Y = 0.25f * (cr[o + x] + 2 * cg[o + x] + cb[o + x]);
+          float rr = Y + su * inv, bb2 = Y + sv * inv;
+          cr[o + x] = rr;
+          cb[o + x] = bb2;
+          cg[o + x] = (4 * Y - rr - bb2) * 0.5f;
+        }
+      }
+    }
+
     /** 4) LUT, colour effects, grain -> ARGB for one output row. */
     void finishRow(int r, int y) {
       final float amp = j.grainAmp;
       final float[] ga = j.grainA, gb = j.grainB;
       final boolean post = j.post, cce = j.cceDepth > 0 || j.blueDepth > 0, mono = j.monoFilter;
+      final boolean fv = j.firstVersion;
       final float chroma = j.chroma, cceDepth = j.cceDepth, blueDepth = j.blueDepth;
       int src = (r + HALO) * W, dst = r * W;
       int rowA = ((y + j.grainOy) & 1023) << 10, rowB = j.mod997[y + j.grainOy] * 997;
@@ -1408,7 +1553,41 @@ public final class RawDeveloper {
         j.lut.sample(cr[src + x], cg[src + x], cb[src + x], lutOut);
         float vr = lutOut[0], vg = lutOut[1], vb = lutOut[2];
         if (mono) vr = vg = vb = j.filterMono(cr[src + x], cg[src + x], cb[src + x], vg);
-        if (post) {
+        if (post && fv) {
+          // First version (v0.2.0), unchanged: Color Chrome Effect / FX Blue / Color in OKLab
+          float lr = j.decode(vr), lg = j.decode(vg), lb = j.decode(vb);
+          float l = (float) Math.cbrt(0.4122214708f * lr + 0.5363325363f * lg + 0.0514459929f * lb);
+          float mm = (float) Math.cbrt(0.2119034982f * lr + 0.6806995451f * lg + 0.1073969566f * lb);
+          float s = (float) Math.cbrt(0.0883024619f * lr + 0.2817188376f * lg + 0.6299787005f * lb);
+          float L = 0.2104542553f * l + 0.7936177850f * mm - 0.0040720468f * s;
+          float A = 1.9779984951f * l - 2.4285922050f * mm + 0.4505937099f * s;
+          float Bb = 0.0259040371f * l + 0.7827717662f * mm - 0.8086757660f * s;
+          if (cce) {
+            float C = (float) Math.sqrt(A * A + Bb * Bb);
+            float w = C <= FV_CCE_C0 ? 0 : C >= FV_CCE_C1 ? 1 : (C - FV_CCE_C0) / (FV_CCE_C1 - FV_CCE_C0);
+            w = w * w * (3 - 2 * w);
+            float dL = cceDepth * w;
+            if (blueDepth > 0 && C > 1e-4f) {
+              float hb = (A * FV_BLUE_A + Bb * FV_BLUE_B) / C;
+              if (hb > 0) {
+                hb *= hb;
+                dL += blueDepth * w * hb * hb;
+              }
+            }
+            L -= dL * L;
+          }
+          A *= chroma;
+          Bb *= chroma;
+          float l2 = L + 0.3963377774f * A + 0.2158037573f * Bb;
+          float m2 = L - 0.1055613458f * A - 0.0638541728f * Bb;
+          float s2 = L - 0.0894841775f * A - 1.2914855480f * Bb;
+          l2 = l2 * l2 * l2;
+          m2 = m2 * m2 * m2;
+          s2 = s2 * s2 * s2;
+          vr = j.encode(4.0767416621f * l2 - 3.3077115913f * m2 + 0.2309699292f * s2);
+          vg = j.encode(-1.2684380046f * l2 + 2.6097574011f * m2 - 0.3413193965f * s2);
+          vb = j.encode(-0.0041960863f * l2 - 0.7034186147f * m2 + 1.7076147010f * s2);
+        } else if (post) {
           // display-code opponent space (BT.709 luma): cheap stand-in for a perceptual space
           float Yd = 0.2126f * vr + 0.7152f * vg + 0.0722f * vb;
           float u = vb - Yd, v = vr - Yd;

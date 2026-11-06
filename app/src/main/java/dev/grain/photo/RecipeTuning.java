@@ -88,7 +88,8 @@ final class RecipeTuning {
         .put("bloom", t.bloom)
         .put("whiteBalance", t.wbMode.name())
         .put("kelvin", t.kelvin)
-        .put("filter", t.monoFilter);
+        .put("filter", t.monoFilter)
+        .put("development", t.development.name());
   }
 
   /** Reads saved settings over the film's defaults; missing or unknown values keep the default. */
@@ -120,6 +121,12 @@ final class RecipeTuning {
     }
     t.kelvin = j.optInt("kelvin", t.kelvin);
     t.monoFilter = j.optInt("filter", t.monoFilter);
+    // settings saved before v0.3.1 have no "development": they keep the film's default
+    try {
+      t.development = FujiRecipe.Development.valueOf(j.optString("development", t.development.name()));
+    } catch (IllegalArgumentException ignored) {
+      // keep the default
+    }
     return t;
   }
 }

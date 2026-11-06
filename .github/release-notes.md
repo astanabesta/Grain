@@ -1,23 +1,22 @@
-## Grain Photo vVERSION — six more Fujifilm recipes (device-test beta)
+## Grain Photo vVERSION — Reggie's Portra as in the first version (device-test beta)
 
 Install **Grain-vVERSION.apk** on the Redmi Note 13 Pro+.
-- **From v0.2.1, v0.2.2 or v0.2.3:** it installs as an update. Your photos, imported LUTs and tuning stay.
+- **From v0.2.1 – v0.3.0:** it installs as an update. Your photos, imported LUTs and tuning stay.
 - **From v0.2.0 or older:** first save the photos you want to keep (photo → **Save to device gallery**), uninstall Grain, install this APK, then re-import the LUT pack (*Tune → Import LUT pack*).
 
-### New recipes (from RAW, published settings as default)
-- **Kodak Gold 200**, **Kodachrome 64**, **Vibrant Arizona** (Classic Chrome), **Pacific Blues** (Classic Neg.), **CineStill 800T** (Eterna) and **Kodak Tri-X 400** (Acros), from Fuji X Weekly. They need the same Fujifilm LUT pack you already imported.
-- Recipes now come right after Reggie's Portra, before the plain film simulations.
-- Selecting a recipe shows its typical exposure compensation (for example +2/3 to +1 EV for Gold 200). It's a guide only: set it with the exposure control if you want it.
+### Reggie's Portra develops like v0.2.0 again
+- Same development as the first version you liked: colour noise reduction only, no sharpening at the recipe's Sharpness −2, and the full grain. The picture is grittier and more like film than v0.2.1–v0.3.0.
+- It is the v0.2.0 code path, kept exactly: on the test RAW, Reggie's Portra comes out bit-identical to Grain v0.2.0. A test keeps it that way.
+- Reggie's published settings are unchanged. Everything added since v0.2.0 stays: the speed-up, upright sideways photos, tuning, white balance, D-Range Priority, Halation and Bloom (Off).
 
-### New settings for every film (Tune)
-- **White balance:** Auto, Daylight, Shade, Fluorescent 1/2/3, Incandescent and Kelvin (Color temperature 2500–10000 K). Fujifilm doesn't publish its preset values, so Grain uses white points measured from Fujifilm's own RAW files. WB shift works in every mode. A fixed white balance shows the light's real colour, like the camera does: CineStill 800T is made for lamps and turns teal in daylight.
-- **D-Range Priority** Weak and Strong. As on the camera, it sets Highlight and Shadow itself, so those rows show "Set by DR-P".
-- **Filter** for Acros films: +Ye, +R or +G (Tri-X starts with none). Color, Color Chrome and FX Blue don't change a black-and-white picture, so they're hidden for Acros.
-- The viewfinder now follows a fixed white balance with the nearest phone preset. The photo itself uses the exact white point.
+### New setting: Development (Tune → Grain extras)
+- **First version** (as Grain v0.2.0) or **Clean** (v0.2.1 and later: stronger noise reduction and sharpening), for every film.
+- Reggie's Portra starts on First version, every other film on Clean. *Reset this look* goes back to that.
+- On First version, raising High ISO NR adds luminance noise reduction step by step, and Sharpness above −2 sharpens (below −2 softens).
+- Other films and Reggie's Portra on Clean develop exactly as in v0.3.0.
 
 ### Good to know
-- Reggie's Portra and the plain film simulations develop exactly as in v0.2.3.
-- D-Range Priority, the Acros filters, Dynamic range, WB shift, Clarity, Grain, Color Chrome, FX Blue, Halation and Bloom are Grain's approximations of camera processing. The white-balance presets are measured, with about ±150 K uncertainty. The film simulation itself is Fujifilm's own LUT.
-- Most useful feedback: the fixed-white-balance recipes in daylight and under lamps, each with the DNG + receipt.
+- Your saved tuning is kept. Older tuning has no Development value, so it uses the film's default (First version for Reggie's Portra).
+- Most useful feedback: a few Reggie's Portra shots, each with the DNG + receipt. The receipt now records the development.
 
 This is a personal device-test build, signed with the project's personal key (certificate SHA-256 6e073ef6…). SHA256SUMS.txt verifies the APK download.

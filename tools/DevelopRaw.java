@@ -27,7 +27,9 @@ import java.util.Map;
  * little-endian float32, Camera2 order) with shadingRows/shadingCols, and noise (8 values: S,O per CFA
  * position, row-major). System properties: -Dgrain=true, -Dseed=N, -Dthreads=N, -Dev=EV, -Dnr=scale,
  * -Dsharpen=scale, -Dhalation=0..10, -Dbloom=0..10, -Dclarity=-5..5, -Drecipe=key, -Dwb=DAYLIGHT|KELVIN|...,
- * -Dkelvin=K, -Ddr=DR400|DRP_STRONG|..., -Dfilter=0..3, -DshiftR/-DshiftB=-9..9, -Dhl/-Dsh=tone, -Ddebug=file (pre-NR luma codes then modelled noise variance, float32 planes).
+ * -Dkelvin=K, -Ddr=DR400|DRP_STRONG|..., -Dfilter=0..3, -DshiftR/-DshiftB=-9..9, -Dhl/-Dsh=tone,
+ * -Ddevelopment=CLEAN|FIRST_VERSION, -Dsharpness=-4..4 and -DhighIsoNr=-4..4 (recipe settings),
+ * -Ddebug=file (pre-NR luma codes then modelled noise variance, float32 planes).
  */
 public final class DevelopRaw {
   public static void main(String[] args) throws Exception {
@@ -91,7 +93,8 @@ public final class DevelopRaw {
     if ("reggie".equals(wanted)) recipe = FujiRecipe.REGGIES_PORTRA;
     for (FujiRecipe p : FujiRecipe.PUBLISHED) if (p.key.equals(wanted)) recipe = p;
     if (wanted.startsWith("sim-")) recipe = FujiRecipe.standard(wanted.substring(4).toUpperCase(java.util.Locale.ROOT), wanted);
-    String[] tuned = {"halation", "bloom", "clarity", "wb", "kelvin", "dr", "filter", "shiftR", "shiftB", "hl", "sh"};
+    String[] tuned = {"halation", "bloom", "clarity", "wb", "kelvin", "dr", "filter", "shiftR", "shiftB", "hl", "sh",
+        "development", "sharpness", "highIsoNr"};
     boolean any = false;
     for (String k : tuned) any |= System.getProperty(k) != null;
     if (any) {
@@ -107,6 +110,10 @@ public final class DevelopRaw {
       t.wbShiftBlue = Integer.getInteger("shiftB", t.wbShiftBlue);
       if (System.getProperty("hl") != null) t.highlight = Double.parseDouble(System.getProperty("hl"));
       if (System.getProperty("sh") != null) t.shadow = Double.parseDouble(System.getProperty("sh"));
+      if (System.getProperty("development") != null)
+        t.development = FujiRecipe.Development.valueOf(System.getProperty("development"));
+      t.sharpness = Integer.getInteger("sharpness", t.sharpness);
+      t.noiseReduction = Integer.getInteger("highIsoNr", t.noiseReduction);
       recipe = recipe.with(t);
     }
     System.out.println("recipe=" + recipe.key + " " + java.util.Arrays.deepToString(recipe.settings()));
