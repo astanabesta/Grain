@@ -44,10 +44,11 @@ public final class Recipe {
     };
     // Each Fujifilm film simulation on its own (ids stay fixed: never reorder, only append).
     String[][] sims = FujiRecipe.SIMULATIONS;
-    // Published recipes after the simulations (ids 17..22).
+    // Published recipes after the simulations (ids 17..23; append only).
     FujiRecipe[] recipes = {
       FujiRecipe.KODAK_GOLD_200, FujiRecipe.KODACHROME_64, FujiRecipe.PACIFIC_BLUES,
-      FujiRecipe.VIBRANT_ARIZONA, FujiRecipe.CINESTILL_800T, FujiRecipe.KODAK_TRI_X_400
+      FujiRecipe.VIBRANT_ARIZONA, FujiRecipe.CINESTILL_800T, FujiRecipe.KODAK_TRI_X_400,
+      FujiRecipe.REGGIES_SUPERIA
     };
     String[] looks = {
       "Ritchie Roesch’s published recipe: golden warmth, nostalgic yellows and reds.",
@@ -58,7 +59,9 @@ public final class Recipe {
       "Ritchie Roesch’s published recipe for artificial light: cool night ambience against coloured"
           + " lights, soft and grainy.",
       "Anders Lindborg’s recipe (Ritchie Roesch’s X100V version): gritty, textured black and white with"
-          + " strong shadows."
+          + " strong shadows.",
+      "Reggie Ballesteros’ published Fujifilm recipe: Classic Negative, moodier, grainier and more"
+          + " contrasty than his Portra, made for rich skin tones in directional light."
     };
     Recipe[] all = new Recipe[fixed.length + sims.length + recipes.length];
     System.arraycopy(fixed, 0, all, 0, fixed.length);
@@ -88,17 +91,33 @@ public final class Recipe {
   }
 
   /**
-   * The order films are listed in: the ISP looks, the published recipes (Reggie's Portra first),
-   * then the plain film simulations. Ids are unchanged.
+   * The order films are listed in: the ISP looks, the published recipes in FujiRecipe.PUBLISHED
+   * order (Reggie's Portra and Reggie's Superia first), then the plain film simulations. Ids are
+   * unchanged; a recipe missing from PUBLISHED still appears, after the listed ones.
    */
   public static final Recipe[] DISPLAY_ORDER = displayOrder();
 
   private static Recipe[] displayOrder() {
     Recipe[] out = new Recipe[ALL.length];
+    boolean[] placed = new boolean[ALL.length];
     int n = 0;
-    for (Recipe r : ALL) if (!r.raw) out[n++] = r;
-    for (Recipe r : ALL) if (r.raw && !r.standard) out[n++] = r;
-    for (Recipe r : ALL) if (r.raw && r.standard) out[n++] = r;
+    for (Recipe r : ALL)
+      if (!r.raw) {
+        out[n++] = r;
+        placed[r.id] = true;
+      }
+    for (FujiRecipe p : FujiRecipe.PUBLISHED)
+      for (Recipe r : ALL)
+        if (!placed[r.id] && r.raw && !r.standard && r.fuji.key.equals(p.key)) {
+          out[n++] = r;
+          placed[r.id] = true;
+        }
+    for (Recipe r : ALL)
+      if (!placed[r.id] && r.raw && !r.standard) {
+        out[n++] = r;
+        placed[r.id] = true;
+      }
+    for (Recipe r : ALL) if (!placed[r.id]) out[n++] = r;
     return out;
   }
 

@@ -8,8 +8,8 @@ import org.json.JSONObject;
 
 /**
  * Per-film tuning of the RAW films, saved as JSON under "tune.&lt;film key&gt;". A film without saved
- * tuning develops with its default: the published recipe (Reggie's Portra), or Fujifilm's standard
- * settings for a film simulation on its own. Settings equal to the default are not stored.
+ * tuning develops with its default: the published recipe (such as Reggie's Portra), or Fujifilm's
+ * standard settings for a film simulation on its own. Settings equal to the default are not stored.
  */
 final class RecipeTuning {
   private final SharedPreferences prefs;

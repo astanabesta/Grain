@@ -2,6 +2,8 @@
 
 **A separate, native Android recipe camera for your Redmi Note 13 Pro Plus.**
 
+**v0.3.2 — Reggie's Superia:** Reggie Ballesteros' new Classic Negative recipe (Fuji X Weekly, March 2026), developed from RAW with Fujifilm's official Classic Neg. LUT at its published settings: DR-Auto, Auto WB R+1 B−3, Highlight −2, Shadow −1, Color +1, Sharpness −2, NR −4, Clarity 0, Grain Strong/Large, Color Chrome Strong, FX Blue Strong, and no typical exposure (at Reggie's request). It is moodier, grainier and more contrasty than his Portra, and is listed right after it. Like Reggie's Portra it starts on *Development: First version*; *Clean* is one tap away in the Grain extras.
+
 **v0.3.1 — Reggie's Portra as in the first version:** Reggie's Portra develops exactly like Grain v0.2.0 again (bit-identical on the test RAW): colour noise reduction only, no sharpening at the recipe's Sharpness −2 and the full grain, so the picture is grittier and more like film. This is the new **Development** setting (Grain extras: *First version* or *Clean*) for every film; Reggie's Portra starts on First version, every other film on Clean, and High ISO NR and Sharpness keep working in both. Everything else from v0.2.1–v0.3.0 stays (speed, upright photos, tuning, white balance, DR-P, extras). See [Development](docs/RAW_FUJI_RECIPES.md#development-first-version-and-clean-v031).
 
 **v0.3.0 — six more Fujifilm recipes:** Kodak Gold 200, Kodachrome 64, Pacific Blues, Vibrant Arizona, CineStill 800T and Kodak Tri-X 400 (Fuji X Weekly), developed from RAW with their published settings as the default and listed right after Reggie's Portra. The settings they need are new for every film: fixed **white balance** (Daylight, Shade, Fluorescent 1–3, Incandescent, Kelvin 2500–10000 K) using Fujifilm's preset white points measured from Fujifilm RAW files, **D-Range Priority** Weak/Strong, and the Acros **+Ye/+R/+G** filters. The recipe's typical exposure compensation is shown as a guide (never applied automatically). Fixed-white-balance films preview with the nearest phone preset. See [RAW Fujifilm recipes](docs/RAW_FUJI_RECIPES.md).
@@ -30,7 +32,7 @@ This repository now contains the standalone Grain project. The previous project'
 
 1. Open **Actions → Build and Release Grain APK** in this repository.
 2. A push to `main` starts the build automatically. You can also choose **Run workflow**.
-3. After a green run, download the APK from the newest **GitHub Release** (v0.3.1). The Actions artifact **grain-photo-N** is also retained.
+3. After a green run, download the APK from the newest **GitHub Release** (v0.3.2). The Actions artifact **grain-photo-N** is also retained.
 4. Install the release APK directly. If using the Actions artifact instead, extract its ZIP first.
 5. Allow installation from your browser/file manager when Android asks, then grant **Camera** access.
 
