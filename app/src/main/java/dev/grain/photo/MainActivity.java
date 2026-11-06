@@ -6,9 +6,13 @@ import android.content.*;
 import android.content.pm.PackageManager;
 import android.graphics.*;
 import android.graphics.drawable.GradientDrawable;
+import android.media.MediaActionSound;
 import android.net.Uri;
 import android.os.*;
 import android.provider.Settings;
+import android.text.Editable;
+import android.text.TextWatcher;
+import android.util.TypedValue;
 import android.view.*;
 import android.widget.*;
 import androidx.activity.ComponentActivity;
@@ -23,10 +27,13 @@ import java.io.File;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.IntConsumer;
+import java.util.function.Supplier;
 import org.json.JSONObject;
 
 /** Grain's single-camera-screen interaction design, implemented without Flutter or a WebView. */
-public final class MainActivity extends ComponentActivity implements GrainCamera.Listener {
+public final class MainActivity extends ComponentActivity
+    implements GrainCamera.Listener, CameraBack.Host {
   private static final int PAPER = 0xfff4f1e8,
       INK = 0xff303c29,
       MUTED = 0xff87917c,
@@ -34,24 +41,57 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
       LINE = 0xffd6ddca;
   private final Handler main = new Handler(Looper.getMainLooper());
   private final ExecutorService files = Executors.newSingleThreadExecutor();
-  private FrameLayout root, stage, frame, cameraToolLayer;
-  private String cameraTool;
-  private SeekBar activeZoomRange;
-  private TextView activeZoomValue, activeZoomNote;
-  private LinearLayout cameraPage, panel;
+  private FrameLayout root, frame, ui;
+  /** The camera back (dials, screen, buttons); turned with the phone inside {@link #ui}. */
+  private CameraBack back;
+  private LinearLayout panel;
   private TextureView texture;
-  private GridOverlay overlay;
-  private TextView filmLabel,
-      ratioButton,
-      zoomButton,
-      exposureButton,
-      timerButton,
-      tuneButton,
-      status,
-      shutter,
-      photoButton,
-      photoBadge;
-  private LinearLayout filmRow;
+  /** Status line: never shown itself, the camera's screen shows it while working. */
+  private TextView status;
+  /** The camera back's shutter button (shows the self-timer count). */
+  private TextView shutter;
+  /** What the camera's screen shows: camera, q (quick menu), menu or play. */
+  private String mode = "camera";
+  private int drive, dispMode, viewMode, finish, uiRotation, deviceRotation, afFeedback, isoSetting;
+  private long shutterNs;
+  private boolean evf, powerOn = true, aeLock, isoDial, evCustom, sounds = true, showHistogram = true,
+      showLevel = true, autoRotate = true, halfPressed, halfClosedOverlay, neutralHeld;
+  private float afX = .5f, afY = .5f, levelSmooth = Float.NaN;
+  private long[] shutterValues = SHUTTER_NS;
+  private int[] isoValues = ISO_STEPS;
+  private Recipe[] dialFilms = new Recipe[0];
+  private Recipe[] bracketFilms;
+  private GrainCamera.Meter lastMeter;
+  private MediaActionSound sound;
+  private Bitmap histogramBitmap;
+  private int[] histogramPixels;
+  private int batteryLevel = -1, frameCount = -1, histogramTicks;
+  private int previewLeft = Integer.MIN_VALUE, previewTop, previewWidth, previewHeight;
+  private int safeTop, safeBottom;
+  private int qIndex, menuTab, menuIndex, playIndex;
+  private final List<PhotoStore.Photo> playList = new ArrayList<>();
+  private ImageView playImage;
+  private TextView playInfo, playReceipt;
+  private final List<TextView[]> qTiles = new ArrayList<>();
+  private TextView qName, qValue, qKelvinValue;
+  private LinearLayout qKelvinRow, menuList;
+  private ScrollView menuScroll;
+  private TextView[] menuTabs;
+  private TextView menuTitle;
+  private static final long[] SHUTTER_NS = {
+    250_000L, 500_000L, 1_000_000L, 2_000_000L, 4_000_000L, 8_000_000L, 16_666_667L, 33_333_333L,
+    66_666_667L, 125_000_000L, 250_000_000L, 500_000_000L, 1_000_000_000L
+  };
+  private static final int[] ISO_STEPS = {
+    50, 64, 80, 100, 125, 160, 200, 250, 320, 400, 500, 640, 800, 1000, 1250, 1600, 2000, 2500, 3200,
+    4000, 5000, 6400, 8000, 10000, 12800
+  };
+  private static final String[] DRIVES = {"SINGLE", "TIMER 3S", "TIMER 5S", "FS BKT"};
+  private static final String[] VIEW_MODES = {"EYE SENSOR", "EVF ONLY", "LCD ONLY"};
+  private static final String[] EV_LABELS = {
+    "−2", "−1⅔", "−1⅓", "−1", "−⅔", "−⅓", "0", "+⅓", "+⅔", "+1", "+1⅓", "+1⅔", "+2", "C"
+  };
+  private static final int EV_C = 13;
   private ScrollView panelScroll;
   private GrainCamera camera;
   private OrientationEventListener orientationListener;
@@ -81,10 +121,8 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
       resumed,
       permissionAsked;
   private int sourceWidth = 3060, sourceHeight = 4080;
-  private long blockFocusUntil;
   private int countdownToken;
   private boolean counting;
-  private ScaleGestureDetector scaleDetector;
   private PhotoStore.Photo pendingDelete;
   private LinearLayout snackbar;
   private Runnable purgeTask;
@@ -112,20 +150,30 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     });
     camera = new GrainCamera(this, texture, this);
     camera.setFaceDetection(faceExposure);
+    sound = new MediaActionSound();
+    sound.load(MediaActionSound.SHUTTER_CLICK);
+    sound.load(MediaActionSound.FOCUS_COMPLETE);
     orientationListener =
         new OrientationEventListener(this) {
           int last = -1;
 
           @Override
           public void onOrientationChanged(int degrees) {
-            if (degrees == ORIENTATION_UNKNOWN) return;
+            if (degrees == ORIENTATION_UNKNOWN) {
+              level(Float.NaN);
+              return;
+            }
+            // Electronic level: the phone's tilt from the edge the camera back is drawn upright on.
+            level(((degrees - uiRotation + 540) % 360) - 180);
             // 20-degree hysteresis around the diagonals so a slight tilt does not flip it.
             if (last >= 0) {
               int d = Math.abs(((degrees - last + 540) % 360) - 180);
               if (d < 65) return;
             }
             last = ((degrees + 45) / 90 * 90) % 360;
+            deviceRotation = last;
             if (camera != null) camera.setDeviceRotation(last);
+            applyUiRotation(last, true);
           }
         };
     applyRawFilesPreference();
@@ -157,289 +205,141 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
 
   private void build() {
     root = new FrameLayout(this);
-    root.setBackgroundColor(PAPER);
+    root.setBackgroundColor(0xff000000);
     setContentView(root);
+    Window window = getWindow();
+    WindowManager.LayoutParams attrs = window.getAttributes();
+    attrs.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+    window.setAttributes(attrs);
+    immersive();
     root.setOnApplyWindowInsetsListener(
         (v, insets) -> {
+          int top = 0, bottom = 0;
+          DisplayCutout cutout = insets.getDisplayCutout();
+          if (cutout != null) {
+            top = cutout.getSafeInsetTop();
+            bottom = cutout.getSafeInsetBottom();
+          }
           if (Build.VERSION.SDK_INT >= 30) {
-            Insets i = insets.getInsets(WindowInsets.Type.systemBars());
-            root.setPadding(i.left, i.top, i.right, i.bottom);
-          } else
-            root.setPadding(
-                insets.getSystemWindowInsetLeft(),
-                insets.getSystemWindowInsetTop(),
-                insets.getSystemWindowInsetRight(),
-                insets.getSystemWindowInsetBottom());
+            Insets bars = insets.getInsetsIgnoringVisibility(WindowInsets.Type.systemBars());
+            top = Math.max(top, bars.top);
+            bottom = Math.max(bottom, bars.bottom);
+          } else {
+            top = Math.max(top, insets.getStableInsetTop());
+            bottom = Math.max(bottom, insets.getStableInsetBottom());
+          }
+          safeTop = top;
+          safeBottom = bottom;
+          if (panel != null) panel.setPadding(0, safeTop, 0, safeBottom);
           return insets;
         });
     root.requestApplyInsets();
-    cameraPage = column();
-    root.addView(cameraPage, new FrameLayout.LayoutParams(-1, -1));
-    LinearLayout header = row();
-    header.setPadding(dp(20), dp(6), dp(17), dp(6));
-    cameraPage.addView(header, new LinearLayout.LayoutParams(-1, dp(62)));
-    TextView logo = text("grain.", 31, INK);
-    android.text.SpannableString brand = new android.text.SpannableString("grain.");
-    brand.setSpan(new android.text.style.ForegroundColorSpan(ORANGE), 5, 6, 0);
-    logo.setText(brand);
-    logo.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
-    logo.setTypeface(Typeface.create("serif", Typeface.BOLD));
-    header.addView(logo, new LinearLayout.LayoutParams(0, -1, 1));
-    timerButton =
-        button(
-            "◷",
-            19,
-            () -> {
-              if (counting) {
-                cancelTimer();
-                return;
-              }
-              timerSeconds = timerSeconds == 0 ? 3 : timerSeconds == 3 ? 5 : 0;
-              savePrefs();
-              updateLabels();
-              message(
-                  timerSeconds == 0
-                      ? "Timer off"
-                      : timerSeconds + " second timer · tap shutter again to cancel");
-            });
-    timerButton.setContentDescription("Cycle self timer: off, three, five seconds");
-    header.addView(timerButton, size(38, 40));
-    TextView settings = iconButton("settings", INK, 21, this::showSettings);
-    settings.setContentDescription("Camera preferences");
-    header.addView(settings, size(40, 43));
-    stage = new FrameLayout(this);
-    stage.setBackground(bg(0xff20281e, 6, 0, 0));
-    LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(-1, 0, 1);
-    sl.setMargins(dp(11), 0, dp(11), 0);
-    cameraPage.addView(stage, sl);
-    stage.setClipChildren(true);
-    stage.setClipToOutline(true);
+    // The preview sits in screen coordinates (never rotated) exactly under the camera back's screen.
     frame = new FrameLayout(this);
-    frame.setClipChildren(true);
-    stage.addView(frame, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+    frame.setBackgroundColor(0xff000000);
     texture = new TextureView(this);
     frame.addView(texture, new FrameLayout.LayoutParams(-1, -1));
-    overlay = new GridOverlay();
-    frame.addView(overlay, new FrameLayout.LayoutParams(-1, -1));
-    LinearLayout top = row();
-    top.setPadding(dp(12), dp(12), dp(12), 0);
-    stage.addView(top, new FrameLayout.LayoutParams(-1, dp(46), Gravity.TOP));
-    filmLabel = text("DAYLIGHT / ISP", 8, PAPER);
-    filmLabel.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
-    filmLabel.setLetterSpacing(.12f);
-    filmLabel.setBackground(bg(0x88303c29, 18, 0, 0));
-    filmLabel.setPadding(dp(9), 0, dp(9), 0);
-    top.addView(filmLabel, new LinearLayout.LayoutParams(-2, dp(25)));
-    top.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
-    TextView gridButton =
-        tool(
-            "▦",
-            () -> {
-              grid = !grid;
-              savePrefs();
-              overlay.invalidate();
-            });
-    GrainStyle.icon(gridButton, "thirds", PAPER, 15);
-    gridButton.setPadding(dp(9), 0, 0, 0);
-    gridButton.setContentDescription("Toggle composition grid");
-    LinearLayout.LayoutParams gp = size(33, 30);
-    gp.setMargins(dp(8), 0, dp(6), 0);
-    top.addView(gridButton, gp);
-    ratioButton = tool("3:4⌄", this::showRatio);
-    ratioButton.setContentDescription("Choose photo aspect ratio");
-    top.addView(ratioButton, size(52, 30));
-    LinearLayout bottom = row();
-    bottom.setPadding(dp(12), 0, dp(12), dp(12));
-    stage.addView(bottom, new FrameLayout.LayoutParams(-1, dp(46), Gravity.BOTTOM));
-    exposureButton = tool("☀ 0.0", this::showExposure);
-    exposureButton.setContentDescription("Adjust exposure compensation");
-    bottom.addView(exposureButton, size(65, 30));
-    View spacer = new View(this);
-    bottom.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1));
-    TextView one = tool("1×", () -> setZoom(1));
-    one.setContentDescription("One times digital zoom");
-    one.setOnLongClickListener(
-        v -> {
-          showZoom();
-          return true;
-        });
-    LinearLayout zoomPill = row();
-    zoomPill.setPadding(dp(4), dp(4), dp(4), dp(4));
-    zoomPill.setBackground(bg(0x99575e4e, 30, 0x44ffffff, 1));
-    one.setBackground(null);
-    zoomPill.addView(one, size(28, 27));
-    zoomButton = tool("1.0×⌄", this::showZoom);
-    zoomButton.setContentDescription("Adjust digital zoom");
-    zoomButton.setBackground(bg(PAPER, 20, 0, 0));
-    zoomButton.setTextColor(INK);
-    zoomButton.setTypeface(Typeface.MONOSPACE);
-    zoomPill.addView(zoomButton, size(49, 27));
-    TextView two = tool("2×", () -> setZoom(2));
-    two.setContentDescription("Two times digital zoom");
-    two.setOnLongClickListener(
-        v -> {
-          showZoom();
-          return true;
-        });
-    two.setBackground(null);
-    zoomPill.addView(two, size(28, 27));
-    bottom.addView(zoomPill, new LinearLayout.LayoutParams(-2, -2));
-    stage.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> layoutFrame());
-    scaleDetector =
-        new ScaleGestureDetector(
-            this,
-            new ScaleGestureDetector.SimpleOnScaleGestureListener() {
-              @Override
-              public boolean onScaleBegin(ScaleGestureDetector d) {
-                blockFocusUntil = SystemClock.uptimeMillis() + 800;
-                return !busy;
-              }
-
-              @Override
-              public boolean onScale(ScaleGestureDetector d) {
-                setZoom(zoom * d.getScaleFactor());
-                blockFocusUntil = SystemClock.uptimeMillis() + 800;
-                return true;
-              }
-            });
-    frame.setOnTouchListener(
-        new View.OnTouchListener() {
-          float x, y;
+    root.addView(frame, new FrameLayout.LayoutParams(0, 0, Gravity.TOP | Gravity.START));
+    ui = new FrameLayout(this);
+    root.addView(ui, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+    back = new CameraBack(this, this);
+    back.setMappingRoot(root);
+    ui.addView(back, new FrameLayout.LayoutParams(-1, -1));
+    shutter = back.shutter;
+    status = new TextView(this);
+    status.addTextChangedListener(
+        new TextWatcher() {
+          @Override
+          public void beforeTextChanged(CharSequence text, int start, int count, int after) {}
 
           @Override
-          public boolean onTouch(View v, android.view.MotionEvent e) {
-            scaleDetector.onTouchEvent(e);
-            if (e.getPointerCount() > 1) blockFocusUntil = SystemClock.uptimeMillis() + 800;
-            if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
-              x = e.getX();
-              y = e.getY();
-            }
-            if (e.getActionMasked() == MotionEvent.ACTION_UP
-                && !scaleDetector.isInProgress()
-                && SystemClock.uptimeMillis() > blockFocusUntil
-                && Math.hypot(e.getX() - x, e.getY() - y) < dp(16)
-                && !busy) {
-              double px = e.getX() / frame.getWidth(), py = e.getY() / frame.getHeight();
-              double[] mapped = Framing.sourcePoint(px, py, sourceWidth, sourceHeight, ratio, zoom);
-              int rotation = 0;
-              try {
-                rotation = capabilities.optInt("sensorOrientation", 90);
-              } catch (Exception ignored) {
-              }
-              double sx = mapped[0], sy = mapped[1];
-              if (rotation == 90) {
-                sx = mapped[1];
-                sy = 1 - mapped[0];
-              } else if (rotation == 270) {
-                sx = 1 - mapped[1];
-                sy = mapped[0];
-              } else if (rotation == 180) {
-                sx = 1 - sx;
-                sy = 1 - sy;
-              }
-              camera.focus(sx, sy);
-              overlay.focus(e.getX(), e.getY());
-              v.performClick();
-            }
-            return true;
+          public void onTextChanged(CharSequence text, int start, int before, int count) {}
+
+          @Override
+          public void afterTextChanged(Editable text) {
+            if (back == null) return;
+            back.state.status = text.toString();
+            back.state.busy = busy;
+            back.lamp.set(busy ? 2 : counting ? 3 : 0);
+            back.refresh();
           }
         });
-    HorizontalScrollView strip = new HorizontalScrollView(this);
-    strip.setHorizontalScrollBarEnabled(false);
-    strip.setFillViewport(true);
-    filmRow = row();
-    filmRow.setPadding(dp(10), 0, dp(10), 0);
-    strip.addView(filmRow);
-    cameraPage.addView(strip, new LinearLayout.LayoutParams(-1, dp(53)));
+    back.setFinish(finish);
+    back.setIsoMode(isoDial);
+    back.setPhotoRatio(Framing.portraitRatio(ratio));
+    root.addOnLayoutChangeListener(
+        (v, l, t, r, b, ol, ot, or, ob) -> {
+          if (r - l != or - ol || b - t != ob - ot) root.post(() -> applyUiRotation(uiRotation, false));
+        });
     buildFilmRow();
-    LinearLayout capture = row();
-    capture.setPadding(dp(28), 0, dp(28), 0);
-    cameraPage.addView(capture, new LinearLayout.LayoutParams(-1, dp(94)));
-    LinearLayout photos = column();
-    photos.setGravity(Gravity.CENTER);
-    photoButton = iconButton("grid", MUTED, 20, this::showGallery);
-    photoButton.setRotation(-4);
-    photoButton.setContentDescription("Open your photos");
-    photoButton.setBackground(bg(0xffe7ebde, 6, LINE, 1));
-    FrameLayout thumbFrame = new FrameLayout(this);
-    thumbFrame.setClipChildren(false);
-    thumbFrame.addView(photoButton, new FrameLayout.LayoutParams(dp(43), dp(43), Gravity.CENTER));
-    photoBadge = text("", 7, PAPER);
-    photoBadge.setBackground(bg(INK, 30, PAPER, 2));
-    FrameLayout.LayoutParams countLp =
-        new FrameLayout.LayoutParams(dp(18), dp(18), Gravity.BOTTOM | Gravity.RIGHT);
-    countLp.setMargins(0, 0, -dp(5), -dp(4));
-    thumbFrame.addView(photoBadge, countLp);
-    photoBadge.setVisibility(View.GONE);
-    photos.addView(thumbFrame, size(43, 43));
-    TextView photoLabel = text("Photos", 9, MUTED);
-    photos.addView(photoLabel, size(55, 23));
-    capture.addView(photos, size(58, 78));
-    capture.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
-    shutter = new GrainStyle.Shutter(this);
-    shutter.setText("◉");
-    shutter.setOnClickListener(v -> takePhoto());
-    shutter.setTextColor(PAPER);
-    shutter.setBackground(null);
-    shutter.setContentDescription("Take photo");
-    capture.addView(shutter, size(77, 77));
-    capture.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
-    LinearLayout flips = column();
-    flips.setGravity(Gravity.CENTER);
-    TextView flip =
-        button(
-            "⇄",
-            27,
-            () -> {
-              if (busy) return;
-              cancelTimer();
-              front = !front;
-              ready = false;
-              camera.close();
-              main.postDelayed(this::openCamera, 350);
-            });
-    GrainStyle.icon(flip, "flip", INK, 24);
-    flip.setPadding(dp(9), 0, 0, 0);
-    flip.setContentDescription("Switch front and rear cameras");
-    flips.addView(flip, size(43, 43));
-    flips.addView(text("Flip", 9, MUTED), size(55, 23));
-    capture.addView(flips, size(58, 78));
-    LinearLayout footer = row();
-    footer.setPadding(dp(20), 0, dp(20), dp(8));
-    cameraPage.addView(footer, new LinearLayout.LayoutParams(-1, dp(42)));
-    TextView neutral = button("Hold neutral", 9, () -> {});
-    neutral.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
-    GrainStyle.leading(neutral, "compare", MUTED, 14);
-    neutral.setTextColor(MUTED);
-    neutral.setContentDescription("Hold to preview the phone's neutral rendering");
-    neutral.setOnTouchListener(
-        (v, e) -> {
-          if (busy) return false;
-          if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
-            camera.neutralPreview(true);
-            filmLabel.setText("PHONE AUTO · PREVIEW ONLY");
-            return true;
-          }
-          if (e.getActionMasked() == MotionEvent.ACTION_UP
-              || e.getActionMasked() == MotionEvent.ACTION_CANCEL) {
-            camera.neutralPreview(false);
-            updateLabels();
-            v.performClick();
-            return true;
-          }
-          return true;
-        });
-    footer.addView(neutral, new LinearLayout.LayoutParams(0, -1, 1));
-    tuneButton = button("Tune film 80%", 9, this::showFilmLab);
-    GrainStyle.leading(tuneButton, "settings", INK, 13);
-    tuneButton.setPadding(dp(11), 0, dp(8), 0);
-    tuneButton.setMinHeight(0);
-    tuneButton.setBackground(bg(PAPER, 30, LINE, 1));
-    footer.addView(tuneButton, size(132, 31));
-    status = text("Camera2 · capture-time recipes · JPEG", 8, MUTED);
-    status.setVisibility(View.GONE);
-    cameraPage.addView(status, new LinearLayout.LayoutParams(-1, 0));
-    cameraPage.setPadding(0, 0, 0, dp(12));
+    updateDials();
+    applyViewMode(false);
+  }
+
+  /** Full screen: the camera back owns every pixel; a swipe shows the system bars for a moment. */
+  @SuppressWarnings("deprecation")
+  private void immersive() {
+    Window window = getWindow();
+    if (Build.VERSION.SDK_INT >= 30) {
+      window.setDecorFitsSystemWindows(false);
+      WindowInsetsController controller = window.getInsetsController();
+      if (controller != null) {
+        controller.hide(WindowInsets.Type.systemBars());
+        controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+      }
+    } else
+      window
+          .getDecorView()
+          .setSystemUiVisibility(
+              View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                  | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                  | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                  | View.SYSTEM_UI_FLAG_FULLSCREEN
+                  | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                  | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+  }
+
+  @Override
+  public void onWindowFocusChanged(boolean hasFocus) {
+    super.onWindowFocusChanged(hasFocus);
+    if (hasFocus) immersive();
+  }
+
+  /**
+   * Turns the camera back with the phone (the activity itself stays portrait, so capture, crop and
+   * EXIF orientation are untouched). Upside down keeps the last orientation.
+   */
+  private void applyUiRotation(int degrees, boolean animate) {
+    if (ui == null || root.getWidth() == 0) return;
+    int deg = autoRotate ? degrees : 0;
+    if (deg == 180) deg = uiRotation;
+    boolean land = deg == 90 || deg == 270;
+    int w = root.getWidth(), h = root.getHeight(), targetW = land ? h : w, targetH = land ? w : h;
+    ViewGroup.LayoutParams now = ui.getLayoutParams();
+    if (deg == uiRotation && now.width == targetW && now.height == targetH) return;
+    final int finalDeg = deg;
+    Runnable apply =
+        () -> {
+          uiRotation = finalDeg;
+          ui.setLayoutParams(new FrameLayout.LayoutParams(targetW, targetH, Gravity.CENTER));
+          ui.setRotation(-finalDeg);
+          back.setLandscape(land);
+          back.requestLayout();
+          ui.post(back::reportPreview);
+          pushOsd();
+        };
+    if (animate && ui.isLaidOut()) {
+      ui.animate().cancel();
+      ui.animate()
+          .alpha(0)
+          .setDuration(110)
+          .withEndAction(
+              () -> {
+                apply.run();
+                ui.animate().alpha(1).setDuration(170).start();
+              })
+          .start();
+    } else apply.run();
   }
 
   /**
@@ -451,35 +351,130 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
   }
 
   private void buildFilmRow() {
-    if (filmRow == null) return;
+    if (back == null) return;
     if (!visible(Recipe.ALL[recipe])) recipe = 0;
-    filmRow.removeAllViews();
-    for (Recipe f : Recipe.DISPLAY_ORDER) {
-      if (!visible(f)) continue;
-      TextView chip = button((f.raw ? "◆  " : "•  ") + f.name, 10, () -> selectRecipe(f.id));
-      chip.setMinHeight(0);
-      chip.setSingleLine(true);
-      chip.setPadding(dp(12), 0, dp(12), 0);
-      chip.setTag(f.id);
-      LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, dp(30));
-      cp.setMargins(dp(3), 0, dp(3), 0);
-      filmRow.addView(chip, cp);
+    List<Recipe> list = new ArrayList<>();
+    for (Recipe f : Recipe.DISPLAY_ORDER) if (visible(f)) list.add(f);
+    dialFilms = list.toArray(new Recipe[0]);
+    String[] labels = new String[dialFilms.length];
+    boolean[] accent = new boolean[dialFilms.length];
+    for (int i = 0; i < dialFilms.length; i++) {
+      labels[i] = filmCode(dialFilms[i]);
+      accent[i] = dialFilms[i].raw && !dialFilms[i].standard;
+    }
+    back.film.setItems(labels, accent, Math.max(0, indexOfFilm(recipe)));
+  }
+
+  private int indexOfFilm(int id) {
+    for (int i = 0; i < dialFilms.length; i++) if (dialFilms[i].id == id) return i;
+    return -1;
+  }
+
+  /** Short code on the film dial, Fujifilm style. */
+  private static String filmCode(Recipe r) {
+    switch (r.id) {
+      case 0:
+        return "DAY";
+      case 1:
+        return "CST";
+      case 2:
+        return "GLN";
+      case 3:
+        return "AFT";
+      case 4:
+        return "PTR";
+      default:
+        break;
+    }
+    if (r.fuji == null) return "ISP";
+    if (r.fuji.sony()) return "s709";
+    if (r.fuji == FujiRecipe.REGGIES_SUPERIA) return "SUP";
+    if (r.fuji == FujiRecipe.KODAK_GOLD_200) return "GLD";
+    if (r.fuji == FujiRecipe.KODACHROME_64) return "K64";
+    if (r.fuji == FujiRecipe.PACIFIC_BLUES) return "PAC";
+    if (r.fuji == FujiRecipe.VIBRANT_ARIZONA) return "ARZ";
+    if (r.fuji == FujiRecipe.CINESTILL_800T) return "800T";
+    if (r.fuji == FujiRecipe.KODAK_TRI_X_400) return "TX";
+    switch (r.fuji.filmSimulation) {
+      case "PROVIA":
+        return "STD";
+      case "Velvia":
+        return "V";
+      case "ASTIA":
+        return "S";
+      case "CLASSIC-CHROME":
+        return "CC";
+      case "REALA-ACE":
+        return "RA";
+      case "PRO-Neg.Hi":
+        return "NH";
+      case "PRO-Neg.Std":
+        return "NS";
+      case "CLASSIC-Neg.":
+        return "NC";
+      case "NOSTALGIC-Neg.":
+        return "NN";
+      case "ETERNA":
+        return "E";
+      case "ETERNA-BB":
+        return "EB";
+      case "ACROS":
+        return "A";
+      default:
+        return r.name.length() > 4 ? r.name.substring(0, 4).toUpperCase(Locale.ROOT) : r.name;
+    }
+  }
+
+  /** The memo holder's box colours: background, ink, stripe. */
+  private static int[] memoColors(Recipe r) {
+    String code = filmCode(r);
+    switch (code) {
+      case "PTR":
+        return new int[] {0xfff1e7d3, 0xff3a2a1c, 0xffd2691e};
+      case "SUP":
+        return new int[] {0xff2f8f4e, 0xfff4f1e8, 0xffd9d4c6};
+      case "GLD":
+        return new int[] {0xfff2b51c, 0xff4a2a10, 0xffc0392b};
+      case "K64":
+        return new int[] {0xfff4c430, 0xff8b1a1a, 0xffb22222};
+      case "PAC":
+        return new int[] {0xff2d5f8b, 0xfff4f1e8, 0xffa8d0e6};
+      case "ARZ":
+        return new int[] {0xffc8693a, 0xfffff3e0, 0xff5c3317};
+      case "800T":
+        return new int[] {0xff1d2f3f, 0xffe8e0d0, 0xffd04030};
+      case "TX":
+        return new int[] {0xffe8c547, 0xff1a1a1a, 0xff1a1a1a};
+      case "s709":
+        return new int[] {0xff151515, 0xffe8e8e8, 0xffe86a2d};
+      case "A":
+      case "EB":
+        return new int[] {0xff2b2b2b, 0xfff4f1e8, 0xff9a9a9a};
+      default:
+        return r.raw
+            ? new int[] {0xff1f6f4a, 0xfff2f2ea, 0xffcfd8cf}
+            : new int[] {0xffe2622f, 0xfffff8ef, 0xfff4f1e8};
     }
   }
 
   private void layoutFrame() {
-    if (stage.getWidth() == 0) return;
-    double[] fit = Framing.fit(stage.getWidth(), stage.getHeight(), ratio);
-    FrameLayout.LayoutParams lp =
-        new FrameLayout.LayoutParams(
-            (int) Math.round(fit[0]), (int) Math.round(fit[1]), Gravity.CENTER);
-    frame.setLayoutParams(lp);
-    if (camera != null) frame.post(() -> camera.updateTransform(zoom));
+    if (back == null) return;
+    back.setPhotoRatio(Framing.portraitRatio(ratio));
+    back.requestLayout();
+    back.post(back::reportPreview);
   }
 
   private GrainCamera.Snapshot snapshot() {
     return new GrainCamera.Snapshot(
-        recipe, strengths[recipe], zoom, ratio, keepFull, ev, tuning.effective(Recipe.ALL[recipe]));
+        recipe,
+        strengths[recipe],
+        zoom,
+        ratio,
+        keepFull,
+        ev,
+        tuning.effective(Recipe.ALL[recipe]),
+        shutterNs,
+        isoSetting);
   }
 
   private void selectRecipe(int id) {
@@ -489,216 +484,43 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     updateLabels();
     camera.update(snapshot());
     Recipe r = Recipe.ALL[id];
+    String sub = r.raw ? (r.standard ? "film simulation · developed from RAW" : "recipe · developed from RAW") : "phone ISP look";
     if (r.raw) {
       if (ready && !camera.rawAvailable())
         message("RAW isn’t available here: " + camera.rawUnavailableReason());
       else if (!luts.has(r.fuji.filmSimulation))
         message(
             r.fuji.sony()
-                ? "Import Sony’s free s709 LUT to use " + r.name + " (Tune → Import)"
-                : "Import Fujifilm’s LUT pack to use " + r.name + " (Tune → Import)");
-      else if (!r.fuji.exposureNote.isEmpty())
-        message(
-            r.name + " · the recipe is usually shot at " + r.fuji.exposureNote
-                + " (set it with the exposure control) · developed from RAW");
-      else message(r.name + " · preview is the phone’s view; the look is developed from RAW");
+                ? "Import Sony’s free s709 LUT to use " + r.name + " (MENU → I.Q. → Import LUT zip)"
+                : "Import Fujifilm’s LUT pack to use " + r.name + " (MENU → I.Q. → Import LUT zip)");
+      else if (!r.fuji.exposureNote.isEmpty()) sub = "usually shot at " + r.fuji.exposureNote;
     }
+    if (back != null) back.toast(r.name.toUpperCase(Locale.ROOT), sub);
   }
 
   private void updateLabels() {
-    if (filmLabel == null) return;
+    if (back == null) return;
     Recipe current = Recipe.ALL[recipe];
-    filmLabel.setText(
-        current.raw
-            ? "◆  " + current.name.toUpperCase(Locale.ROOT) + " / RAW · " + current.fuji.filmLabel.toUpperCase(Locale.ROOT)
-                + (tuning.tuned(current) ? " · TUNED" : "")
-            : "•  " + current.name.toUpperCase(Locale.ROOT) + " / ISP");
-    ratioButton.setText(ratio);
-    ratioButton.setCompoundDrawablesWithIntrinsicBounds(
-        null, null, new GrainStyle.Symbol(this, "down", PAPER, 9), null);
-    ratioButton.setCompoundDrawablePadding(dp(4));
-    ratioButton.setPadding(dp(8), 0, dp(6), 0);
-    zoomButton.setText(String.format(Locale.US, "%.1f×", zoom));
-    zoomButton.setCompoundDrawablesWithIntrinsicBounds(
-        null, null, new GrainStyle.Symbol(this, "down", INK, 8), null);
-    zoomButton.setPadding(dp(6), 0, dp(4), 0);
-    zoomButton.setCompoundDrawablePadding(dp(2));
-    exposureButton.setText(String.format(Locale.US, "%+.1f", ev));
-    GrainStyle.leading(exposureButton, "sun", PAPER, 12);
-    exposureButton.setPadding(dp(9), 0, dp(7), 0);
-    if (timerSeconds == 0) {
-      GrainStyle.icon(timerButton, "timer", INK, 20);
-      timerButton.setPadding(dp(9), 0, 0, 0);
-    } else {
-      timerButton.setCompoundDrawables(null, null, null, null);
-      timerButton.setPadding(0, 0, 0, 0);
-      timerButton.setText(timerSeconds + "s");
-      timerButton.setTypeface(Typeface.MONOSPACE);
-    }
-    timerButton.setTextColor(timerSeconds == 0 ? INK : ORANGE);
-    tuneButton.setText(
-        !current.raw
-            ? "Tune film  " + strengths[recipe] + "%"
-            : luts == null || !luts.has(current.fuji.filmSimulation)
-                ? "Recipe  · LUT needed"
-                : tuning.tuned(current) ? "Tuned  ✓" : "Tune  ✓");
-    for (int i = 0; i < filmRow.getChildCount(); i++) {
-      TextView chip = (TextView) filmRow.getChildAt(i);
-      boolean active = Integer.valueOf(recipe).equals(chip.getTag());
-      chip.setBackground(bg(active ? INK : PAPER, 30, 0, 0));
-      chip.setTextColor(active ? PAPER : MUTED);
-    }
-    overlay.invalidate();
+    int at = indexOfFilm(recipe);
+    if (at >= 0) back.film.setIndex(at);
+    int[] colors = memoColors(current);
+    back.memo.set(current.name, filmCode(current), current.raw ? "RAW" : "ISP", colors[0], colors[1], colors[2]);
+    back.exposure.setIndex(evCustom ? EV_C : evIndex(ev));
+    back.shutterDial.setIndex(isoDial ? indexOf(isoValues, isoSetting) : indexOf(shutterValues, shutterNs));
+    back.setIsoMode(isoDial);
+    back.setPhotoRatio(Framing.portraitRatio(ratio));
+    pushOsd();
+    if ("q".equals(mode)) refreshQ();
+    if ("menu".equals(mode)) refreshMenu();
   }
 
   private void setZoom(double value) {
     if (busy) return;
-    zoom = Framing.zoom(value);
-    updateLabels();
+    double z = Framing.zoom(value);
+    if (Math.abs(z - zoom) < 1e-4) return;
+    zoom = z;
     camera.update(snapshot());
-    overlay.showZoom();
-    if (activeZoomValue != null) {
-      activeZoomValue.setText(String.format(Locale.US, "%.1f×", zoom));
-      activeZoomRange.setProgress((int) Math.round((zoom - 1) * 10));
-      activeZoomNote.setText(
-          zoom < 1.05
-              ? "1× keeps the most source detail."
-              : String.format(
-                  Locale.US, "%.1f× digital crop. Closer framing, less source detail.", zoom));
-    }
-  }
-
-  private void showRatio() {
-    if (busy) return;
-    if ("ratio".equals(cameraTool)) {
-      dismissCameraTool();
-      return;
-    }
-    LinearLayout body = openCameraTool("ratio", true);
-    toolHeading(body, "Photo shape", null);
-    LinearLayout options = row();
-    body.addView(options, new LinearLayout.LayoutParams(-1, -2));
-    String[] names = {"Classic", "Square", "Story"};
-    for (int i = 0; i < Framing.RATIOS.length; i++) {
-      String value = Framing.RATIOS[i];
-      boolean selected = value.equals(ratio);
-      int color = selected ? 0xffffddb0 : PAPER;
-      LinearLayout card = column();
-      card.setGravity(Gravity.CENTER);
-      card.setPadding(dp(5), dp(12), dp(5), dp(10));
-      card.setBackground(
-          bg(selected ? 0x16f4ca90 : 0x08ffffff, 7, selected ? 0xfff4ca90 : 0x33ffffff, 1));
-      LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, dp(108), 1);
-      cp.setMargins(i == 0 ? 0 : dp(7), 0, 0, 0);
-      options.addView(card, cp);
-      card.addView(new GrainStyle.RatioShape(this, value, color), size(36, 34));
-      card.addView(text(value, 11, color), size(-1, 26));
-      card.addView(text(names[i], 9, 0xffc3cbb9));
-      card.setContentDescription(value + ", " + names[i] + (selected ? ", selected" : ""));
-      card.setSelected(selected);
-      card.setClickable(true);
-      card.setFocusable(true);
-      card.setOnClickListener(
-          v -> {
-            ratio = value;
-            savePrefs();
-            layoutFrame();
-            updateLabels();
-            camera.update(snapshot());
-            dismissCameraTool();
-          });
-    }
-    TextView note =
-        text(
-            keepFull
-                ? "Full-frame recipe capture kept separately."
-                : "Full-frame copy is off. Only this crop will be kept.",
-            9,
-            0xffb3bfa4);
-    note.setGravity(Gravity.START);
-    note.setPadding(0, dp(12), 0, 0);
-    body.addView(note);
-  }
-
-  private void showZoom() {
-    if (busy) return;
-    if ("zoom".equals(cameraTool)) {
-      dismissCameraTool();
-      return;
-    }
-    LinearLayout body = openCameraTool("zoom", false);
-    toolHeading(body, "Find your frame", "DIGITAL ZOOM");
-    LinearLayout meter = row();
-    body.addView(meter, new LinearLayout.LayoutParams(-1, dp(37)));
-    activeZoomValue = text(String.format(Locale.US, "%.1f×", zoom), 24, 0xfff5d3a7);
-    activeZoomValue.setTypeface(Typeface.SERIF);
-    activeZoomValue.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-    meter.addView(activeZoomValue, size(57, 37));
-    activeZoomRange = styledSlider(40, (int) Math.round((zoom - 1) * 10));
-    activeZoomRange.setContentDescription("Digital zoom, one to five times");
-    meter.addView(activeZoomRange, new LinearLayout.LayoutParams(0, dp(35), 1));
-    activeZoomRange.setOnSeekBarChangeListener(seek(p -> setZoom(1 + p / 10.0)));
-    LinearLayout stops = row();
-    stops.setPadding(dp(57), 0, 0, 0);
-    body.addView(stops);
-    for (int i = 1; i <= 5; i++) {
-      int z = i;
-      TextView stop = button(i + "×", 9, 0xffc3ceba, () -> setZoom(z));
-      stop.setMinHeight(0);
-      stops.addView(stop, new LinearLayout.LayoutParams(0, dp(27), 1));
-    }
-    View line = new View(this);
-    line.setBackgroundColor(0x22ffffff);
-    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(1));
-    lp.setMargins(0, dp(8), 0, dp(9));
-    body.addView(line, lp);
-    activeZoomNote =
-        text(
-            zoom < 1.05
-                ? "1× keeps the most source detail."
-                : String.format(
-                    Locale.US, "%.1f× digital crop. Closer framing, less source detail.", zoom),
-            9,
-            0xffb3bfa4);
-    activeZoomNote.setGravity(Gravity.START);
-    body.addView(activeZoomNote);
-  }
-
-  private void showExposure() {
-    if (busy) return;
-    if ("exposure".equals(cameraTool)) {
-      dismissCameraTool();
-      return;
-    }
-    LinearLayout body = openCameraTool("exposure", false);
-    toolHeading(body, "A little more light", null);
-    LinearLayout labels = row();
-    TextView value = text(String.format(Locale.US, "%+.1f EV", ev), 11, PAPER);
-    labels.addView(value, new LinearLayout.LayoutParams(0, dp(26), 1));
-    TextView reset =
-        button(
-            "Reset",
-            10,
-            0xfff4c3a3,
-            () -> {
-              ev = 0;
-              updateLabels();
-              camera.update(snapshot());
-              dismissCameraTool();
-            });
-    labels.addView(reset, size(47, 26));
-    body.addView(labels);
-    SeekBar slider = styledSlider(40, Math.round((ev + 2) * 10));
-    slider.setContentDescription("Exposure compensation");
-    body.addView(slider, new LinearLayout.LayoutParams(-1, dp(32)));
-    slider.setOnSeekBarChangeListener(
-        seek(
-            p -> {
-              ev = (p - 20) / 10f;
-              value.setText(String.format(Locale.US, "%+.1f EV", ev));
-              updateLabels();
-              camera.update(snapshot());
-            }));
+    pushOsd();
   }
 
   private void showFilmLab() {
@@ -1302,7 +1124,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
         v -> {
           grid = v;
           savePrefs();
-          overlay.invalidate();
+          pushOsd();
         });
     preferenceToggle(
         body,
@@ -1395,6 +1217,12 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
               zoom = 1;
               ev = 0;
               timerSeconds = 0;
+              drive = 0;
+              shutterNs = 0;
+              isoSetting = 0;
+              evCustom = false;
+              aeLock = false;
+              camera.setAeLock(false);
               grid = false;
               keepFull = true;
               larger = false;
@@ -1434,6 +1262,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
 
   private void takePhoto() {
     dismissCameraTool();
+    if (!powerOn) return;
     if (counting) {
       cancelTimer();
       return;
@@ -1512,6 +1341,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     }
     shutter.setText(String.valueOf(remaining));
     shutter.setContentDescription("Cancel timer");
+    back.state.countdown = String.valueOf(remaining);
     status.setText("Tap shutter again to cancel");
     main.postDelayed(() -> countdown(remaining - 1, token), 1000);
   }
@@ -1524,6 +1354,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
         shutter.setText("◉");
         shutter.setContentDescription("Take photo");
       }
+      if (back != null) back.state.countdown = "";
       if (status != null) status.setText("Timer cancelled · no photo taken");
     }
   }
@@ -1531,12 +1362,39 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
   private void captureNow() {
     busy = true;
     camera.neutralPreview(false);
+    neutralHeld = false;
+    Recipe r = Recipe.ALL[recipe];
+    bracketFilms = drive == 3 && r.raw ? bracketSet() : null;
+    if (drive == 3 && !r.raw) back.toast("FS BKT", "bracketing develops RAW films · single frame");
+    back.state.countdown = "";
     shutter.setText("·");
     shutter.setContentDescription("Capturing photo");
     status.setText(
-        Recipe.ALL[recipe].raw ? "Capturing RAW + phone JPEG…" : "Capturing full-resolution JPEG…");
+        r.raw
+            ? (bracketFilms != null && bracketFilms.length > 1
+                ? "Capturing RAW for " + bracketFilms.length + " films…"
+                : "Capturing RAW + phone JPEG…")
+            : "Capturing full-resolution JPEG…");
     shutter.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+    playShutterSound();
     camera.capture(snapshot());
+  }
+
+  private void playShutterSound() {
+    boolean required = Build.VERSION.SDK_INT >= 33 && MediaActionSound.mustPlayShutterSound();
+    if (sound != null && (sounds || required)) sound.play(MediaActionSound.SHUTTER_CLICK);
+  }
+
+  /** Film simulation bracketing: the film on the dial and the next two RAW films with a LUT. */
+  private Recipe[] bracketSet() {
+    List<Recipe> out = new ArrayList<>();
+    out.add(Recipe.ALL[recipe]);
+    int start = Math.max(0, indexOfFilm(recipe));
+    for (int k = 1; k < dialFilms.length && out.size() < 3; k++) {
+      Recipe f = dialFilms[(start + k) % dialFilms.length];
+      if (f.raw && f.id != recipe && luts.has(f.fuji.filmSimulation)) out.add(f);
+    }
+    return out.toArray(new Recipe[0]);
   }
 
   @Override
@@ -1545,6 +1403,13 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     sourceWidth = w;
     sourceHeight = h;
     ready = true;
+    double aperture = caps.optDouble("aperture", 0);
+    long equivalent = caps.optLong("equivalentFocalMm", 0);
+    if (back != null)
+      back.setLens(
+          (equivalent > 0 ? equivalent + "mm" : "")
+              + (aperture > 0 ? String.format(Locale.US, "  1:%.1f", aperture) : ""));
+    updateDials();
     status.setText(
         "JPEG " + caps.optString("selectedJpeg")
             + (caps.optBoolean("rawImplemented") ? " · RAW " + caps.optString("rawSelected") : " · no RAW"));
@@ -1623,33 +1488,72 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     boolean tuned = !film.sameSettings(r.fuji);
     String filmName = r.name + (tuned ? " (tuned)" : "");
     boolean meterFaces = faceExposure;
-    status.setText("Developing " + filmName + " from RAW…");
+    // Film simulation bracketing develops the one RAW as up to three films (the DNG and the phone
+    // JPEG are kept with the first). Their tuning is read here, on the main thread.
+    Recipe[] bracket = bracketFilms != null && bracketFilms.length > 1 && bracketFilms[0].id == r.id ? bracketFilms : new Recipe[] {r};
+    bracketFilms = null;
+    FujiRecipe[] bracketTuning = new FujiRecipe[bracket.length];
+    int[] bracketStrength = new int[bracket.length];
+    for (int i = 0; i < bracket.length; i++) {
+      bracketTuning[i] = i == 0 ? film : tuning.effective(bracket[i]);
+      bracketStrength[i] = strengths[bracket[i].id];
+    }
+    // Manual exposure: development shows the exposure's difference from the meter instead of the
+    // EV dial, so a darker setting gives a darker photo (GrainCamera.manualExposure).
+    JSONObject requested = receipt.optJSONObject("requested");
+    JSONObject manual = requested == null ? null : requested.optJSONObject("manual");
+    float developEv =
+        manual != null && manual.has("developEv")
+            ? (float) Math.max(-4, Math.min(4, manual.optDouble("developEv")))
+            : settings.ev;
+    status.setText(
+        bracket.length > 1
+            ? "Developing " + bracket.length + " films from one RAW…"
+            : "Developing " + filmName + " from RAW…");
     files.execute(
         () -> {
           try {
             long t = System.nanoTime();
-            CubeLut lut = luts.load(film.filmSimulation);
-            RawDevelopment.Output out =
-                RawDevelopment.develop(
-                    this,
-                    capture,
-                    film,
-                    tuned,
-                    lut,
-                    settings.ev,
-                    capture.frame.exposureNs ^ System.nanoTime(),
-                    meterFaces);
+            PhotoStore.Photo photo = null;
+            for (int i = 0; i < bracket.length; i++) {
+              FujiRecipe f = bracketTuning[i];
+              boolean fTuned = !f.sameSettings(bracket[i].fuji);
+              CubeLut lut = luts.load(f.filmSimulation);
+              JSONObject frameReceipt = i == 0 ? receipt : new JSONObject(receipt.toString());
+              if (bracket.length > 1) {
+                frameReceipt.put("bracket", (i + 1) + " of " + bracket.length);
+                if (i > 0) frameReceipt.put("recipe", bracket[i].json(bracketStrength[i], f));
+              }
+              if (manual != null) frameReceipt.put("developEv", developEv);
+              long start = System.nanoTime();
+              RawDevelopment.Output out =
+                  RawDevelopment.develop(
+                      this,
+                      capture,
+                      f,
+                      fTuned,
+                      lut,
+                      developEv,
+                      capture.frame.exposureNs ^ System.nanoTime(),
+                      meterFaces);
+              frameReceipt.put(
+                  "development", out.stats.put("totalMs", (System.nanoTime() - start) / 1_000_000));
+              PhotoStore.Photo saved =
+                  store.save(
+                      out.jpeg,
+                      settings.ratio,
+                      settings.zoom,
+                      settings.keepFull,
+                      frameReceipt,
+                      i == 0 ? capture.dng : null,
+                      i == 0 && keepRawFiles ? capture.phoneJpeg : null);
+              if (i == 0) photo = saved;
+              int done = i + 1;
+              if (bracket.length > 1 && done < bracket.length)
+                runOnUiThread(() -> status.setText("Developing film " + (done + 1) + " of " + bracket.length + "…"));
+            }
             long ms = (System.nanoTime() - t) / 1_000_000;
-            receipt.put("development", out.stats.put("totalMs", ms));
-            PhotoStore.Photo photo =
-                store.save(
-                    out.jpeg,
-                    settings.ratio,
-                    settings.zoom,
-                    settings.keepFull,
-                    receipt,
-                    capture.dng,
-                    keepRawFiles ? capture.phoneJpeg : null);
+            PhotoStore.Photo first = photo;
             runOnUiThread(
                 () -> {
                   if (isDestroyed()) return;
@@ -1658,13 +1562,15 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
                   shutter.setText("◉");
                   shutter.setContentDescription("Take photo");
                   status.setText(
-                      photo.metadata.optInt("width") + " × " + photo.metadata.optInt("height")
+                      first.metadata.optInt("width") + " × " + first.metadata.optInt("height")
                           + " · " + filmName + " · developed in " + String.format(Locale.US, "%.1f s", ms / 1000.0));
                   updateThumb();
                   message(
                       receipt.has("focusWarning")
                           ? "Saved, but the camera reported not focused. Tap the subject and retry."
-                          : filmName + " developed from RAW" + (photo.dng != null ? " · DNG kept" : ""));
+                          : bracket.length > 1
+                              ? bracket.length + " films developed from one RAW" + (first.dng != null ? " · DNG kept with the first" : "")
+                              : filmName + " developed from RAW" + (first.dng != null ? " · DNG kept" : ""));
                 });
           } catch (Throwable e) {
             if (capture.dng != null && capture.dng.exists() && !capture.dng.delete())
@@ -1684,7 +1590,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
   }
 
   private void openCamera() {
-    if (!resumed || !texture.isAvailable() || camera == null) return;
+    if (!resumed || !powerOn || !texture.isAvailable() || camera == null) return;
     if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
       if (!permissionAsked) {
         permissionAsked = true;
@@ -1722,14 +1628,22 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
   protected void onResume() {
     super.onResume();
     resumed = true;
+    immersive();
     if (orientationListener != null && orientationListener.canDetectOrientation())
       orientationListener.enable();
     if (texture != null && texture.isAvailable()) openCamera();
+    readBattery();
+    main.removeCallbacks(histogramTask);
+    main.postDelayed(histogramTask, 500);
+    updateThumb();
   }
 
   @Override
   protected void onPause() {
     if (orientationListener != null) orientationListener.disable();
+    main.removeCallbacks(histogramTask);
+    if (halfPressed) releaseHalf();
+    neutralHeld = false;
     dismissCameraTool();
     resumed = false;
     cancelTimer();
@@ -1749,6 +1663,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
   @Override
   protected void onDestroy() {
     if (camera != null) camera.close();
+    if (sound != null) sound.release();
     main.removeCallbacksAndMessages(null);
     files.shutdown();
     super.onDestroy();
@@ -1758,15 +1673,22 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
   public boolean onKeyDown(int code, KeyEvent event) {
     if ((code == KeyEvent.KEYCODE_VOLUME_UP || code == KeyEvent.KEYCODE_VOLUME_DOWN)
         && "camera".equals(page)) {
-      if (event.getRepeatCount() == 0) takePhoto();
+      if (event.getRepeatCount() == 0) {
+        if (!"camera".equals(mode)) closeOverlays();
+        else takePhoto();
+      }
       return true;
     }
     return super.onKeyDown(code, event);
   }
 
   private void navigateBack() {
-    if (cameraToolLayer != null) {
-      dismissCameraTool();
+    if ("camera".equals(page) && !"camera".equals(mode)) {
+      closeOverlays();
+      return;
+    }
+    if ("camera".equals(page) && evf && viewMode != 1) {
+      setEvf(false);
       return;
     }
     if (counting) cancelTimer();
@@ -1775,34 +1697,15 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     else finish();
   }
 
-  private Bitmap thumbBitmap;
-
   private void updateThumb() {
     files.execute(
         () -> {
-          java.util.List<PhotoStore.Photo> list = store.list();
-          Bitmap image = list.isEmpty() ? null : store.thumbnail(list.get(0).image, 100);
+          int count = store.list().size();
           runOnUiThread(
               () -> {
-                if (isDestroyed()) {
-                  if (image != null) image.recycle();
-                  return;
-                }
-                photoButton.setText("");
-                photoButton.setCompoundDrawables(null, null, null, null);
-                photoButton.setContentDescription("Open photos, " + list.size() + " saved");
-                photoBadge.setText(String.valueOf(list.size()));
-                photoBadge.setVisibility(list.isEmpty() ? View.GONE : View.VISIBLE);
-                Bitmap old = thumbBitmap;
-                thumbBitmap = image;
-                if (image != null)
-                  photoButton.setBackground(new GrainStyle.PhotoThumb(this, image));
-                else {
-                  photoButton.setBackground(bg(0xffe7ebde, 6, LINE, 1));
-                  GrainStyle.icon(photoButton, "grid", MUTED, 20);
-                  photoButton.setPadding(dp(11), 0, 0, 0);
-                }
-                if (old != null && old != image && !old.isRecycled()) old.recycle();
+                if (isDestroyed()) return;
+                frameCount = count;
+                pushOsd();
               });
         });
   }
@@ -1814,6 +1717,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     page = "photos";
     panel = column();
     panel.setBackgroundColor(PAPER);
+    panel.setPadding(0, safeTop, 0, safeBottom);
     root.addView(panel, new FrameLayout.LayoutParams(-1, -1));
     LinearLayout head = row();
     head.setPadding(dp(23), dp(9), dp(23), dp(7));
@@ -2123,6 +2027,17 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     faceExposure = preferences.getBoolean("faceExposure", true);
     timerSeconds = preferences.getInt("timer", 0);
     if (timerSeconds != 3 && timerSeconds != 5) timerSeconds = 0;
+    drive = preferences.getInt("drive", timerSeconds == 3 ? 1 : timerSeconds == 5 ? 2 : 0);
+    if (drive < 0 || drive >= DRIVES.length) drive = 0;
+    timerSeconds = drive == 1 ? 3 : drive == 2 ? 5 : 0;
+    dispMode = Math.max(0, Math.min(1, preferences.getInt("disp", 0)));
+    viewMode = Math.max(0, Math.min(2, preferences.getInt("viewMode", 0)));
+    finish = Math.max(0, Math.min(2, preferences.getInt("finish", 0)));
+    sounds = preferences.getBoolean("sounds", true);
+    showHistogram = preferences.getBoolean("histogram", true);
+    showLevel = preferences.getBoolean("level", true);
+    autoRotate = preferences.getBoolean("autoRotate", true);
+    isoDial = preferences.getBoolean("isoDial", false);
   }
 
   private void savePrefs() {
@@ -2136,7 +2051,16 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
             .putBoolean("larger", larger)
             .putBoolean("faceExposure", faceExposure)
             .putBoolean("keepRawFiles", keepRawFiles)
-            .putInt("timer", timerSeconds);
+            .putInt("timer", timerSeconds)
+            .putInt("drive", drive)
+            .putInt("disp", dispMode)
+            .putInt("viewMode", viewMode)
+            .putInt("finish", finish)
+            .putBoolean("sounds", sounds)
+            .putBoolean("histogram", showHistogram)
+            .putBoolean("level", showLevel)
+            .putBoolean("autoRotate", autoRotate)
+            .putBoolean("isoDial", isoDial);
     for (int i = 0; i < strengths.length; i++) edit.putInt("strength" + i, strengths[i]);
     edit.apply();
   }
@@ -2146,7 +2070,9 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
   }
 
   private void showSnackbar(String text, String action, Runnable onAction) {
-    if (snackbar != null) root.removeView(snackbar);
+    if (snackbar != null && snackbar.getParent() instanceof ViewGroup)
+      ((ViewGroup) snackbar.getParent()).removeView(snackbar);
+    ViewGroup host = panel != null || back == null ? root : ui;
     LinearLayout bar = row();
     bar.setPadding(dp(14), dp(9), dp(12), dp(9));
     bar.setElevation(dp(12));
@@ -2161,18 +2087,26 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
               12,
               0xffffce9d,
               () -> {
-                root.removeView(bar);
+                host.removeView(bar);
                 onAction.run();
               });
       bar.addView(button, size(58, 40));
     }
-    FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
-    lp.setMargins(dp(15), 0, dp(15), dp(18));
-    root.addView(bar, lp);
+    FrameLayout.LayoutParams lp;
+    if (host == ui) {
+      RectF screen = back.screenRect();
+      lp = new FrameLayout.LayoutParams(Math.max(dp(160), Math.round(screen.width()) - dp(20)), -2, Gravity.TOP | Gravity.START);
+      lp.leftMargin = Math.round(screen.left) + dp(10);
+      lp.topMargin = Math.round(screen.top) + dp(10);
+    } else {
+      lp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
+      lp.setMargins(dp(15), 0, dp(15), dp(18) + safeBottom);
+    }
+    host.addView(bar, lp);
     snackbar = bar;
     main.postDelayed(
         () -> {
-          root.removeView(bar);
+          host.removeView(bar);
           if (snackbar == bar) snackbar = null;
         },
         action == null ? 4200 : 6500);
@@ -2197,59 +2131,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
   }
 
   private void dismissCameraTool() {
-    if (cameraToolLayer != null) {
-      stage.removeView(cameraToolLayer);
-      cameraToolLayer = null;
-    }
-    cameraTool = null;
-    activeZoomValue = null;
-    activeZoomRange = null;
-    activeZoomNote = null;
-  }
-
-  private LinearLayout openCameraTool(String name, boolean top) {
-    dismissCameraTool();
-    cameraTool = name;
-    cameraToolLayer = new FrameLayout(this);
-    cameraToolLayer.setOnClickListener(v -> dismissCameraTool());
-    stage.addView(cameraToolLayer, new FrameLayout.LayoutParams(-1, -1));
-    LinearLayout body = column();
-    body.setClickable(true);
-    body.setPadding(dp(14), dp(13), dp(14), dp(13));
-    body.setElevation(dp(10));
-    body.setBackground(bg(0xf5263020, 12, 0x44ffffff, 1));
-    FrameLayout.LayoutParams params =
-        new FrameLayout.LayoutParams(-1, -2, top ? Gravity.TOP : Gravity.BOTTOM);
-    params.setMargins(dp(14), dp(54), dp(14), top ? 0 : dp(58));
-    cameraToolLayer.addView(body, params);
-    body.setAlpha(0);
-    body.animate().alpha(1).setDuration(130).start();
-    return body;
-  }
-
-  private void toolHeading(LinearLayout body, String title, String tag) {
-    LinearLayout head = row();
-    TextView label = text(title, 11, PAPER);
-    label.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-    head.addView(label, new LinearLayout.LayoutParams(0, dp(28), 1));
-    if (tag != null) {
-      TextView badge = text(tag, 7, 0xfff4ca90);
-      badge.setTypeface(Typeface.MONOSPACE);
-      badge.setPadding(dp(5), dp(3), dp(5), dp(3));
-      badge.setBackground(bg(0x11f4ca90, 4, 0x55f4ca90, 1));
-      head.addView(badge);
-      View gap = new View(this);
-      head.addView(gap, size(10, 1));
-    }
-    TextView close = iconButton("close", PAPER, 11, this::dismissCameraTool);
-    close.setMinHeight(0);
-    close.setPadding(dp(6), 0, 0, 0);
-    close.setBackground(bg(0, 30, 0x44ffffff, 1));
-    close.setContentDescription("Close " + title);
-    head.addView(close, size(24, 24));
-    LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(-1, -2);
-    hp.bottomMargin = dp(11);
-    body.addView(head, hp);
+    if (!"camera".equals(mode)) closeOverlays();
   }
 
   private void sheetHeader(LinearLayout body, String title, String subtitle, Runnable onClose) {
@@ -2394,13 +2276,6 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     return t;
   }
 
-  private TextView tool(String value, Runnable click) {
-    TextView t = button(value, 10, PAPER, click);
-    t.setMinHeight(0);
-    t.setBackground(bg(0x88303c29, 18, 0x44ffffff, 1));
-    return t;
-  }
-
   private GradientDrawable bg(int color, int radius, int stroke, int width) {
     GradientDrawable d = new GradientDrawable();
     d.setColor(color);
@@ -2436,67 +2311,1340 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     };
   }
 
-  private final class GridOverlay extends View {
-    private final Paint paint = new Paint(3);
-    private float fx, fy;
-    private long focusAt, zoomAt;
+  // ───────────────────────────── the camera back ─────────────────────────────
 
-    GridOverlay() {
-      super(MainActivity.this);
-      setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
+  private final int[] histogramBins = new int[64];
+
+  private static String shutterText(long ns, boolean dial) {
+    if (ns <= 0) return "";
+    if (ns >= 900_000_000L) {
+      double sec = ns / 1e9;
+      return (Math.abs(sec - Math.rint(sec)) < .05
+              ? String.valueOf(Math.round(sec))
+              : String.format(Locale.US, "%.1f", sec))
+          + "\"";
     }
+    long d = Math.round(1e9 / ns);
+    return dial ? String.valueOf(d) : "1/" + d;
+  }
 
-    void focus(float x, float y) {
-      fx = x;
-      fy = y;
-      focusAt = SystemClock.uptimeMillis();
-      invalidate();
-      postDelayed(this::invalidate, 1200);
+  private static int evIndex(float value) {
+    return Math.max(0, Math.min(12, Math.round(value * 3) + 6));
+  }
+
+  private static int indexOf(long[] values, long value) {
+    if (value <= 0) return 0;
+    for (int i = 0; i < values.length; i++) if (values[i] == value) return i + 1;
+    return 0;
+  }
+
+  private static int indexOf(int[] values, int value) {
+    if (value <= 0) return 0;
+    for (int i = 0; i < values.length; i++) if (values[i] == value) return i + 1;
+    return 0;
+  }
+
+  private static String onOff(boolean value) {
+    return value ? "ON" : "OFF";
+  }
+
+  private static String shortLabel(String label) {
+    return label
+        .toUpperCase(Locale.ROOT)
+        .replace("FIRST VERSION", "FIRST")
+        .replace("KELVIN ONLY", "K ONLY");
+  }
+
+  /** The photo ratio as the camera back is held: 3:4 upright, 4:3 sideways. */
+  private String orientedRatio() {
+    boolean land = uiRotation == 90 || uiRotation == 270;
+    if (!land || "1:1".equals(ratio)) return ratio;
+    String[] parts = ratio.split(":");
+    return parts.length == 2 ? parts[1] + ":" + parts[0] : ratio;
+  }
+
+  /** Shutter speeds and ISOs this camera takes, and the dials' labels. */
+  private void updateDials() {
+    if (back == null) return;
+    org.json.JSONArray times = capabilities.optJSONArray("exposureTimeRangeNs");
+    org.json.JSONArray isos = capabilities.optJSONArray("isoRange");
+    long tMin = times == null ? 0 : times.optLong(0), tMax = times == null ? Long.MAX_VALUE : times.optLong(1, Long.MAX_VALUE);
+    int iMin = isos == null ? 0 : isos.optInt(0), iMax = isos == null ? Integer.MAX_VALUE : isos.optInt(1, Integer.MAX_VALUE);
+    List<Long> speeds = new ArrayList<>();
+    for (long v : SHUTTER_NS) if (v >= tMin && v <= tMax) speeds.add(v);
+    shutterValues = new long[speeds.size()];
+    for (int i = 0; i < shutterValues.length; i++) shutterValues[i] = speeds.get(i);
+    List<Integer> sensitivities = new ArrayList<>();
+    for (int v : ISO_STEPS) if (v >= iMin && v <= iMax) sensitivities.add(v);
+    isoValues = new int[sensitivities.size()];
+    for (int i = 0; i < isoValues.length; i++) isoValues[i] = sensitivities.get(i);
+    if (indexOf(shutterValues, shutterNs) == 0) shutterNs = 0;
+    if (indexOf(isoValues, isoSetting) == 0) isoSetting = 0;
+    int n = 1 + (isoDial ? isoValues.length : shutterValues.length);
+    String[] labels = new String[n];
+    boolean[] accent = new boolean[n];
+    labels[0] = "A";
+    accent[0] = true;
+    for (int i = 1; i < n; i++)
+      labels[i] = isoDial ? String.valueOf(isoValues[i - 1]) : shutterText(shutterValues[i - 1], true);
+    back.shutterDial.setItems(
+        labels, accent, isoDial ? indexOf(isoValues, isoSetting) : indexOf(shutterValues, shutterNs));
+    boolean[] evAccent = new boolean[EV_LABELS.length];
+    evAccent[EV_C] = true;
+    back.exposure.setItems(EV_LABELS, evAccent, evCustom ? EV_C : evIndex(ev));
+    back.setIsoMode(isoDial);
+  }
+
+  /**
+   * What the still will use, from the preview's meter: {shutter ns, ISO, EV against the meter, 1
+   * when the automatic half of S or ISO priority runs out of range}.
+   */
+  private double[] exposurePlan() {
+    GrainCamera.Meter m = lastMeter;
+    double t = shutterNs, iso = isoSetting, shown = ev, warn = 0;
+    if (m != null && m.exposureNs > 0 && m.iso > 0) {
+      double neutral = m.neutralNsIso(), target = neutral * Math.pow(2, ev);
+      org.json.JSONArray times = capabilities.optJSONArray("exposureTimeRangeNs");
+      org.json.JSONArray isos = capabilities.optJSONArray("isoRange");
+      double tMin = times == null ? 1 : times.optLong(0), tMax = times == null ? 1e12 : times.optLong(1);
+      double iMin = isos == null ? 1 : isos.optInt(0), iMax = isos == null ? 1e6 : isos.optInt(1);
+      if (shutterNs > 0 && isoSetting > 0) shown = Math.log(t * iso / neutral) / Math.log(2);
+      else if (shutterNs > 0) {
+        double want = target / t;
+        iso = Math.max(iMin, Math.min(iMax, want));
+        if (want < iMin * .97 || want > iMax * 1.03) warn = 1;
+        shown = Math.log(t * iso / neutral) / Math.log(2);
+      } else if (isoSetting > 0) {
+        double want = target / iso;
+        t = Math.max(tMin, Math.min(tMax, want));
+        if (want < tMin * .97 || want > tMax * 1.03) warn = 1;
+        shown = Math.log(t * iso / neutral) / Math.log(2);
+      } else {
+        t = m.exposureNs;
+        iso = m.iso;
+      }
     }
+    return new double[] {t, iso, shown, warn};
+  }
 
-    void showZoom() {
-      zoomAt = SystemClock.uptimeMillis();
-      invalidate();
-      postDelayed(this::invalidate, 900);
+  private String controlLabel(Recipe r, FujiRecipe.Tuning t, String name) {
+    for (TuningControl c : TuningControl.fujifilm(r.fuji))
+      if (c.name.equals(name)) return c.enabled(t) ? shortLabel(c.labels[c.at(t)]) : null;
+    return null;
+  }
+
+  /** Everything the camera's screen shows. */
+  private void pushOsd() {
+    if (back == null) return;
+    CameraBack.OsdState o = back.state;
+    Recipe r = Recipe.ALL[recipe];
+    o.code = filmCode(r);
+    o.film =
+        neutralHeld
+            ? "PHONE VIEW · PREVIEW ONLY"
+            : r.name.toUpperCase(Locale.ROOT) + (tuning.tuned(r) ? " · TUNED" : "");
+    o.format = r.raw && keepRawFiles ? "FINE+RAW" : "FINE";
+    o.ratio = orientedRatio();
+    o.frames = frameCount >= 0 ? String.valueOf(frameCount) : "";
+    o.battery = batteryLevel;
+    o.icons.clear();
+    if (r.raw) {
+      FujiRecipe.Tuning t = tuning.effective(r).tuning();
+      String dr = controlLabel(r, t, "Dynamic range");
+      if (dr != null) o.icons.add(dr.startsWith("DR") ? dr : "DR " + dr);
+      String wb = controlLabel(r, t, "White balance");
+      if (wb != null) {
+        String kelvin = wb.startsWith("K") ? controlLabel(r, t, "Color temperature") : null;
+        o.icons.add(kelvin != null ? kelvin : "WB " + wb);
+      }
+      if (faceExposure) o.icons.add("FACE");
+    } else o.icons.add("ISP " + strengths[recipe] + "%");
+    double[] plan = exposurePlan();
+    o.mode = shutterNs > 0 && isoSetting > 0 ? "M" : shutterNs > 0 ? "S" : "P";
+    o.shutter = shutterText((long) plan[0], false);
+    double aperture = capabilities.optDouble("aperture", 0);
+    o.aperture = aperture > 0 ? String.format(Locale.US, "F%.1f", aperture) : "";
+    o.iso = plan[1] > 0 ? String.valueOf(Math.round(plan[1])) : "";
+    o.isoAuto = isoSetting == 0;
+    o.manual = shutterNs > 0 || isoSetting > 0;
+    o.exposure = plan[2];
+    o.exposureWarn = plan[3] > 0;
+    o.drive = drive == 0 ? "" : drive == 3 ? "FS BKT" : "◷ " + timerSeconds + "S";
+    o.zoom = zoom > 1.04 ? String.format(Locale.US, "%.1f×", zoom) : "";
+    o.aeLock = aeLock;
+    o.grid = grid;
+    o.showHistogram = showHistogram;
+    o.showLevel = showLevel;
+    o.infoOff = dispMode == 1;
+    o.histogram = showHistogram && ready ? histogramBins : null;
+    o.afX = afX;
+    o.afY = afY;
+    o.afState = afFeedback;
+    o.busy = busy;
+    back.refresh();
+  }
+
+  /** Electronic level, smoothed; NaN hides it (phone flat). */
+  private void level(float tilt) {
+    if (back == null) return;
+    if (Float.isNaN(tilt)) {
+      levelSmooth = Float.NaN;
+      if (!Float.isNaN(back.state.level)) {
+        back.state.level = Float.NaN;
+        back.refresh();
+      }
+      return;
     }
+    levelSmooth = Float.isNaN(levelSmooth) ? tilt : levelSmooth + (tilt - levelSmooth) * .35f;
+    if (Float.isNaN(back.state.level) || Math.abs(levelSmooth - back.state.level) >= .2f) {
+      back.state.level = levelSmooth;
+      if (showLevel) back.refresh();
+    }
+  }
 
-    @Override
-    protected void onDraw(Canvas c) {
-      super.onDraw(c);
-      paint.setStrokeWidth(dp(1));
-      paint.setStyle(Paint.Style.STROKE);
-      paint.setColor(0x88ffffff);
-      float pad = dp(9), edge = dp(15), right = getWidth() - pad, bottom = getHeight() - pad;
-      c.drawLine(pad, pad, pad + edge, pad, paint);
-      c.drawLine(pad, pad, pad, pad + edge, paint);
-      c.drawLine(right, pad, right - edge, pad, paint);
-      c.drawLine(right, pad, right, pad + edge, paint);
-      c.drawLine(pad, bottom, pad + edge, bottom, paint);
-      c.drawLine(pad, bottom, pad, bottom - edge, paint);
-      c.drawLine(right, bottom, right - edge, bottom, paint);
-      c.drawLine(right, bottom, right, bottom - edge, paint);
-      if (grid) {
-        paint.setColor(0x77ffffff);
-        for (int n = 1; n < 3; n++) {
-          c.drawLine(getWidth() * n / 3f, 0, getWidth() * n / 3f, getHeight(), paint);
-          c.drawLine(0, getHeight() * n / 3f, getWidth(), getHeight() * n / 3f, paint);
+  private void readBattery() {
+    BatteryManager battery = (BatteryManager) getSystemService(BATTERY_SERVICE);
+    int capacity = battery == null ? -1 : battery.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY);
+    batteryLevel = capacity <= 0 || capacity > 100 ? -1 : capacity;
+  }
+
+  /** Live histogram of the preview (a 48 × 64 read-back three times a second) and the battery. */
+  private final Runnable histogramTask =
+      new Runnable() {
+        @Override
+        public void run() {
+          if (!resumed) return;
+          main.postDelayed(this, 300);
+          if (++histogramTicks % 200 == 0) {
+            readBattery();
+            pushOsd();
+          }
+          if (!showHistogram || !ready || !powerOn || back == null || !"camera".equals(mode)
+              || dispMode == 1 || texture == null || !texture.isAvailable())
+            return;
+          if (histogramBitmap == null) {
+            histogramBitmap = Bitmap.createBitmap(48, 64, Bitmap.Config.ARGB_8888);
+            histogramPixels = new int[48 * 64];
+          }
+          Bitmap b = texture.getBitmap(histogramBitmap);
+          if (b == null) return;
+          b.getPixels(histogramPixels, 0, 48, 0, 0, 48, 64);
+          Arrays.fill(histogramBins, 0);
+          for (int c : histogramPixels) {
+            int luma = (((c >> 16) & 255) * 54 + ((c >> 8) & 255) * 183 + (c & 255) * 19) >> 8;
+            histogramBins[Math.min(63, luma >> 2)]++;
+          }
+          back.state.histogram = histogramBins;
+          back.refresh();
         }
-      }
-      if (SystemClock.uptimeMillis() - focusAt < 1100) {
-        paint.setColor(0xffffdb97);
-        float r = dp(25);
-        c.drawRoundRect(fx - r, fy - r, fx + r, fy + r, dp(3), dp(3), paint);
-      }
-      if (SystemClock.uptimeMillis() - zoomAt < 850) {
-        paint.setStyle(Paint.Style.FILL);
-        paint.setColor(0xbb263020);
-        float cx = getWidth() / 2f, cy = getHeight() / 2f;
-        c.drawRoundRect(cx - dp(46), cy - dp(27), cx + dp(46), cy + dp(27), dp(10), dp(10), paint);
-        paint.setColor(PAPER);
-        paint.setTextAlign(Paint.Align.CENTER);
-        paint.setTextSize(dp(23));
-        c.drawText(String.format(Locale.US, "%.1f×", zoom), cx, cy + dp(7), paint);
+      };
+
+  @Override
+  public void meter(GrainCamera.Meter m) {
+    lastMeter = m;
+    if (halfPressed && afFeedback == 1) {
+      if (m.afState == android.hardware.camera2.CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED) {
+        afFeedback = 2;
+        back.lamp.set(1);
+        if (sounds && sound != null) sound.play(MediaActionSound.FOCUS_COMPLETE);
+      } else if (m.afState == android.hardware.camera2.CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED) {
+        afFeedback = 3;
+        back.lamp.set(3);
       }
     }
+    pushOsd();
+  }
+
+  @Override
+  public void previewRect(RectF r) {
+    int w = Math.round(r.width()), h = Math.round(r.height());
+    int l = Math.round(r.left), t = Math.round(r.top);
+    if (w <= 0 || h <= 0) return;
+    if (l == previewLeft && t == previewTop && w == previewWidth && h == previewHeight) return;
+    previewLeft = l;
+    previewTop = t;
+    previewWidth = w;
+    previewHeight = h;
+    FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(w, h, Gravity.TOP | Gravity.START);
+    lp.leftMargin = l;
+    lp.topMargin = t;
+    frame.setLayoutParams(lp);
+    if (camera != null) frame.post(() -> camera.updateTransform(zoom));
+  }
+
+  @Override
+  public void lcdTap(float rawX, float rawY, float x, float y) {
+    if (!"camera".equals(mode) || busy || !powerOn) return;
+    afX = Math.max(.06f, Math.min(.94f, x));
+    afY = Math.max(.06f, Math.min(.94f, y));
+    afFeedback = 0;
+    focusAt(afX, afY, false);
+    pushOsd();
+  }
+
+  @Override
+  public void pinch(float factor) {
+    if ("camera".equals(mode) && powerOn) setZoom(zoom * factor);
+  }
+
+  /** Focuses where the focus frame is: the picture point is mapped to the preview, then the sensor. */
+  private void focusAt(float x, float y, boolean hold) {
+    if (camera == null || !ready || busy || frame.getWidth() == 0) return;
+    float[] p = back.imagePointToRoot(x, y);
+    double px = (p[0] - frame.getLeft()) / frame.getWidth(), py = (p[1] - frame.getTop()) / frame.getHeight();
+    double[] mapped = Framing.sourcePoint(px, py, sourceWidth, sourceHeight, ratio, zoom);
+    int rotation = capabilities.optInt("sensorOrientation", 90);
+    double sx = mapped[0], sy = mapped[1];
+    if (rotation == 90) {
+      sx = mapped[1];
+      sy = 1 - mapped[0];
+    } else if (rotation == 270) {
+      sx = 1 - mapped[1];
+      sy = mapped[0];
+    } else if (rotation == 180) {
+      sx = 1 - sx;
+      sy = 1 - sy;
+    }
+    camera.focus(sx, sy, hold);
+  }
+
+  @Override
+  public void key(int key, int value) {
+    if (!powerOn && key != CameraBack.K_POWER) return;
+    switch (key) {
+      case CameraBack.K_FILM:
+        filmDial(value);
+        break;
+      case CameraBack.K_EV:
+        evDial(value);
+        break;
+      case CameraBack.K_SS:
+        speedDial(value);
+        break;
+      case CameraBack.K_ISO_TOGGLE:
+        isoDial = !isoDial;
+        savePrefs();
+        updateDials();
+        updateLabels();
+        back.toast(isoDial ? "ISO DIAL" : "SHUTTER DIAL", isoDial ? "the top dial sets ISO" : "the top dial sets shutter speed");
+        break;
+      case CameraBack.K_SHUTTER:
+        shutterKey(value);
+        break;
+      case CameraBack.K_Q:
+        qKey();
+        break;
+      case CameraBack.K_OK:
+        okKey();
+        break;
+      case CameraBack.K_DISP:
+        dispKey();
+        break;
+      case CameraBack.K_PLAY:
+        if ("play".equals(mode)) closeOverlays();
+        else openPlayback();
+        break;
+      case CameraBack.K_DRIVE:
+        driveKey();
+        break;
+      case CameraBack.K_AEL:
+        if ("camera".equals(mode)) toggleAeLock();
+        break;
+      case CameraBack.K_LEVER:
+        leverKey(value);
+        break;
+      case CameraBack.K_COMMAND:
+        commandKey(value);
+        break;
+      case CameraBack.K_EYE:
+        if (viewMode == 2) back.toast("LCD ONLY", "VIEW MODE → EYE SENSOR to use the viewfinder");
+        else setEvf(!evf);
+        break;
+      case CameraBack.K_VIEW_MODE:
+        viewMode = (viewMode + 1) % VIEW_MODES.length;
+        savePrefs();
+        applyViewMode(true);
+        break;
+      case CameraBack.K_POWER:
+        setPower(value == 1);
+        break;
+      case CameraBack.K_MEMO:
+        memoKey(value);
+        break;
+      case CameraBack.K_EVF_BACK:
+        setEvf(false);
+        break;
+      case CameraBack.K_SWIPE:
+        if ("play".equals(mode)) browse(value);
+        break;
+      default:
+        break;
+    }
+  }
+
+  private void filmDial(int index) {
+    if (index < 0 || index >= dialFilms.length) return;
+    if (busy || counting) {
+      updateLabels();
+      return;
+    }
+    if (dialFilms[index].id != recipe) selectRecipe(dialFilms[index].id);
+  }
+
+  private void evDial(int index) {
+    if (index == EV_C) {
+      evCustom = true;
+      back.toast("C", "the command dial sets exposure in 0.1 EV");
+    } else {
+      evCustom = false;
+      ev = (index - 6) / 3f;
+    }
+    camera.update(snapshot());
+    pushOsd();
+  }
+
+  private void speedDial(int index) {
+    if (index > 0 && ready && !camera.manualExposureAvailable()) {
+      back.shutterDial.setIndex(0);
+      message("This camera doesn’t take manual shutter speed or ISO (no Camera2 manual sensor control).");
+      return;
+    }
+    if (isoDial) isoSetting = index <= 0 || index > isoValues.length ? 0 : isoValues[index - 1];
+    else shutterNs = index <= 0 || index > shutterValues.length ? 0 : shutterValues[index - 1];
+    camera.update(snapshot());
+    pushOsd();
+  }
+
+  private void shutterKey(int value) {
+    if (value == 1) {
+      halfClosedOverlay = false;
+      if (!"camera".equals(mode)) {
+        closeOverlays();
+        halfClosedOverlay = true;
+        return;
+      }
+      if (!ready || busy || counting) return;
+      halfPressed = true;
+      afFeedback = 1;
+      focusAt(afX, afY, true);
+      pushOsd();
+      return;
+    }
+    if (value == -1) {
+      releaseHalf();
+      return;
+    }
+    if (halfClosedOverlay) {
+      halfClosedOverlay = false;
+      return;
+    }
+    boolean wasHalf = halfPressed;
+    halfPressed = false;
+    if (!"camera".equals(mode)) {
+      closeOverlays();
+      return;
+    }
+    takePhoto();
+    if (wasHalf && camera != null) camera.releaseFocus();
+    afFeedback = 0;
+    pushOsd();
+  }
+
+  private void releaseHalf() {
+    if (halfPressed && camera != null) camera.releaseFocus();
+    halfPressed = false;
+    afFeedback = 0;
+    if (back != null) {
+      back.lamp.set(busy ? 2 : 0);
+      pushOsd();
+    }
+  }
+
+  private void qKey() {
+    if ("q".equals(mode)) closeOverlays();
+    else if ("play".equals(mode)) {
+      closeOverlays();
+      showGallery();
+    } else if (!busy && !counting) openQ();
+  }
+
+  private void okKey() {
+    switch (mode) {
+      case "q":
+        closeOverlays();
+        break;
+      case "menu":
+        activateMenuItem();
+        break;
+      case "play":
+        if (!playList.isEmpty()) {
+          PhotoStore.Photo p = playList.get(playIndex);
+          closeOverlays();
+          showPhoto(p);
+        }
+        break;
+      default:
+        if (!busy && !counting) openMenu();
+        break;
+    }
+  }
+
+  private void dispKey() {
+    switch (mode) {
+      case "q":
+      case "menu":
+        closeOverlays();
+        break;
+      case "play":
+        if (playReceipt != null)
+          playReceipt.setVisibility(playReceipt.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
+        break;
+      default:
+        dispMode = (dispMode + 1) % 2;
+        savePrefs();
+        pushOsd();
+        back.toast(dispMode == 0 ? "STANDARD" : "INFO OFF", null);
+        break;
+    }
+  }
+
+  private void setDrive(int value) {
+    if (counting) cancelTimer();
+    drive = (value % DRIVES.length + DRIVES.length) % DRIVES.length;
+    timerSeconds = drive == 1 ? 3 : drive == 2 ? 5 : 0;
+    savePrefs();
+    pushOsd();
+  }
+
+  private void driveKey() {
+    if ("play".equals(mode)) {
+      deletePlayed();
+      return;
+    }
+    if (!"camera".equals(mode)) return;
+    setDrive(drive + 1);
+    back.toast(
+        DRIVES[drive],
+        drive == 3 ? "one RAW, developed as three films" : drive == 0 ? "one frame per press" : "self-timer · tap the shutter to cancel");
+  }
+
+  private void toggleAeLock() {
+    aeLock = !aeLock;
+    camera.setAeLock(aeLock);
+    camera.update(snapshot());
+    pushOsd();
+    back.toast(aeLock ? "AE-L" : "AE UNLOCKED", aeLock ? "exposure held until you press again" : null);
+  }
+
+  private void leverKey(int dir) {
+    switch (mode) {
+      case "q":
+        if (dir == CameraBack.LEVER_CENTER) closeOverlays();
+        else {
+          int row = qIndex / 4, col = qIndex % 4;
+          if (dir == CameraBack.LEVER_UP) row = (row + 3) % 4;
+          else if (dir == CameraBack.LEVER_DOWN) row = (row + 1) % 4;
+          else if (dir == CameraBack.LEVER_LEFT) col = (col + 3) % 4;
+          else col = (col + 1) % 4;
+          qIndex = row * 4 + col;
+          refreshQ();
+        }
+        break;
+      case "menu":
+        if (dir == CameraBack.LEVER_CENTER) activateMenuItem();
+        else if (dir == CameraBack.LEVER_LEFT || dir == CameraBack.LEVER_RIGHT) {
+          menuTab = (menuTab + (dir == CameraBack.LEVER_LEFT ? MENU_TABS.length - 1 : 1)) % MENU_TABS.length;
+          menuIndex = 0;
+          refreshMenu();
+        } else {
+          int n = menuItems(menuTab).size();
+          menuIndex = (menuIndex + (dir == CameraBack.LEVER_UP ? n - 1 : 1)) % Math.max(1, n);
+          refreshMenu();
+        }
+        break;
+      case "play":
+        if (dir == CameraBack.LEVER_LEFT || dir == CameraBack.LEVER_UP) browse(-1);
+        else if (dir == CameraBack.LEVER_RIGHT || dir == CameraBack.LEVER_DOWN) browse(1);
+        else okKey();
+        break;
+      default:
+        if (dir == CameraBack.LEVER_CENTER) {
+          afX = .5f;
+          afY = .5f;
+        } else {
+          float step = .07f;
+          if (dir == CameraBack.LEVER_UP) afY -= step;
+          else if (dir == CameraBack.LEVER_DOWN) afY += step;
+          else if (dir == CameraBack.LEVER_LEFT) afX -= step;
+          else afX += step;
+          afX = Math.max(.06f, Math.min(.94f, afX));
+          afY = Math.max(.06f, Math.min(.94f, afY));
+        }
+        afFeedback = 0;
+        focusAt(afX, afY, false);
+        pushOsd();
+        break;
+    }
+  }
+
+  private void commandKey(int steps) {
+    switch (mode) {
+      case "q":
+        stepQ(steps);
+        break;
+      case "menu":
+        stepMenu(steps);
+        break;
+      case "play":
+        browse(steps);
+        break;
+      default:
+        if (evCustom) {
+          ev = Math.max(-2, Math.min(2, Math.round((ev + steps * .1f) * 10) / 10f));
+          camera.update(snapshot());
+          pushOsd();
+          back.toast(String.format(Locale.US, "%+.1f EV", ev), null);
+        } else setZoom(Math.round((zoom + steps * .1) * 10) / 10.0);
+        break;
+    }
+  }
+
+  private void setEvf(boolean on) {
+    if (on == evf || back == null) return;
+    if (!on && viewMode == 1) {
+      viewMode = 0;
+      savePrefs();
+      back.viewMode.setText("EYE");
+    }
+    evf = on;
+    back.setEvf(on);
+    pushOsd();
+  }
+
+  private void applyViewMode(boolean announce) {
+    if (back == null) return;
+    back.viewMode.setText(viewMode == 0 ? "EYE" : viewMode == 1 ? "EVF" : "LCD");
+    if (viewMode == 1) setEvf(true);
+    else if (viewMode == 2) setEvf(false);
+    if (announce)
+      back.toast(
+          VIEW_MODES[viewMode],
+          viewMode == 0 ? "tap the eyepiece for the viewfinder" : viewMode == 1 ? "viewfinder view only" : "screen view only");
+  }
+
+  private void setPower(boolean on) {
+    if (on == powerOn) return;
+    if (!on && (busy || saving)) {
+      message("Still saving the last moment…");
+      return;
+    }
+    powerOn = on;
+    back.setOn(on);
+    if (!on) {
+      cancelTimer();
+      closeOverlays();
+      if (halfPressed) releaseHalf();
+      if (camera != null) {
+        camera.neutralPreview(false);
+        camera.close();
+      }
+      ready = false;
+      frame.setVisibility(View.INVISIBLE);
+    } else {
+      frame.setVisibility(View.VISIBLE);
+      openCamera();
+    }
+    pushOsd();
+  }
+
+  private void memoKey(int value) {
+    Recipe r = Recipe.ALL[recipe];
+    if (value == 1) {
+      if (!busy && ready) {
+        neutralHeld = true;
+        camera.neutralPreview(true);
+        pushOsd();
+      }
+    } else if (value == 2) {
+      if (neutralHeld) {
+        neutralHeld = false;
+        camera.neutralPreview(false);
+        pushOsd();
+      }
+    } else
+      message(
+          r.name
+              + (r.raw
+                  ? " · Fujifilm " + r.fuji.filmLabel + (tuning.tuned(r) ? " · tuned" : "") + " · developed from RAW"
+                  : " · phone ISP look")
+              + " · hold the memo to see the phone’s own view");
+  }
+
+  private void flipCamera() {
+    if (busy) return;
+    cancelTimer();
+    front = !front;
+    ready = false;
+    camera.close();
+    main.postDelayed(this::openCamera, 350);
+  }
+
+  private void reopenCamera() {
+    if (busy) return;
+    ready = false;
+    camera.close();
+    main.postDelayed(this::openCamera, 350);
+  }
+
+  private void cycleRatio(int d) {
+    if (busy) return;
+    int i = Arrays.asList(Framing.RATIOS).indexOf(ratio);
+    ratio = Framing.RATIOS[(Math.max(0, i) + (d < 0 ? Framing.RATIOS.length - 1 : 1)) % Framing.RATIOS.length];
+    savePrefs();
+    layoutFrame();
+    camera.update(snapshot());
+    pushOsd();
+  }
+
+  private void closeOverlays() {
+    if (back != null) back.hideOverlay();
+    mode = "camera";
+    qTiles.clear();
+    menuList = null;
+    menuTabs = null;
+    menuScroll = null;
+    playImage = null;
+    playInfo = null;
+    playReceipt = null;
+    pushOsd();
+  }
+
+  // ───────────────────────────── Q menu ─────────────────────────────
+
+  private static final String[][] Q_ITEMS = {
+    {"FILM", "film"}, {"WB", "White balance"}, {"WB R", "WB shift red"}, {"WB B", "WB shift blue"},
+    {"DR", "Dynamic range"}, {"H TONE", "Highlight"}, {"S TONE", "Shadow"}, {"COLOR", "Color"},
+    {"SHARP", "Sharpness"}, {"NR", "High ISO NR"}, {"CLARITY", "Clarity"}, {"GRAIN", "Grain"},
+    {"CCE", "Color Chrome Effect"}, {"FX BLUE", "Color Chrome FX Blue"}, {"DEV", "Development"},
+    {"FACE", "face"}
+  };
+
+  /** The tuning control behind a Q tile, or null when this film has no such setting. */
+  private TuningControl qControl(Recipe r, int index) {
+    if (!r.raw) return null;
+    String name = Q_ITEMS[index][1];
+    if (r.fuji.monochrome() && "Color".equals(name)) name = "Filter";
+    List<TuningControl> all = new ArrayList<>(TuningControl.fujifilm(r.fuji));
+    all.addAll(TuningControl.extras());
+    for (TuningControl c : all) if (c.name.equals(name)) return c;
+    return null;
+  }
+
+  private TuningControl namedControl(Recipe r, String name) {
+    if (!r.raw) return null;
+    for (TuningControl c : TuningControl.fujifilm(r.fuji)) if (c.name.equals(name)) return c;
+    return null;
+  }
+
+  private String qLabel(Recipe r, int index) {
+    if (!r.raw && index == 1) return "STRENGTH";
+    if (r.raw && r.fuji.monochrome() && index == 7) return "FILTER";
+    return Q_ITEMS[index][0];
+  }
+
+  private String qFullName(Recipe r, int index) {
+    String key = Q_ITEMS[index][1];
+    if ("film".equals(key)) return "FILM SIMULATION · " + r.name.toUpperCase(Locale.ROOT);
+    if ("face".equals(key)) return "FACE EXPOSURE";
+    if (!r.raw) return index == 1 ? "LOOK STRENGTH" : "NOT FOR ISP LOOKS";
+    TuningControl c = qControl(r, index);
+    return c == null ? "NOT FOR THIS FILM" : c.name.toUpperCase(Locale.ROOT);
+  }
+
+  private String qValueText(Recipe r, int index, FujiRecipe.Tuning t) {
+    String key = Q_ITEMS[index][1];
+    if ("film".equals(key)) return filmCode(r);
+    if ("face".equals(key)) return r.raw ? onOff(faceExposure) : "—";
+    if (!r.raw) return index == 1 ? strengths[recipe] + "%" : "—";
+    TuningControl c = qControl(r, index);
+    if (c == null) return "—";
+    if (!c.enabled(t)) return c.disabledLabel == null ? "—" : shortLabel(c.disabledLabel);
+    return shortLabel(c.labels[c.at(t)]);
+  }
+
+  private void openQ() {
+    mode = "q";
+    back.showOverlay(buildQ());
+    refreshQ();
+  }
+
+  private TextView qButton(String label, Runnable action) {
+    TextView b = text(label, 15, 0xfff4f1e8);
+    b.setBackground(bg(0xff2b2b28, 4, 0x40ffffff, 1));
+    b.setOnClickListener(v -> action.run());
+    return b;
+  }
+
+  private View buildQ() {
+    qTiles.clear();
+    LinearLayout box = column();
+    box.setBackgroundColor(0xe0101010);
+    box.setPadding(dp(6), dp(4), dp(6), dp(4));
+    box.setClickable(true);
+    TextView head = text("Q   QUICK MENU", 8.5f, 0xffd8d3c7);
+    head.setLetterSpacing(.14f);
+    head.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+    box.addView(head, new LinearLayout.LayoutParams(-1, dp(20)));
+    for (int row = 0; row < 4; row++) {
+      LinearLayout line = row();
+      box.addView(line, new LinearLayout.LayoutParams(-1, 0, 1));
+      for (int col = 0; col < 4; col++) {
+        int index = row * 4 + col;
+        LinearLayout tile = column();
+        tile.setGravity(Gravity.CENTER);
+        tile.setPadding(dp(2), dp(1), dp(2), dp(1));
+        TextView label = text(Q_ITEMS[index][0], 7.5f, 0xffb9b4a8);
+        label.setLetterSpacing(.08f);
+        label.setSingleLine(true);
+        TextView value = text("", 13, 0xfff4f1e8);
+        value.setTypeface(Typeface.create("sans-serif-condensed", Typeface.BOLD));
+        value.setSingleLine(true);
+        value.setAutoSizeTextTypeUniformWithConfiguration(7, 13, 1, TypedValue.COMPLEX_UNIT_SP);
+        tile.addView(label, new LinearLayout.LayoutParams(-1, -2));
+        tile.addView(value, new LinearLayout.LayoutParams(-1, 0, 1));
+        tile.setOnClickListener(
+            v -> {
+              if (qIndex == index) stepQ(1);
+              else {
+                qIndex = index;
+                refreshQ();
+              }
+            });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -1, 1);
+        lp.setMargins(dp(2), dp(2), dp(2), dp(2));
+        line.addView(tile, lp);
+        qTiles.add(new TextView[] {label, value});
+      }
+    }
+    LinearLayout bar = row();
+    bar.setPadding(dp(8), 0, dp(2), 0);
+    qName = text("", 8.5f, 0xffe9e5da);
+    qName.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+    qName.setSingleLine(true);
+    qName.setEllipsize(android.text.TextUtils.TruncateAt.END);
+    bar.addView(qName, new LinearLayout.LayoutParams(0, -1, 1));
+    bar.addView(qButton("−", () -> stepQ(-1)), size(34, 28));
+    qValue = text("", 10.5f, 0xffffffff);
+    qValue.setSingleLine(true);
+    bar.addView(qValue, size(72, 28));
+    bar.addView(qButton("+", () -> stepQ(1)), size(34, 28));
+    box.addView(bar, new LinearLayout.LayoutParams(-1, dp(32)));
+    qKelvinRow = row();
+    qKelvinRow.setPadding(dp(8), 0, dp(2), 0);
+    TextView kName = text("COLOR TEMPERATURE", 8.5f, 0xffe9e5da);
+    kName.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+    qKelvinRow.addView(kName, new LinearLayout.LayoutParams(0, -1, 1));
+    qKelvinRow.addView(qButton("−", () -> stepKelvin(-1)), size(34, 26));
+    qKelvinValue = text("", 10.5f, 0xffffffff);
+    qKelvinRow.addView(qKelvinValue, size(72, 26));
+    qKelvinRow.addView(qButton("+", () -> stepKelvin(1)), size(34, 26));
+    box.addView(qKelvinRow, new LinearLayout.LayoutParams(-1, dp(30)));
+    return box;
+  }
+
+  private void refreshQ() {
+    if (!"q".equals(mode) || qTiles.isEmpty() || qName == null) return;
+    Recipe r = Recipe.ALL[recipe];
+    FujiRecipe.Tuning t = r.raw ? tuning.effective(r).tuning() : null;
+    FujiRecipe.Tuning defaults = r.raw ? r.fuji.tuning() : null;
+    for (int i = 0; i < qTiles.size(); i++) {
+      TextView[] views = qTiles.get(i);
+      views[0].setText(qLabel(r, i));
+      views[1].setText(qValueText(r, i, t));
+      TuningControl c = qControl(r, i);
+      boolean usable =
+          i == 0 || (i == 15 && r.raw) || (!r.raw && i == 1) || (c != null && t != null && c.enabled(t));
+      boolean changed = c != null && t != null && c.enabled(t) && c.at(t) != c.at(defaults);
+      if (!r.raw && i == 1) changed = strengths[recipe] != 80;
+      views[1].setTextColor(!usable ? 0xff6f6b63 : changed ? 0xffff9a66 : 0xfff4f1e8);
+      View tile = (View) views[0].getParent();
+      tile.setBackground(
+          i == qIndex ? bg(0xff34342f, 3, 0xfff4f1e8, 2) : bg(0x99202020, 3, 0x30ffffff, 1));
+    }
+    qName.setText(qFullName(r, qIndex));
+    qValue.setText(qValueText(r, qIndex, t));
+    TuningControl kelvin = namedControl(r, "Color temperature");
+    boolean showKelvin = qIndex == 1 && kelvin != null && t != null && kelvin.enabled(t);
+    qKelvinRow.setVisibility(showKelvin ? View.VISIBLE : View.GONE);
+    if (showKelvin) qKelvinValue.setText(shortLabel(kelvin.labels[kelvin.at(t)]));
+  }
+
+  private void stepQ(int delta) {
+    Recipe r = Recipe.ALL[recipe];
+    String key = Q_ITEMS[qIndex][1];
+    if (busy) return;
+    if ("film".equals(key)) {
+      int at = indexOfFilm(recipe);
+      int next = Math.max(0, Math.min(dialFilms.length - 1, at + (delta > 0 ? 1 : -1)));
+      if (dialFilms.length > 0 && next != at) selectRecipe(dialFilms[next].id);
+      refreshQ();
+      return;
+    }
+    if ("face".equals(key)) {
+      if (r.raw) {
+        faceExposure = !faceExposure;
+        camera.setFaceDetection(faceExposure);
+        camera.update(snapshot());
+        savePrefs();
+        pushOsd();
+      }
+      refreshQ();
+      return;
+    }
+    if (!r.raw) {
+      if (qIndex == 1) {
+        strengths[recipe] = Math.max(0, Math.min(100, strengths[recipe] + 10 * (delta > 0 ? 1 : -1)));
+        savePrefs();
+        camera.update(snapshot());
+        pushOsd();
+      }
+      refreshQ();
+      return;
+    }
+    TuningControl c = qControl(r, qIndex);
+    if (c == null) return;
+    FujiRecipe.Tuning t = tuning.effective(r).tuning();
+    if (!c.enabled(t)) {
+      back.toast(c.name.toUpperCase(Locale.ROOT), c.disabledLabel == null ? "not used now" : c.disabledLabel);
+      return;
+    }
+    c.set(t, c.at(t) + (delta > 0 ? 1 : -1));
+    tuning.save(r, t);
+    camera.update(snapshot());
+    updateLabels();
+  }
+
+  private void stepKelvin(int delta) {
+    Recipe r = Recipe.ALL[recipe];
+    TuningControl kelvin = namedControl(r, "Color temperature");
+    if (kelvin == null || busy) return;
+    FujiRecipe.Tuning t = tuning.effective(r).tuning();
+    if (!kelvin.enabled(t)) return;
+    kelvin.set(t, kelvin.at(t) + delta);
+    tuning.save(r, t);
+    camera.update(snapshot());
+    updateLabels();
+  }
+
+  // ───────────────────────────── MENU ─────────────────────────────
+
+  private static final String[] MENU_TABS = {"I.Q.", "AF", "SHOOT", "SET UP"};
+  private static final String[] MENU_TITLES = {"IMAGE QUALITY", "AF / FACE", "SHOOTING", "SET UP"};
+
+  private static final class Item {
+    final String name;
+    final Supplier<String> value;
+    final IntConsumer change;
+    final boolean opens;
+
+    Item(String name, Supplier<String> value, IntConsumer change, boolean opens) {
+      this.name = name;
+      this.value = value;
+      this.change = change;
+      this.opens = opens;
+    }
+  }
+
+  private List<Item> menuItems(int tab) {
+    List<Item> items = new ArrayList<>();
+    switch (tab) {
+      case 0:
+        items.add(new Item("FILMS & TUNING", () -> Recipe.ALL[recipe].name.toUpperCase(Locale.ROOT), d -> {
+          closeOverlays();
+          showFilmLab();
+        }, true));
+        items.add(new Item("ASPECT RATIO", this::orientedRatio, this::cycleRatio, false));
+        items.add(new Item("FILE FORMAT", () -> keepRawFiles ? "FINE + DNG" : "FINE", d -> {
+          keepRawFiles = !keepRawFiles;
+          applyRawFilesPreference();
+          savePrefs();
+          pushOsd();
+        }, false));
+        items.add(new Item("KEEP FULL FRAME", () -> onOff(keepFull), d -> {
+          keepFull = !keepFull;
+          savePrefs();
+          camera.update(snapshot());
+        }, false));
+        items.add(new Item("LARGER CAPTURE", () -> onOff(larger), d -> {
+          larger = !larger;
+          savePrefs();
+          reopenCamera();
+        }, false));
+        items.add(new Item("IMPORT LUT ZIP", () -> luts.summary().toUpperCase(Locale.ROOT), d -> {
+          closeOverlays();
+          pickLuts(null);
+        }, true));
+        items.add(new Item("DOWNLOAD LUTS", () -> "›", d -> {
+          closeOverlays();
+          chooseLutDownload();
+        }, true));
+        break;
+      case 1:
+        items.add(new Item("FACE EXPOSURE", () -> onOff(faceExposure), d -> {
+          faceExposure = !faceExposure;
+          camera.setFaceDetection(faceExposure);
+          camera.update(snapshot());
+          savePrefs();
+          pushOsd();
+        }, false));
+        items.add(new Item("FOCUS POINT", () -> afX == .5f && afY == .5f ? "CENTRE" : "MOVED · RESET", d -> {
+          afX = .5f;
+          afY = .5f;
+          pushOsd();
+        }, false));
+        items.add(new Item("AE LOCK", () -> onOff(aeLock), d -> toggleAeLock(), false));
+        break;
+      case 2:
+        items.add(new Item("DRIVE", () -> DRIVES[drive], d -> setDrive(drive + (d < 0 ? -1 : 1)), false));
+        items.add(new Item("SHUTTER / ISO", () -> shutterNs > 0 || isoSetting > 0
+            ? (shutterNs > 0 ? shutterText(shutterNs, false) : "A") + " · " + (isoSetting > 0 ? "ISO " + isoSetting : "ISO A")
+            : "AUTO", d -> {
+          shutterNs = 0;
+          isoSetting = 0;
+          updateLabels();
+          camera.update(snapshot());
+        }, false));
+        items.add(new Item("EXPOSURE", () -> String.format(Locale.US, "%+.1f EV", ev), d -> {
+          evCustom = true;
+          ev = Math.max(-2, Math.min(2, Math.round((ev + .1f * (d < 0 ? -1 : 1)) * 10) / 10f));
+          camera.update(snapshot());
+          updateLabels();
+        }, false));
+        items.add(new Item("CAMERA", () -> front ? "FRONT" : "REAR", d -> flipCamera(), false));
+        break;
+      default:
+        items.add(new Item("SOUNDS", () -> onOff(sounds), d -> {
+          sounds = !sounds;
+          savePrefs();
+        }, false));
+        items.add(new Item("VIEW MODE", () -> VIEW_MODES[viewMode], d -> {
+          viewMode = (viewMode + (d < 0 ? VIEW_MODES.length - 1 : 1)) % VIEW_MODES.length;
+          savePrefs();
+          applyViewMode(false);
+        }, false));
+        items.add(new Item("SCREEN ROTATION", () -> autoRotate ? "AUTO" : "PORTRAIT", d -> {
+          autoRotate = !autoRotate;
+          savePrefs();
+          applyUiRotation(deviceRotation, true);
+        }, false));
+        items.add(new Item("HISTOGRAM", () -> onOff(showHistogram), d -> {
+          showHistogram = !showHistogram;
+          savePrefs();
+          pushOsd();
+        }, false));
+        items.add(new Item("ELECTRONIC LEVEL", () -> onOff(showLevel), d -> {
+          showLevel = !showLevel;
+          savePrefs();
+          pushOsd();
+        }, false));
+        items.add(new Item("FRAMING GRID", () -> onOff(grid), d -> {
+          grid = !grid;
+          savePrefs();
+          pushOsd();
+        }, false));
+        items.add(new Item("BODY FINISH", () -> CameraBack.FINISHES[finish], d -> {
+          finish = (finish + (d < 0 ? 2 : 1)) % 3;
+          back.setFinish(finish);
+          savePrefs();
+        }, false));
+        items.add(new Item("ALL PREFERENCES", () -> "›", d -> {
+          closeOverlays();
+          showSettings();
+        }, true));
+        items.add(new Item("DIAGNOSTICS", () -> "›", d -> {
+          closeOverlays();
+          showDiagnostics();
+        }, true));
+        items.add(new Item("ABOUT", () -> "GRAIN " + BuildConfig.VERSION_NAME, d -> {}, false));
+        break;
+    }
+    return items;
+  }
+
+  private void openMenu() {
+    mode = "menu";
+    menuIndex = 0;
+    back.showOverlay(buildMenu());
+    refreshMenu();
+  }
+
+  private View buildMenu() {
+    LinearLayout box = row();
+    box.setBackgroundColor(0xf2121211);
+    box.setClickable(true);
+    LinearLayout tabs = column();
+    tabs.setBackgroundColor(0xff1c1c1a);
+    tabs.setPadding(0, dp(4), 0, dp(4));
+    menuTabs = new TextView[MENU_TABS.length];
+    for (int i = 0; i < MENU_TABS.length; i++) {
+      int tab = i;
+      TextView t = text(MENU_TABS[i], 8, 0xffb9b4a8);
+      t.setLetterSpacing(.06f);
+      t.setOnClickListener(
+          v -> {
+            menuTab = tab;
+            menuIndex = 0;
+            refreshMenu();
+          });
+      tabs.addView(t, new LinearLayout.LayoutParams(-1, dp(38)));
+      menuTabs[i] = t;
+    }
+    box.addView(tabs, new LinearLayout.LayoutParams(dp(54), -1));
+    LinearLayout right = column();
+    menuTitle = text("", 9, 0xfff4f1e8);
+    menuTitle.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+    menuTitle.setPadding(dp(10), 0, dp(10), 0);
+    menuTitle.setLetterSpacing(.12f);
+    right.addView(menuTitle, new LinearLayout.LayoutParams(-1, dp(28)));
+    menuScroll = new ScrollView(this);
+    menuScroll.setVerticalScrollBarEnabled(false);
+    menuList = column();
+    menuScroll.addView(menuList);
+    right.addView(menuScroll, new LinearLayout.LayoutParams(-1, 0, 1));
+    TextView hint = text("LEVER · TAP · COMMAND DIAL CHANGES · OK SELECTS · DISP BACK", 6.5f, 0xff8f8a7f);
+    hint.setSingleLine(true);
+    right.addView(hint, new LinearLayout.LayoutParams(-1, dp(16)));
+    box.addView(right, new LinearLayout.LayoutParams(0, -1, 1));
+    return box;
+  }
+
+  private void refreshMenu() {
+    if (!"menu".equals(mode) || menuList == null || menuTabs == null) return;
+    for (int i = 0; i < menuTabs.length; i++) {
+      menuTabs[i].setTextColor(i == menuTab ? 0xff111111 : 0xffb9b4a8);
+      menuTabs[i].setBackgroundColor(i == menuTab ? 0xfff4f1e8 : 0);
+    }
+    menuTitle.setText(MENU_TABS[menuTab] + "   " + MENU_TITLES[menuTab]);
+    List<Item> items = menuItems(menuTab);
+    menuIndex = Math.max(0, Math.min(items.size() - 1, menuIndex));
+    menuList.removeAllViews();
+    View selected = null;
+    for (int i = 0; i < items.size(); i++) {
+      Item item = items.get(i);
+      int index = i;
+      boolean on = i == menuIndex;
+      LinearLayout line = row();
+      line.setPadding(dp(10), 0, dp(10), 0);
+      line.setBackgroundColor(on ? 0xfff4f1e8 : 0);
+      TextView name = text(item.name, 9, on ? 0xff111111 : 0xffe9e5da);
+      name.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+      name.setSingleLine(true);
+      TextView value = text(item.value.get(), 9, on ? 0xff9a3f16 : 0xff9d988c);
+      value.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+      value.setSingleLine(true);
+      value.setEllipsize(android.text.TextUtils.TruncateAt.END);
+      line.addView(name, new LinearLayout.LayoutParams(0, -1, 1));
+      line.addView(value, new LinearLayout.LayoutParams(0, -1, .9f));
+      line.setOnClickListener(
+          v -> {
+            if (menuIndex == index) activateMenuItem();
+            else {
+              menuIndex = index;
+              refreshMenu();
+            }
+          });
+      menuList.addView(line, new LinearLayout.LayoutParams(-1, dp(32)));
+      if (on) selected = line;
+    }
+    View target = selected;
+    if (target != null && menuScroll != null)
+      menuScroll.post(
+          () -> {
+            if (menuScroll != null) menuScroll.smoothScrollTo(0, Math.max(0, target.getTop() - dp(32)));
+          });
+  }
+
+  private void activateMenuItem() {
+    List<Item> items = menuItems(menuTab);
+    if (items.isEmpty()) return;
+    Item item = items.get(Math.max(0, Math.min(items.size() - 1, menuIndex)));
+    item.change.accept(1);
+    refreshMenu();
+  }
+
+  private void stepMenu(int steps) {
+    List<Item> items = menuItems(menuTab);
+    if (items.isEmpty()) return;
+    Item item = items.get(Math.max(0, Math.min(items.size() - 1, menuIndex)));
+    if (item.opens) return;
+    item.change.accept(steps < 0 ? -1 : 1);
+    refreshMenu();
+  }
+
+  // ───────────────────────────── playback ─────────────────────────────
+
+  private void openPlayback() {
+    if (busy || counting) return;
+    files.execute(
+        () -> {
+          List<PhotoStore.Photo> list = store.list();
+          runOnUiThread(
+              () -> {
+                if (isDestroyed() || !powerOn) return;
+                if (list.isEmpty()) {
+                  back.toast("NO PHOTOS", "your photos appear here");
+                  return;
+                }
+                playList.clear();
+                playList.addAll(list);
+                playIndex = 0;
+                mode = "play";
+                back.showOverlay(buildPlayback());
+                showPlayed();
+              });
+        });
+  }
+
+  private View buildPlayback() {
+    FrameLayout box = new FrameLayout(this);
+    box.setBackgroundColor(0xff000000);
+    playImage = new ImageView(this);
+    playImage.setScaleType(ImageView.ScaleType.FIT_CENTER);
+    box.addView(playImage, new FrameLayout.LayoutParams(-1, -1));
+    playInfo = text("", 8.5f, 0xfff4f1e8);
+    playInfo.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+    playInfo.setPadding(dp(8), 0, dp(8), 0);
+    playInfo.setBackgroundColor(0x99000000);
+    playInfo.setSingleLine(true);
+    playInfo.setEllipsize(android.text.TextUtils.TruncateAt.END);
+    box.addView(playInfo, new FrameLayout.LayoutParams(-1, dp(24), Gravity.TOP));
+    TextView hint = text("◀ ▶ BROWSE · DISP RECEIPT · DRIVE DELETE · OK DETAILS · Q ALL", 6.5f, 0xffc9c4b8);
+    hint.setBackgroundColor(0x99000000);
+    hint.setSingleLine(true);
+    box.addView(hint, new FrameLayout.LayoutParams(-1, dp(18), Gravity.BOTTOM));
+    playReceipt = text("", 8.5f, 0xfff4f1e8);
+    playReceipt.setGravity(Gravity.START | Gravity.TOP);
+    playReceipt.setPadding(dp(10), dp(8), dp(10), dp(8));
+    playReceipt.setBackground(bg(0xe0101010, 6, 0x40ffffff, 1));
+    playReceipt.setLineSpacing(0, 1.15f);
+    playReceipt.setVisibility(View.GONE);
+    FrameLayout.LayoutParams rp = new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER);
+    rp.setMargins(dp(12), dp(30), dp(12), dp(24));
+    box.addView(playReceipt, rp);
+    GestureDetector gestures =
+        new GestureDetector(
+            this,
+            new GestureDetector.SimpleOnGestureListener() {
+              @Override
+              public boolean onDown(MotionEvent e) {
+                return true;
+              }
+
+              @Override
+              public boolean onFling(MotionEvent a, MotionEvent b, float vx, float vy) {
+                if (Math.abs(vx) > Math.abs(vy)) {
+                  browse(vx < 0 ? 1 : -1);
+                  return true;
+                }
+                return false;
+              }
+
+              @Override
+              public boolean onSingleTapConfirmed(MotionEvent e) {
+                dispKey();
+                return true;
+              }
+
+              @Override
+              public boolean onDoubleTap(MotionEvent e) {
+                okKey();
+                return true;
+              }
+            });
+    box.setOnTouchListener(
+        (v, e) -> {
+          gestures.onTouchEvent(e);
+          if (e.getActionMasked() == MotionEvent.ACTION_UP) v.performClick();
+          return true;
+        });
+    return box;
+  }
+
+  private void showPlayed() {
+    if (!"play".equals(mode) || playList.isEmpty() || playImage == null) return;
+    playIndex = Math.max(0, Math.min(playList.size() - 1, playIndex));
+    PhotoStore.Photo p = playList.get(playIndex);
+    playImage.setImageDrawable(null);
+    loadImage(playImage, p.image, 1600);
+    JSONObject r = p.metadata.optJSONObject("recipe");
+    playInfo.setText(
+        (playIndex + 1) + " / " + playList.size() + "    "
+            + (r == null ? "PHOTO" : r.optString("name").toUpperCase(Locale.ROOT))
+            + (p.metadata.has("bracket") ? "  ·  FS BKT " + p.metadata.optString("bracket") : "")
+            + (p.dng != null ? "  ·  DNG" : ""));
+    playReceipt.setText(receiptText(p));
+  }
+
+  private static void receiptLine(StringBuilder s, String name, String value) {
+    if (value == null || value.isEmpty()) return;
+    s.append(name).append("   ").append(value).append('\n');
+  }
+
+  private String receiptText(PhotoStore.Photo p) {
+    JSONObject m = p.metadata;
+    JSONObject r = m.optJSONObject("recipe"), a = m.optJSONObject("actual");
+    JSONObject q = m.optJSONObject("requested"), d = m.optJSONObject("development");
+    StringBuilder s = new StringBuilder();
+    receiptLine(s, "FILM", r == null ? "" : r.optString("name"));
+    if (a != null)
+      receiptLine(s, "EXPOSURE", shutterText(a.optLong("exposureNs"), false) + "  ·  ISO " + a.optInt("iso"));
+    JSONObject manual = q == null ? null : q.optJSONObject("manual");
+    if (manual != null) receiptLine(s, "MANUAL", manual.optString("mode"));
+    if (q != null && q.optBoolean("aeLock")) receiptLine(s, "AE-L", "locked");
+    if (d != null) {
+      if (d.has("developmentGainEv"))
+        receiptLine(s, "GAIN", String.format(Locale.US, "%+.2f EV", d.optDouble("developmentGainEv")));
+      String face = d.optString("faceExposure", "");
+      if (!face.isEmpty()) receiptLine(s, "FACE", face.length() > 48 ? face.substring(0, 48) + "…" : face);
+      if (d.has("totalMs")) receiptLine(s, "DEVELOPED", String.format(Locale.US, "%.1f s", d.optLong("totalMs") / 1000.0));
+    }
+    receiptLine(s, "FS BKT", m.optString("bracket", ""));
+    receiptLine(s, "SIZE", m.optInt("width") + " × " + m.optInt("height") + "  ·  " + m.optString("ratio"));
+    receiptLine(s, "FILES", "JPEG" + (p.dng != null ? " + DNG" : "") + (m.optBoolean("phoneJpegKept") ? " + phone JPEG" : ""));
+    return s.toString().trim();
+  }
+
+  private void browse(int delta) {
+    if (!"play".equals(mode) || playList.isEmpty()) return;
+    int next = Math.max(0, Math.min(playList.size() - 1, playIndex + (delta > 0 ? 1 : -1)));
+    if (next == playIndex) return;
+    playIndex = next;
+    showPlayed();
+  }
+
+  private void deletePlayed() {
+    if (playList.isEmpty()) return;
+    PhotoStore.Photo p = playList.get(playIndex);
+    if (!store.trash(p)) {
+      message("Couldn’t delete this photo.");
+      return;
+    }
+    int at = playIndex;
+    playList.remove(at);
+    updateThumb();
+    if (playList.isEmpty()) closeOverlays();
+    else showPlayed();
+    showSnackbar(
+        "Photo deleted",
+        "Undo",
+        () -> {
+          if (!store.restore(p)) return;
+          updateThumb();
+          if ("play".equals(mode)) {
+            playList.add(Math.min(at, playList.size()), p);
+            playIndex = Math.min(at, playList.size() - 1);
+            showPlayed();
+          }
+        });
   }
 }
