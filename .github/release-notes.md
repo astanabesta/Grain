@@ -1,27 +1,25 @@
-## Grain Photo vVERSION — FX Blue that deepens the sky (device-test beta)
+## Grain Photo vVERSION — Face exposure (device-test beta)
 
 Install **Grain-vVERSION.apk** on the Redmi Note 13 Pro+.
-- **From v0.2.1 – v0.3.2:** it installs as an update. Your photos, imported LUTs and tuning stay.
+- **From v0.2.1 – v0.3.3:** it installs as an update. Your photos, imported LUTs and tuning stay.
 - **From v0.2.0 or older:** first save the photos you want to keep (photo → **Save to device gallery**), uninstall Grain, install this APK, then re-import the LUT pack (*Tune → Import LUT pack*).
 
-### Color Chrome FX Blue, rebuilt from Fujifilm's own photos
-- Before, FX Blue only touched very saturated blues and changed a real sky by less than 0.3 %, even on Strong. That's why Reggie's Superia skies looked thin.
-- Now it matches Fujifilm's FX Blue: blue skies get darker and richer at the same hue, like a polarizing filter.
-- Calibrated on Fujifilm X100V camera JPEGs of one clear sky at FX Blue Off, Weak and Strong (Fuji X Weekly's test):
-  - Strong takes 9 % (pale sky) to 24 % (deep sky) of the brightness off the sky;
-  - Weak takes half of that;
-  - Grain reproduces Fujifilm's result within about 2 code values (out of 255).
-- Skin, reds, yellows, greens, greys and white clouds are not touched.
+### Faces set the exposure, like Fujifilm's face detection
+- Before, Grain metered the whole frame. A window or a bright wall behind you pulled the exposure down, and your face came out 2–3 stops too dark, even at +0.9 EV.
+- Now, when a face is found, the face sets the exposure. Fujifilm's manuals: "Intelligent Face Detection sets focus and exposure for human faces".
+- A backlit face comes out bright. The background gets brighter and may blow out, as on a Fujifilm. DR-Auto still switches to DR200 to keep a little more of a bright background.
+- Faces come from the phone camera's own face detector. If it finds none, Grain searches the phone's reference JPEG of the same shot.
+- With face exposure on, **start at 0 EV**: +0.9 on top makes faces very bright.
+- **Settings → Fujifilm recipes → Face exposure** turns it off (it is on by default). Off, or with no face in the frame, photos develop exactly as in v0.3.3.
+- The receipt shows what happened: `faceExposure`, where the face was, its measured level and the EV applied.
 
-### Where you'll see it
-- **Reggie's Superia** (FX Blue Strong): clearly deeper blue skies.
-- **Reggie's Portra** (FX Blue Weak): somewhat deeper skies. Its grain, texture and every other colour are still exactly Grain v0.2.0's.
-- Every other film with FX Blue Weak or Strong, in both developments (First version and Clean).
+### Also fixed
+- The EXIF "Software" tag still said "Grain Photo 0.2.3". It now shows the installed version.
 
-### Unchanged
-- With FX Blue Off, every photo develops exactly as in v0.3.2 (checked bit for bit). On the indoor test RAW, only the blue pixels changed: about 1 % of the picture.
-- Color is unchanged in this version.
+### Good to know
+- This is not the phone's HDR. Grain, like a Fujifilm, develops one exposure without local tone mapping, so it can't keep both a bright face and a bright window. The Redmi camera merges several frames to do that.
+- A face lifted by 2–3 stops shows more sensor noise, because the phone exposed for the room. If the receipts show the camera keeps underexposing backlit faces, the next step is to make the camera expose for the face at capture.
 
-Most useful feedback: a blue-sky shot with Reggie's Superia, with the DNG + receipt (and the phone's own JPEG if you have it), plus the same sky with FX Blue Off for comparison.
+Most useful feedback: the same backlit shot again (face exposure on, 0 EV) with its receipt, and the DNG if possible.
 
 This is a personal device-test build, signed with the project's personal key (certificate SHA-256 6e073ef6…). SHA256SUMS.txt verifies the APK download.

@@ -28,6 +28,13 @@ public final class RawFrame {
    * when the HAL did not report it.
    */
   public double[] noiseS, noiseO;
+  /**
+   * Faces in this frame for face exposure: {left, top, right, bottom} per face in RAW pixels, and a
+   * detection confidence of 1..100 per face (null = unknown). Null or empty when none was found.
+   */
+  public int[] faces, faceScores;
+  /** Where {@link #faces} came from, for the receipt ("" when none). */
+  public String faceSource = "";
 
   public RawFrame(short[] data, int width, int height, int rowStride) {
     if (width < 8 || height < 8 || (width & 1) != 0 || (height & 1) != 0)

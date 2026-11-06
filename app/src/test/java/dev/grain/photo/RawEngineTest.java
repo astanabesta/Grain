@@ -1383,4 +1383,209 @@ public class RawEngineTest {
     back.development = FujiRecipe.Development.FIRST_VERSION;
     assertTrue(clean.with(back).sameSettings(reggie));
   }
+
+
+  // --- face exposure (v0.3.4)
+
+  /**
+   * A backlit portrait: a bright neutral room (the window and walls) with a darker, skin-coloured
+   * face in the centre that has a darker beard band and eyes. {@code faceStops} is the skin's level
+   * relative to the room, in EV.
+   */
+  static RawFrame backlitPortrait(double faceStops, int[] faces, int[] scores) {
+    int w = 256, h = 192;
+    double[] n = {0.4812030075, 1, 0.5707915273}, skin = {1.45, 1, 0.78};
+    short[] data = new short[w * h];
+    RawFrame f = new RawFrame(data, w, h, w);
+    f.cfa = RawFrame.GRBG;
+    Random rnd = new Random(42);
+    double room = 0.45, face = room * Math.pow(2, faceStops);
+    for (int y = 0; y < h; y++)
+      for (int x = 0; x < w; x++) {
+        int c = f.color(x, y);
+        double v = room * n[c];
+        if (x >= 96 && x < 160 && y >= 56 && y < 136) {
+          double level = face;
+          if (y >= 112) level *= 0.25; // beard
+          if (y >= 76 && y < 84 && (x >= 108 && x < 120 || x >= 136 && x < 148)) level *= 0.2; // eyes
+          v = level * skin[c] * n[c];
+        }
+        v += rnd.nextGaussian() * Math.sqrt(4e-4 * Math.max(0, v) + 1e-6);
+        data[y * w + x] = (short) Math.max(0, Math.min(1023, Math.round(64 + v * (1023 - 64))));
+      }
+    f.neutral = n;
+    f.colorMatrix1 = PHONE_CM1;
+    f.colorMatrix2 = PHONE_CM2;
+    f.forwardMatrix1 = PHONE_FM1;
+    f.forwardMatrix2 = PHONE_FM2;
+    f.illuminant1 = 21;
+    f.illuminant2 = 17;
+    f.iso = 400;
+    f.faces = faces;
+    f.faceScores = scores;
+    f.faceSource = faces == null ? "" : "test";
+    return f;
+  }
+
+  static final int[] PORTRAIT_FACE = {96, 56, 160, 136};
+
+  static int[] developPortrait(RawFrame f, boolean faceExposure, double ev, Map<String, Object> stats)
+      throws Exception {
+    RawDeveloper.Options o = new RawDeveloper.Options();
+    o.grain = false;
+    o.threads = 2;
+    o.exposureEv = ev;
+    o.faceExposure = faceExposure;
+    int[] out = new int[f.width * f.height];
+    Map<String, Object> s = RawDeveloper.develop(f, FujiRecipe.REGGIES_PORTRA, goldenLut(), o, (y, rows, argb, width) ->
+        System.arraycopy(argb, 0, out, y * width, rows * width));
+    if (stats != null) stats.putAll(s);
+    return out;
+  }
+
+  /** Mean output luma code (0..255) of the face's cheeks and forehead. */
+  static double skinLuma(int[] img) {
+    double sum = 0;
+    int n = 0;
+    for (int y = 62; y < 108; y++)
+      for (int x = 104; x < 152; x++) {
+        if (y >= 74 && y < 86) continue; // eyes
+        int p = img[y * 256 + x];
+        sum += 0.2126 * ((p >> 16) & 255) + 0.7152 * ((p >> 8) & 255) + 0.0722 * (p & 255);
+        n++;
+      }
+    return sum / n;
+  }
+
+  static double num(Map<String, Object> s, String key) {
+    return ((Number) s.get(key)).doubleValue();
+  }
+
+  @Test
+  public void faceExposureMetersTheFaceOfABacklitPortrait() throws Exception {
+    Map<String, Object> off = new java.util.HashMap<>(), on = new java.util.HashMap<>();
+    int[] dark = developPortrait(backlitPortrait(-3, PORTRAIT_FACE, new int[] {90}), false, 0, off);
+    int[] lit = developPortrait(backlitPortrait(-3, PORTRAIT_FACE, new int[] {90}), true, 0, on);
+    assertEquals("Off", off.get("faceExposure"));
+    assertEquals("On: face metered", on.get("faceExposure"));
+    assertArrayEquals(PORTRAIT_FACE, (int[]) on.get("faceRect"));
+    assertEquals("test", on.get("faceSource"));
+    assertEquals(90, ((Number) on.get("faceScore")).intValue());
+    double ev = num(on, "faceExposureEv");
+    // the correction is exactly what puts the face at FACE_KEY relative to the scene metering
+    double wanted = Math.log((RawDeveloper.FACE_KEY / num(on, "faceMeter"))
+        / (RawDeveloper.METERING_KEY / num(on, "meterLogAverage"))) / Math.log(2);
+    assertEquals(wanted, ev, 2e-3);
+    assertTrue("a backlit face is brightened a lot: " + ev, ev > 1.5 && ev < RawDeveloper.FACE_MAX_BRIGHTEN_EV);
+    assertNull(on.get("faceExposureWanted"));
+    assertEquals(num(off, "developmentGainEv") + ev, num(on, "developmentGainEv"), 2e-3);
+    // after the gain, the face's metered level sits at the face key
+    assertEquals(RawDeveloper.FACE_KEY, num(on, "faceMeter") * num(on, "developmentGain"), RawDeveloper.FACE_KEY * 0.01);
+    double before = skinLuma(dark), after = skinLuma(lit);
+    assertTrue("skin " + before + " -> " + after, after > before + 45 && after > 1.8 * before);
+    // like a camera metering the face: the skin comes out the same however strong the backlight
+    for (double stops : new double[] {-1, -2}) {
+      double other = skinLuma(developPortrait(backlitPortrait(stops, PORTRAIT_FACE, null), true, 0, null));
+      assertEquals("skin at " + stops + " EV", after, other, 3);
+    }
+    // the beard and eyes do not drive the metering: the skin's own level is measured
+    Map<String, Object> clean = new java.util.HashMap<>();
+    RawFrame f = backlitPortrait(-3, new int[] {104, 62, 152, 108}, null);
+    developPortrait(f, true, 0, clean);
+    double skinOnly = num(clean, "faceMeter"), withBeard = num(on, "faceMeter");
+    assertEquals("percentile ignores beard and eyes", 0, Math.log(withBeard / skinOnly) / Math.log(2), 0.25);
+    // the user's EV is applied on top of the face exposure
+    Map<String, Object> plus = new java.util.HashMap<>();
+    developPortrait(backlitPortrait(-3, PORTRAIT_FACE, new int[] {90}), true, 1, plus);
+    assertEquals(num(on, "developmentGainEv") + 1, num(plus, "developmentGainEv"), 2e-3);
+  }
+
+  @Test
+  public void faceExposureOffOrWithoutAUsableFaceLeavesThePictureUnchanged() throws Exception {
+    Map<String, Object> none = new java.util.HashMap<>();
+    long base = fnv(developPortrait(backlitPortrait(-3, null, null), true, 0, none));
+    assertEquals("On: no face found", none.get("faceExposure"));
+    assertNull(none.get("faceExposureEv"));
+    assertEquals(base, fnv(developPortrait(backlitPortrait(-3, PORTRAIT_FACE, new int[] {90}), false, 0, null)));
+    assertEquals(base, fnv(developPortrait(backlitPortrait(-3, new int[0], new int[0]), true, 0, null)));
+    Map<String, Object> weak = new java.util.HashMap<>();
+    assertEquals(base, fnv(developPortrait(backlitPortrait(-3, PORTRAIT_FACE, new int[] {30}), true, 0, weak)));
+    assertEquals("On: no usable face (1 too small or low confidence)", weak.get("faceExposure"));
+    int[] tiny = {120, 90, 124, 94}; // 4 px: below 2.5 % of the short side
+    assertEquals(base, fnv(developPortrait(backlitPortrait(-3, tiny, null), true, 0, null)));
+    // the golden frames (no faces) keep their v0.3.3 pictures
+    assertEquals(0x8f487b5241881196L, fnv(developGolden(FujiRecipe.REGGIES_PORTRA, true, null)));
+  }
+
+  @Test
+  public void faceExposureIsLimited() throws Exception {
+    Map<String, Object> black = new java.util.HashMap<>();
+    developPortrait(backlitPortrait(-9, PORTRAIT_FACE, null), true, 0, black);
+    assertEquals(RawDeveloper.FACE_MAX_BRIGHTEN_EV, num(black, "faceExposureEv"), 1e-9);
+    assertTrue(num(black, "faceExposureWanted") > RawDeveloper.FACE_MAX_BRIGHTEN_EV);
+    // a face much brighter than its surroundings is darkened, within the limit
+    Map<String, Object> spot = new java.util.HashMap<>();
+    RawFrame f = backlitPortrait(0.9, PORTRAIT_FACE, null);
+    for (int y = 0; y < f.height; y++) // dark surroundings
+      for (int x = 0; x < f.width; x++)
+        if (x < 80 || x >= 176 || y < 40 || y >= 152)
+          f.data[y * f.width + x] = (short) (64 + ((f.data[y * f.width + x] - 64) >> 5));
+    developPortrait(f, true, 0, spot);
+    double ev = num(spot, "faceExposureEv");
+    assertTrue("spot-lit face darkened: " + ev, ev < -0.5 && ev >= -RawDeveloper.FACE_MAX_DARKEN_EV);
+  }
+
+  @Test
+  public void facesPickTheConfidentFaceClosestToTheCentre() {
+    int w = 4080, h = 3060;
+    int[] faces = {
+      100, 100, 500, 560, // big, corner
+      1900, 1300, 2200, 1700, // centre, confident
+      1990, 1480, 2090, 1580, // exactly centred, only 100 px: 3.3 % of 3060 is still usable
+      1950, 1350, 2150, 1650 // centre, low confidence
+    };
+    assertEquals(1, dev.grain.photo.develop.Faces.pick(faces, new int[] {99, 80, 20, 40}, w, h));
+    assertEquals(2, dev.grain.photo.develop.Faces.pick(faces, new int[] {99, 80, 80, 40}, w, h));
+    assertEquals(0, dev.grain.photo.develop.Faces.pick(faces, new int[] {99, 10, 10, 10}, w, h));
+    assertEquals(-1, dev.grain.photo.develop.Faces.pick(faces, new int[] {1, 1, 1, 1}, w, h));
+    assertEquals(-1, dev.grain.photo.develop.Faces.pick(new int[] {10, 10, 60, 60}, null, w, h)); // too small
+    assertEquals(-1, dev.grain.photo.develop.Faces.pick(null, null, w, h));
+  }
+
+  @Test
+  public void faceRectanglesMapToRawPixels() {
+    // Camera2 rectangles: active-array coordinates -> RAW buffer
+    assertArrayEquals(new int[] {1008, 516, 1408, 1016},
+        dev.grain.photo.develop.Faces.activeToRaw(1000, 500, 1400, 1000, 4064, 3044, 8, 16, false, 4080, 3060));
+    assertArrayEquals(new int[] {500, 250, 700, 500},
+        dev.grain.photo.develop.Faces.activeToRaw(1000, 500, 1400, 1000, 8160, 6120, 0, 0, true, 4080, 3060));
+    assertNull(dev.grain.photo.develop.Faces.activeToRaw(5000, 4000, 5200, 4200, 4080, 3060, 0, 0, false, 4080, 3060));
+    // a face found in the upright, quarter-size reference JPEG -> RAW, for every orientation
+    int sw = 1020, sh = 765; // the sensor image at 1/4
+    int[] raw = {1000, 500, 1400, 1000};
+    for (int degrees : new int[] {0, 90, 180, 270}) {
+      double[] a = rotate(raw[0] / 4.0, raw[1] / 4.0, degrees, sw, sh);
+      double[] b = rotate(raw[2] / 4.0, raw[3] / 4.0, degrees, sw, sh);
+      int[] back = dev.grain.photo.develop.Faces.uprightToRaw(
+          Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1]),
+          degrees, sw, sh, 4080, 3060);
+      assertArrayEquals("rotation " + degrees, raw, back);
+    }
+    double[] box = dev.grain.photo.develop.Faces.boxFromEyes(500, 400, 100);
+    assertArrayEquals(new double[] {390, 300, 610, 540}, box, 1e-9);
+  }
+
+  /** Clockwise rotation of a point of a w x h image by degrees (continuous coordinates). */
+  static double[] rotate(double x, double y, int degrees, int w, int h) {
+    switch (degrees) {
+      case 90:
+        return new double[] {h - y, x};
+      case 180:
+        return new double[] {w - x, h - y};
+      case 270:
+        return new double[] {y, w - x};
+      default:
+        return new double[] {x, y};
+    }
+  }
 }

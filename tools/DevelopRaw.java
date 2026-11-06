@@ -29,7 +29,9 @@ import java.util.Map;
  * -Dsharpen=scale, -Dhalation=0..10, -Dbloom=0..10, -Dclarity=-5..5, -Drecipe=key, -Dwb=DAYLIGHT|KELVIN|...,
  * -Dkelvin=K, -Ddr=DR400|DRP_STRONG|..., -Dfilter=0..3, -DshiftR/-DshiftB=-9..9, -Dhl/-Dsh=tone,
  * -Ddevelopment=CLEAN|FIRST_VERSION, -Dsharpness=-4..4 and -DhighIsoNr=-4..4 (recipe settings),
- * -Ddebug=file (pre-NR luma codes then modelled noise variance, float32 planes).
+ * -Dface=left,top,right,bottom[;...] (face rectangles in RAW pixels, e.g. a receipt's faceRect) with
+ * -DfaceExposure=false to ignore them, -Ddebug=file (pre-NR luma codes then modelled noise variance,
+ * float32 planes).
  */
 public final class DevelopRaw {
   public static void main(String[] args) throws Exception {
@@ -126,6 +128,17 @@ public final class DevelopRaw {
     if (System.getProperty("ev") != null) o.exposureEv = Double.parseDouble(System.getProperty("ev"));
     if (System.getProperty("nr") != null) o.lumaNr = Double.parseDouble(System.getProperty("nr"));
     if (System.getProperty("sharpen") != null) o.sharpen = Double.parseDouble(System.getProperty("sharpen"));
+    o.faceExposure = !"false".equals(System.getProperty("faceExposure"));
+    String faces = System.getProperty("face");
+    if (faces != null && !faces.isEmpty()) {
+      String[] boxes = faces.split(";");
+      f.faces = new int[4 * boxes.length];
+      for (int i = 0; i < boxes.length; i++) {
+        String[] v = boxes[i].split(",");
+        for (int k = 0; k < 4; k++) f.faces[4 * i + k] = Integer.parseInt(v[k].trim());
+      }
+      f.faceSource = "harness";
+    }
     String debug = System.getProperty("debug");
     if (debug != null) {
       o.debugLuma = new float[w * h];

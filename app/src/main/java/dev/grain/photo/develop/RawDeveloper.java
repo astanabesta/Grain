@@ -1,6 +1,7 @@
 package dev.grain.photo.develop;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -30,13 +31,27 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Work is split into 64-row strips processed in parallel, each with its own buffers.
  */
 public final class RawDeveloper {
-  public static final String VERSION = "grain-raw-3";
+  public static final String VERSION = "grain-raw-4";
 
   /**
    * Where Fujifilm places the centre-weighted log-average scene luminance, in F-Log2 scene-linear
    * units (median of 11 public RAF/JPEG pairs, spread 0.40 EV; fit_stills_model.py).
    */
   public static final double METERING_KEY = 0.148;
+
+  /**
+   * Face exposure, Grain's version of Fujifilm's Intelligent Face Detection, which "sets focus and
+   * exposure for human faces" (the face closest to the centre, see {@link Faces}). The {@link
+   * #FACE_PERCENTILE} luminance of the face's inner box (skin rather than hair, beard, eyes or the
+   * background) is placed at FACE_KEY, half a stop above the scene key: Grain's choice (Fujifilm
+   * publishes no face target), which renders medium skin about as bright as phone cameras do and
+   * keeps brown skin close to natural. The user's EV is applied on top. The correction relative to
+   * the scene metering is limited to FACE_MAX_BRIGHTEN_EV / FACE_MAX_DARKEN_EV.
+   */
+  public static final double FACE_KEY = METERING_KEY * 1.4142135623730951;
+
+  public static final double FACE_PERCENTILE = 0.65;
+  public static final double FACE_MAX_BRIGHTEN_EV = 3, FACE_MAX_DARKEN_EV = 1.5;
 
   /** Approximation: no public measurement of Fujifilm's WB-shift step exists. */
   public static final double WB_SHIFT_LOG2_PER_STEP = 0.04;
@@ -151,6 +166,8 @@ public final class RawDeveloper {
     public double exposureEv;
     public long grainSeed = 1;
     public boolean grain = true;
+    /** Meter the frame's face (RawFrame.faces) like Fujifilm's face detection; see FACE_KEY. */
+    public boolean faceExposure = true;
     /** Test hooks: false = official LUT tone only; > 0 = fixed development gain instead of metering. */
     public boolean stillsTone = true;
     public double fixedGain;
@@ -360,6 +377,8 @@ public final class RawDeveloper {
       double[] meter = meter(cm.cameraToRec2020, hist);
       double logAverage = meter[0], rawClipped = meter[1];
       double gain = METERING_KEY * Math.pow(2, o.exposureEv) / Math.max(1e-6, logAverage);
+      double faceEv = faceExposureEv(cm.cameraToRec2020, logAverage, o, stats);
+      if (faceEv != 0) gain *= Math.pow(2, faceEv);
       gain = Math.max(1 / 64.0, Math.min(512, gain));
       if (o.fixedGain > 0) gain = o.fixedGain;
       for (int i = 0; i < 9; i++) m[i] = (float) (cm.cameraToRec2020[i] * gain);
@@ -1191,6 +1210,89 @@ public final class RawDeveloper {
         }
       }
       return new double[] {Math.exp(sumL / Math.max(1e-9, sumW)), n == 0 ? 0 : clipped / (double) n};
+    }
+
+    /**
+     * Face exposure: the EV added to the scene metering so that the metered face sits at {@link
+     * #FACE_KEY} (limited), or 0 when it is off or no usable face was found. Records why in stats.
+     */
+    double faceExposureEv(double[] cam, double logAverage, Options o, Map<String, Object> stats) {
+      int count = f.faces == null ? 0 : f.faces.length / 4;
+      if (!o.faceExposure) {
+        stats.put("faceExposure", "Off");
+        return 0;
+      }
+      int k = Faces.pick(f.faces, f.faceScores, W, H);
+      if (k < 0) {
+        stats.put(
+            "faceExposure",
+            count == 0
+                ? "On: no face found"
+                : "On: no usable face (" + count + " too small or low confidence)");
+        return 0;
+      }
+      int l = Math.max(0, f.faces[4 * k]), t = Math.max(0, f.faces[4 * k + 1]);
+      int r = Math.min(W, f.faces[4 * k + 2]), b = Math.min(H, f.faces[4 * k + 3]);
+      double level = faceLevel(cam, l, t, r, b);
+      if (!(level > 0)) {
+        stats.put("faceExposure", "On: face too small to measure");
+        return 0;
+      }
+      double ev =
+          Math.log((FACE_KEY / level) / (METERING_KEY / Math.max(1e-6, logAverage))) / Math.log(2);
+      double used = Math.max(-FACE_MAX_DARKEN_EV, Math.min(FACE_MAX_BRIGHTEN_EV, ev));
+      stats.put("faceExposure", "On: face metered");
+      stats.put("faceSource", f.faceSource);
+      stats.put("faceCount", count);
+      stats.put("faceRect", new int[] {l, t, r, b});
+      if (f.faceScores != null && k < f.faceScores.length) stats.put("faceScore", f.faceScores[k]);
+      stats.put("faceMeter", round(level, 6));
+      stats.put("faceKey", round(FACE_KEY, 4));
+      stats.put("faceExposureEv", round(used, 3));
+      if (used != ev) stats.put("faceExposureWanted", round(ev, 3));
+      return used;
+    }
+
+    /**
+     * Scene-linear luminance (before the development gain, as {@link #meter}) at the {@link
+     * #FACE_PERCENTILE} of a face's inner box: 20..80 % of its width, 15..75 % of its height.
+     * Returns 0 if the box holds too few samples.
+     */
+    double faceLevel(double[] cam, int l, int t, int r, int b) {
+      int w = r - l, h = b - t;
+      int x0 = (l + (int) (0.2 * w)) & ~1, x1 = Math.min(W - 1, r - (int) (0.2 * w));
+      int y0 = (t + (int) (0.15 * h)) & ~1, y1 = Math.min(H - 1, t + (int) (0.75 * h));
+      if (x1 - x0 < 4 || y1 - y0 < 4) return 0;
+      int step = Math.max(2, (Math.min(x1 - x0, y1 - y0) / 48) & ~1);
+      double[] logs = new double[((x1 - x0) / step + 1) * ((y1 - y0) / step + 1)];
+      int n = 0;
+      float[] q = new float[3];
+      float sat = f.white - 0.02f * (f.white - Math.min(Math.min(f.black[0], f.black[1]), Math.min(f.black[2], f.black[3])));
+      for (int y = y0; y < y1; y += step) {
+        for (int x = x0; x < x1; x += step) {
+          q[0] = q[1] = q[2] = 0;
+          boolean clip = false;
+          float gShade = 1;
+          for (int k = 0; k < 4; k++) {
+            int xx = x + (k & 1), yy = y + (k >> 1);
+            int raw = f.data[yy * f.rowStride + xx] & 0xffff;
+            if (raw >= sat) clip = true;
+            float s = shadingAt(shadeK[k], xx, yy);
+            if (colorK[k] == 1) gShade = s;
+            float v = (raw - black[k]) * scale[k] * s * gainK[k];
+            q[colorK[k]] += colorK[k] == 1 ? 0.5f * v : v;
+          }
+          float c = gShade * clipFactor;
+          if (clip) for (int i = 0; i < 3; i++) q[i] = Math.min(q[i], c);
+          double R = cam[0] * q[0] + cam[1] * q[1] + cam[2] * q[2];
+          double G = cam[3] * q[0] + cam[4] * q[1] + cam[5] * q[2];
+          double B = cam[6] * q[0] + cam[7] * q[1] + cam[8] * q[2];
+          logs[n++] = Math.log(Math.max(0.2627 * R + 0.6780 * G + 0.0593 * B, 1e-5));
+        }
+      }
+      if (n < 16) return 0;
+      Arrays.sort(logs, 0, n);
+      return Math.exp(logs[(int) Math.round(FACE_PERCENTILE * (n - 1))]);
     }
   }
 
