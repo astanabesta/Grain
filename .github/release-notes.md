@@ -1,58 +1,59 @@
-## Grain Photo vVERSION — focus probe (v0.5.0, device-test beta)
+## Grain Photo vVERSION — AF area (v0.5.1, device-test beta)
 
 Install **Grain-vVERSION.apk** on the Redmi Note 13 Pro+.
-- **From v0.2.1 – v0.4.0:** it installs as an update. Your photos, imported LUTs and tuning stay.
+- **From v0.2.1 – v0.5.0:** it installs as an update. Your photos, imported LUTs and tuning stay.
 - **From v0.2.0 or older:** first save the photos you want to keep (photo → **Save to device gallery**), uninstall Grain, install this APK, then re-import the LUT pack (*Tune → Import LUT pack*).
 
 ### What this build is
 
-A diagnostic build for the v0.5.0 focusing plan (multi-point AF, eye AF, manual focus). It is v0.4.0's
-camera back plus a probe that reports what **your** phone's Camera2 HAL actually exposes. Nothing in
-the capture pipeline changed: the same RAW development, the same recipes, the same receipts.
+The first half of the v0.5.0 focusing plan: **where the lens looks for focus**. It is v0.4.0's camera
+back plus the AF area engine. Nothing in the capture pipeline changed — the same RAW development, the
+same recipes, the same receipts.
 
-### The probe
+### The AF area
 
-**1. Camera diagnostics.** The diagnostics panel (Q → diagnostics, or the panel shown after a photo)
-now carries a `focus` block:
+**MENU → AF / FACE → AF AREA** cycles five modes. The region goes on every request, so continuous AF
+searches only inside it, and a one-shot focus triggers on it.
 
-- `afModes` — the AF modes the HAL offers (OFF / MACRO / CONTINUOUS_VIDEO / CONTINUOUS_PICTURE / AUTO)
-- `maxRegionsAf`, `maxRegionsAe` — how many metering regions the HAL accepts (this is the number that
-  decides the AF grid size)
-- `faceDetectModes` — OFF / SIMPLE / FULL
-- `maxFaces` — the most faces the HAL tracks at once
-- `minFocusDistance` — the closest the lens goes (manual focus range)
-- `requestKeys` — which of `CONTROL_AF_REGIONS`, `CONTROL_AE_REGIONS`, `LENS_FOCUS_DISTANCE`,
-  `STATISTICS_FACE_DETECT_MODE`, `CONTROL_AF_TRIGGER` the HAL accepts
-- `resultKeys` — whether `STATISTICS_FACES` comes back at all
-- `manualSensor` — whether `MANUAL_SENSOR` is advertised (this is what a real manual focus needs)
-- `live` — one capture taken with FULL face detection at open: whether the HAL accepts FULL, and
-  whether `STATISTICS_FACES` returns (with no face in frame it reports the empty result)
+| Mode | What the lens gets |
+| --- | --- |
+| **SINGLE** | The point you tap, or the lever puts there. This is the default and it is the old behaviour. |
+| **MULTI** | A grid across the frame. The lens can pick any cell in it — this is the multi-point AF a real camera has. |
+| **ZONE** | One larger box around the point. |
+| **CENTER** | The middle of the frame, regardless of where the point is. |
+| **FACE** | The last face the camera's own detector reported, padded. Follows the face. |
 
-**2. Face landmarks (eye AF) switch.** Settings → Fujifilm recipes → **Face landmarks (eye AF)**. It
-asks the camera for FULL face detection instead of SIMPLE. SIMPLE reports only a rectangle and a
-confidence; FULL also reports each face's id and its eye and mouth positions. It is off by default
-because SIMPLE is faster and face exposure does not need the landmarks.
+The grid (MULTI) or the box (ZONE) is drawn on the preview so you can see the region you are asking for.
 
-**3. The receipt.** Every photo's receipt now reports `faceDetectMode`, `cameraFaces`, and — when the
-camera's own detector supplied the faces — `faceEyes`, `faceIds`, `faceMouths`. If faces were found
-without landmarks it says so explicitly: `faceLandmarks: "none: this HAL fills only the face
-rectangle"`.
+**MENU → AF / FACE → AF LOCK** holds both the region and the lens where they are. With it on, the
+autofocus does not hunt again — the same job the AE-L button does for exposure, for focus.
 
-### What to send back
+Everything is remembered: the mode, the lock, and the point.
 
-Two things, and that is enough:
+### Still moving the point
 
-1. **The `focus` block** from the diagnostics panel (a photo of the screen, or paste the JSON).
-2. **One photo of a face** taken with **Face landmarks (eye AF)** on, with its receipt.
+Touch the preview, or drag the lever, moves the point in SINGLE / MULTI / ZONE / CENTER. In **FACE** the
+region follows the detected face, so the point is ignored there.
 
-Those numbers decide how v0.5.0's eye AF is built:
+### What to look for
 
-- `faceEyes` > 0 → the phone reports eye positions, so eye AF is wiring: pick the face nearest the
-  centre, take its eye box, aim the AF region there.
-- `faceEyes` = 0 with faces present → this HAL fills no landmarks, so eye AF falls back to the face
-  box (still better than whole-frame AF) and the UI will say which one ran.
-- `maxRegionsAf` = 0 → multi-point AF is not real on this phone, and the AF area control will offer
-  only single point.
+- Does the grid in MULTI actually make the lens search more places than SINGLE?
+- Does **FACE** hold on a face when it moves, or does it jump?
+- Does **AF LOCK** stop the lens hunting when you take the photo?
+
+### What is still missing
+
+**Eye AF is not in this build.** It needs one number from your phone: whether the Camera2 HAL returns
+face landmarks at all. v0.5.0 already reports it — **Camera diagnostics** (Q → diagnostics) shows the
+`focus` block, and the one line that matters is `faceEyes` in a photo's receipt when a face is in frame.
+Send that, and eye AF follows in v0.5.2.
+
+Manual focus aids (peaking + magnifier) and AF-C face tracking are also still to come.
+
+### The receipt
+
+Every photo's receipt now reports the area in `requested.applied`: `afArea` (SINGLE / MULTI / ZONE /
+CENTER / FACE) and `afLock`, alongside the existing `afState` in `actual`.
 
 This is a personal device-test build, signed with the project's personal key (certificate
 SHA-256 6e073ef6…). SHA256SUMS.txt verifies the APK download.
