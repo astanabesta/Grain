@@ -1,4 +1,4 @@
-# Fujifilm recipes from RAW (v0.3.5, engine `grain-raw-5`)
+# Fujifilm recipes from RAW (v0.4.0, engine `grain-raw-5`)
 
 Grain's Fujifilm recipes are developed from the phone's sensor RAW. They are not filters on the
 phone's finished JPEG. v0.3.2 has eight published recipes (Reggie's Portra and Reggie's Superia,
@@ -283,6 +283,62 @@ table at its edge, as they would in a Sony grade.
 
 **Receipts:** `lut` (Sony s709 …), `lutModel` Sony, `lutInput` S-Log3 / S-Gamut3.Cine, `meterKey`
 0.18, `dynamicRange` *Not used*, and `toneModel` (shoulder and tuning only).
+
+## The Fujifilm camera back (v0.4.0)
+
+v0.4.0 replaces the app's screen with the back of a Fujifilm camera. It is a UI layer over the same
+engine: nothing about the RAW pipeline, the recipes, the tuning or the receipts changed.
+
+### What is on the back
+
+| Part | What it does |
+| --- | --- |
+| Preview (film window) | The live Camera2 preview, cropped to the photo ratio, with pinch zoom (1×–5×) |
+| Film dial | The four ISP looks (DAY / CST / GLN / AFT), then every imported simulation and recipe; ◆ = RAW |
+| Shutter dial | 1 s … 1/4000, the timer and the bracketing positions; the ISO dial replaces it (ISO/SHUTTER) |
+| Command dial | Zoom (1×–5×) when EV is not on C; exposure compensation in 0.1 EV steps at C |
+| Five-way lever | Centre confirm, up AE-L, right step the film, down menu, left move the focus point |
+| Memo holder | Tap: the memo sheet. Long-press: the phone's neutral view (no recipe look) |
+| Shutter button | Half-press focuses, press develops; in FS BKT it takes the bracket |
+| Power switch | Off hides the preview, closes the camera and ignores every key except power |
+| Q / OK / MENU / PLAY | The quick menu, the full menu (I.Q. / AF / SHOOT / SET UP) and playback |
+
+The OSD is engraved on the plate: film, format, ratio, frames, mode, shutter, aperture, ISO, drive,
+zoom, status, countdown, exposure, AF point, histogram, level and battery.
+
+### Portrait, landscape and the EVF
+
+- Portrait is the default layout; rotating the phone to landscape re-lays the whole back out and the
+  preview follows the sensor orientation.
+- **EYE** switches to the EVF view: the preview fills the body inside a black frame, the film row
+  stays at the top, the shutter and Q buttons move to the bottom, and ◀ SCREEN returns.
+- DISP toggles the information display; the histogram and the level are separate Settings → Display
+  switches (off by default).
+
+### New controls
+
+- **AE-L** locks the exposure and the focus point at the point you choose; the receipt keeps the
+  metered values and the lock state.
+- **Film-sim bracketing (FS BKT)** takes the current film plus the next two RAW films with a LUT —
+  three frames per press. The DNG and the phone JPEG are kept for frame 1 only. With an ISP look
+  (a baked JPEG film) it takes a single frame, because there is no RAW to re-develop.
+- **Manual shutter / ISO** from the shutter and ISO dials: the capture uses the dialled values instead
+  of the auto exposure, and the receipt reports both what was requested and what the sensor used
+  (`requested.manual`, `actual`). It needs Camera2 manual sensor control; a value the phone refuses
+  is reported in `requested.warnings`.
+- **Sounds** (shutter, dial clicks, focus beeps) and the **memo sheet** are new; both are off/empty
+  until you enable them.
+
+### Deviations from the design mock
+
+The mock marks every control as REAL (already in the app) or NEW (added for v0.4.0). Four things
+differ from a real Fujifilm back, and they are deliberate:
+
+1. **Zoom is digital, 1×–5×**, by the command dial (when EV is not on C) or pinch. There is no
+   optical zoom on the phone.
+2. **The ISP looks are on the film dial** (DAY / CST / GLN / AFT) rather than in a separate mode.
+3. **Flip to the front camera** is in MENU → SHOOT → CAMERA.
+4. **The neutral view** (the plain phone preview without the recipe look) is the memo long-press.
 
 ## White balance (v0.3.0)
 
