@@ -2,6 +2,8 @@
 
 **A separate, native Android recipe camera for your Redmi Note 13 Pro Plus.**
 
+**v0.3.1 — Reggie's Portra as in the first version:** Reggie's Portra develops exactly like Grain v0.2.0 again (bit-identical on the test RAW): colour noise reduction only, no sharpening at the recipe's Sharpness −2 and the full grain, so the picture is grittier and more like film. This is the new **Development** setting (Grain extras: *First version* or *Clean*) for every film; Reggie's Portra starts on First version, every other film on Clean, and High ISO NR and Sharpness keep working in both. Everything else from v0.2.1–v0.3.0 stays (speed, upright photos, tuning, white balance, DR-P, extras). See [Development](docs/RAW_FUJI_RECIPES.md#development-first-version-and-clean-v031).
+
 **v0.3.0 — six more Fujifilm recipes:** Kodak Gold 200, Kodachrome 64, Pacific Blues, Vibrant Arizona, CineStill 800T and Kodak Tri-X 400 (Fuji X Weekly), developed from RAW with their published settings as the default and listed right after Reggie's Portra. The settings they need are new for every film: fixed **white balance** (Daylight, Shade, Fluorescent 1–3, Incandescent, Kelvin 2500–10000 K) using Fujifilm's preset white points measured from Fujifilm RAW files, **D-Range Priority** Weak/Strong, and the Acros **+Ye/+R/+G** filters. The recipe's typical exposure compensation is shown as a guide (never applied automatically). Fixed-white-balance films preview with the nearest phone preset. See [RAW Fujifilm recipes](docs/RAW_FUJI_RECIPES.md).
 
 **v0.2.3 — tune any RAW film, plus optional Halation and Bloom:** every ◆ film's settings can be tuned in the film sheet (Dynamic range, WB shift, Highlight, Shadow, Color, Sharpness, High ISO NR, Clarity, Grain, Color Chrome, FX Blue), saved per film, with *Reset this look* back to the default: Fujifilm's standard settings for a film simulation, the published recipe for Reggie's Portra. Clarity is now applied in development. **Halation** and **Bloom** (Off, 1–10) are optional Grain extras, off by default: no Fujifilm film simulation has them. They are made from the RAW light before the film simulation and show in the developed photo only.
@@ -28,7 +30,7 @@ This repository now contains the standalone Grain project. The previous project'
 
 1. Open **Actions → Build and Release Grain APK** in this repository.
 2. A push to `main` starts the build automatically. You can also choose **Run workflow**.
-3. After a green run, download the APK from the newest **GitHub Release** (v0.3.0). The Actions artifact **grain-photo-N** is also retained.
+3. After a green run, download the APK from the newest **GitHub Release** (v0.3.1). The Actions artifact **grain-photo-N** is also retained.
 4. Install the release APK directly. If using the Actions artifact instead, extract its ZIP first.
 5. Allow installation from your browser/file manager when Android asks, then grant **Camera** access.
 
@@ -103,7 +105,7 @@ On any machine with JDK 17+ and Bash 4+:
 bash tools/check-source.sh
 ```
 
-This checks Java syntax and 1,227 crop/curve cases without an Android SDK. It does **not** compile/link the Android app. GitHub Actions runs the Android build and JUnit tests.
+This checks Java syntax and 1,230 crop/curve/preview cases without an Android SDK. It does **not** compile/link the Android app. GitHub Actions runs the Android build and JUnit tests.
 
 See [Architecture](docs/ARCHITECTURE.md), [Repository audit](docs/REPO_AUDIT.md), and [Device test plan](docs/DEVICE_TEST_PLAN.md).
 

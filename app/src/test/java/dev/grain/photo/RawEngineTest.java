@@ -563,6 +563,7 @@ public class RawEngineTest {
     assertEquals("Weak", shown.get("Color Chrome FX Blue"));
     assertEquals("Off", shown.get("Halation"));
     assertEquals("Off", shown.get("Bloom"));
+    assertEquals("First version", shown.get("Development"));
     assertEquals(13, control(reggie, "Highlight").labels.length);
     assertEquals("Auto", shown.get("White balance"));
     for (dev.grain.photo.develop.TuningControl c :
@@ -1008,5 +1009,180 @@ public class RawEngineTest {
     FujiRecipe.Tuning k = FujiRecipe.REGGIES_PORTRA.tuning();
     k.kelvin = 7000;
     assertTrue(FujiRecipe.REGGIES_PORTRA.with(k).sameSettings(FujiRecipe.REGGIES_PORTRA));
+  }
+
+  // ------------------------------------------------- v0.3.1: First version (Grain v0.2.0) development
+
+  /** 6 x 4 colour patches (one clipped), shot noise, this phone's calibration, ISO 2742. */
+  static RawFrame goldenFrame() {
+    int w = 192, h = 128;
+    double[] n = {0.4812030075, 1, 0.5707915273};
+    short[] data = new short[w * h];
+    RawFrame f = new RawFrame(data, w, h, w);
+    f.cfa = RawFrame.GRBG;
+    Random rnd = new Random(20261106);
+    for (int y = 0; y < h; y++)
+      for (int x = 0; x < w; x++) {
+        int p = (y / 32) * 6 + x / 32, c = f.color(x, y);
+        double hue = 2 * Math.PI * p / 24.0, sat = p % 4 == 3 ? 0 : 0.6;
+        double level = 0.02 + 0.03 * (p % 6) + 0.012 * (p / 6);
+        double k = 1 + sat * Math.cos(hue - (c == 0 ? 0 : c == 1 ? 2.094 : 4.189));
+        double v = p == 7 ? 1.5 : level * k * n[c];
+        v += rnd.nextGaussian() * Math.sqrt(6e-4 * Math.max(0, v) + 1.5e-6);
+        data[y * w + x] = (short) Math.max(0, Math.min(1023, Math.round(64 + v * (1023 - 64))));
+      }
+    f.neutral = n;
+    f.colorMatrix1 = PHONE_CM1;
+    f.colorMatrix2 = PHONE_CM2;
+    f.forwardMatrix1 = PHONE_FM1;
+    f.forwardMatrix2 = PHONE_FM2;
+    f.illuminant1 = 21;
+    f.illuminant2 = 17;
+    f.iso = 2742;
+    return f;
+  }
+
+  /** A 17-point film-like LUT: contrast around mid-grey plus a little saturation. */
+  static CubeLut goldenLut() {
+    int m = 17;
+    StringBuilder b = new StringBuilder("TITLE \"golden\"\nLUT_3D_SIZE " + m + "\n");
+    for (int bl = 0; bl < m; bl++)
+      for (int g = 0; g < m; g++)
+        for (int r = 0; r < m; r++) {
+          double[] c = {r / (m - 1.0), g / (m - 1.0), bl / (m - 1.0)};
+          double y = 0.25 * (c[0] + 2 * c[1] + c[2]);
+          for (int i = 0; i < 3; i++) {
+            double v = 0.5 + 1.4 * (c[i] - 0.45) + 0.25 * (c[i] - y);
+            b.append(Math.max(0, Math.min(1, v))).append(i < 2 ? ' ' : '\n');
+          }
+        }
+    try {
+      return CubeLut.parse(new StringReader(b.toString()));
+    } catch (Exception e) {
+      throw new AssertionError(e);
+    }
+  }
+
+  static int[] developGolden(FujiRecipe film, boolean grain, java.util.List<Map<String, Object>> stats)
+      throws Exception {
+    RawFrame f = goldenFrame();
+    RawDeveloper.Options o = new RawDeveloper.Options();
+    o.grainSeed = 7;
+    o.grain = grain;
+    o.threads = 2;
+    int[] out = new int[f.width * f.height];
+    Map<String, Object> s = RawDeveloper.develop(f, film, goldenLut(), o, (y, rows, argb, width) ->
+        System.arraycopy(argb, 0, out, y * width, rows * width));
+    if (stats != null) stats.add(0, s);
+    return out;
+  }
+
+  static long fnv(int[] img) {
+    long hash = 0xcbf29ce484222325L;
+    for (int p : img) {
+      hash ^= p;
+      hash *= 0x100000001b3L;
+    }
+    return hash;
+  }
+
+  /** Green noise inside the flat grey patches (3, 7 is clipped, 11, 15 ...): away from patch edges. */
+  static double patchNoise(int[] img) {
+    double sum = 0;
+    int k = 0;
+    for (int p : new int[] {3, 11, 15, 19, 23}) {
+      int x0 = (p % 6) * 32, y0 = (p / 6) * 32;
+      sum += flatStd(img, 192, x0 + 8, x0 + 24, y0 + 8, y0 + 24);
+      k++;
+    }
+    return sum / k;
+  }
+
+  static FujiRecipe developedAs(FujiRecipe film, FujiRecipe.Development d, int sharpness, int nr) {
+    FujiRecipe.Tuning t = film.tuning();
+    t.development = d;
+    t.sharpness = sharpness;
+    t.noiseReduction = nr;
+    return film.with(t);
+  }
+
+  /**
+   * Reggie's Portra develops exactly as Grain v0.2.0 did. The golden hash was computed by the
+   * v0.2.0 engine (tag v0.2.0), with only its grain texture placement changed to today's (same
+   * textures, offset per photo), and checked on Java 17 and 21; it must never change.
+   */
+  @Test
+  public void firstVersionIsBitIdenticalToGrainV020() throws Exception {
+    long golden = 0xed66690e26edf621L;
+    assertEquals(
+        "First version changed: it must stay bit-identical to Grain v0.2.0",
+        Long.toHexString(golden),
+        Long.toHexString(fnv(developGolden(FujiRecipe.REGGIES_PORTRA, true, null))));
+    FujiRecipe clean = developedAs(FujiRecipe.REGGIES_PORTRA, FujiRecipe.Development.CLEAN, -2, -4);
+    assertNotEquals(golden, fnv(developGolden(clean, true, null)));
+  }
+
+  /** First version: no sharpening and the full grain at the defaults; NR and Sharpness still work. */
+  @Test
+  public void firstVersionControlsWork() throws Exception {
+    java.util.List<Map<String, Object>> st = new java.util.ArrayList<>();
+    FujiRecipe reggie = FujiRecipe.REGGIES_PORTRA;
+    developGolden(reggie, true, st);
+    Map<String, Object> first = st.get(0);
+    assertTrue(String.valueOf(first.get("development")), String.valueOf(first.get("development")).startsWith("First version"));
+    assertEquals(0.0, ((Number) first.get("sharpenAmount")).doubleValue(), 0);
+    assertEquals(3, first.get("chromaNoiseRadius")); // ISO 2742, High ISO NR -4: the v0.2.0 rule
+    assertEquals(
+        ((Number) first.get("grainAmplitudeRecipe")).doubleValue(),
+        ((Number) first.get("grainAmplitude")).doubleValue(),
+        1e-6);
+    developGolden(developedAs(reggie, FujiRecipe.Development.CLEAN, -2, -4), true, st);
+    assertTrue("Clean tops grain up only", ((Number) st.get(0).get("grainAmplitude")).doubleValue() < 0.012);
+
+    java.util.Set<Long> seen = new java.util.HashSet<>();
+    double[] noise = new double[9];
+    for (int nr = -4; nr <= 4; nr++) {
+      int[] img = developGolden(developedAs(reggie, FujiRecipe.Development.FIRST_VERSION, -2, nr), false, null);
+      assertTrue("High ISO NR " + nr + " changes the picture", seen.add(fnv(img)));
+      noise[nr + 4] = patchNoise(img);
+      if (nr > -4) assertTrue("NR " + nr + ": " + noise[nr + 4] + " vs " + noise[nr + 3], noise[nr + 4] < noise[nr + 3]);
+    }
+    assertTrue("NR +4 cleans " + noise[8] + " vs " + noise[0], noise[8] < 0.6 * noise[0]);
+    seen.clear();
+    double[] detail = new double[9];
+    for (int sh = -4; sh <= 4; sh++) {
+      int[] img = developGolden(developedAs(reggie, FujiRecipe.Development.FIRST_VERSION, sh, -4), false, null);
+      assertTrue("Sharpness " + sh + " changes the picture", seen.add(fnv(img)));
+      detail[sh + 4] = patchNoise(img);
+      if (sh > -4) assertTrue("Sharpness " + sh + ": " + detail[sh + 4] + " vs " + detail[sh + 3], detail[sh + 4] > detail[sh + 3]);
+    }
+  }
+
+  /** Reggie's Portra starts on the First version, every other film on Clean; tuning keeps it. */
+  @Test
+  public void developmentDefaultsAndTuning() {
+    FujiRecipe reggie = FujiRecipe.REGGIES_PORTRA;
+    assertEquals(FujiRecipe.Development.FIRST_VERSION, reggie.development);
+    for (FujiRecipe r : FujiRecipe.PUBLISHED)
+      if (r != reggie) assertEquals(r.key, FujiRecipe.Development.CLEAN, r.development);
+    assertEquals(FujiRecipe.Development.CLEAN, FujiRecipe.standard("PROVIA", "Provia").development);
+    String shown = null;
+    for (String[] row : reggie.settings()) if (row[0].equals("Development (Grain)")) shown = row[1];
+    assertEquals("First version (as Grain v0.2.0)", shown);
+    dev.grain.photo.develop.TuningControl ctl = dev.grain.photo.develop.TuningControl.extras().get(0);
+    assertEquals("Development", ctl.name);
+    assertArrayEquals(new String[] {"Clean", "First version"}, ctl.labels);
+    assertEquals(1, ctl.at(reggie.tuning()));
+    FujiRecipe.Tuning t = reggie.tuning();
+    ctl.set(t, 0);
+    FujiRecipe clean = reggie.with(t);
+    assertEquals(FujiRecipe.Development.CLEAN, clean.development);
+    assertFalse(clean.sameSettings(reggie));
+    assertEquals("Clean", ctl.labels[ctl.at(clean.tuning())]);
+    t.development = null;
+    assertEquals(FujiRecipe.Development.CLEAN, reggie.with(t).development);
+    FujiRecipe.Tuning back = clean.tuning();
+    back.development = FujiRecipe.Development.FIRST_VERSION;
+    assertTrue(clean.with(back).sameSettings(reggie));
   }
 }

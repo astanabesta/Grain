@@ -1,8 +1,10 @@
-# Fujifilm recipes from RAW (v0.3.0, engine `grain-raw-2`)
+# Fujifilm recipes from RAW (v0.3.1, engine `grain-raw-2`)
 
 Grain's Fujifilm recipes are developed from the phone's sensor RAW. They are not filters on the
 phone's finished JPEG. v0.3.0 has seven published recipes (Reggie's Portra plus six from Fuji X
-Weekly) and every film simulation in the imported pack on its own.
+Weekly) and every film simulation in the imported pack on its own. v0.3.1 adds the **Development**
+setting: Reggie's Portra develops like Grain's first version (v0.2.0) again, every other film stays
+on Clean (see [Development](#development-first-version-and-clean-v031)).
 
 ## Published recipes (v0.3.0)
 
@@ -11,13 +13,15 @@ look* work as for every film. Recipes are listed before the plain film simulatio
 
 | Recipe (id) | Film simulation | White balance | DR | Highlight / Shadow | Color | Grain | CCE / FX Blue | Sharpness / NR / Clarity | Typical EV |
 |---|---|---|---|---|---|---|---|---|---|
-| Reggie's Portra (4) | Classic Chrome | Auto, R+2 B−4 | DR-Auto | −1 / −1 | +2 | Weak, Small | Strong / Weak | −2 / −4 / 0 | — |
+| Reggie's Portra (4)¹ | Classic Chrome | Auto, R+2 B−4 | DR-Auto | −1 / −1 | +2 | Weak, Small | Strong / Weak | −2 / −4 / 0 | — |
 | Kodak Gold 200 (17) | Classic Chrome | Daylight, R+4 B−5 | DR400 | −1.5 / +0.5 | +3 | Strong, Small | Weak / Off | −2 / −4 / −2 | +2/3 to +1 |
 | Kodachrome 64 (18) | Classic Chrome | Daylight, R+2 B−5 | DR200 | 0 / +0.5 | +2 | Weak, Small | Strong / Off | +1 / −4 / +3 | 0 to +2/3 |
 | Pacific Blues (19) | Classic Neg. | 5800K, R+1 B−3 | DR400 | −2 / +3 | +4 | Strong, Large | Strong / Weak | −2 / −4 / −3 | +2/3 to +1 |
 | Vibrant Arizona (20) | Classic Chrome | 4350K, R+6 B−8 | DR-P Strong | set by DR-P | +4 | Weak, Small | Off / Weak | −2 / −4 / −3 | +2/3 to +1 1/3 |
 | CineStill 800T (21) | Eterna | Fluorescent 3, R−6 B−4 | DR400 | 0 / +2 | +4 | Strong, Large | Strong / Weak | −3 / −4 / −5 | −1/3 to +2/3 |
 | Kodak Tri-X 400 (22) | Acros | Daylight, R+9 B−9 | DR200 | 0 / +3 | n/a | Strong, Large | (Strong / Off, not applied) | +1 / −4 / +4 | +1/3 to +1 |
+
+¹ Developed as *First version* by default (v0.3.1); all other recipes develop as *Clean*.
 
 Gold 200, Kodachrome 64, Pacific Blues, Vibrant Arizona and CineStill 800T are by Ritchie Roesch;
 Tri-X 400 is Anders Lindborg's recipe in Ritchie Roesch's X100V version (published for ISO
@@ -45,6 +49,8 @@ Reggie's Portra. *Reset this look* returns to it. Ranges follow Fujifilm's menus
 | Clarity | −5…+5 |
 | Grain | Off, Weak/Strong × Small/Large |
 | Color Chrome Effect, FX Blue | Off, Weak, Strong (not shown for black and white) |
+| Development (Grain extra, v0.3.1) | Clean, First version (Reggie's Portra starts on First version) |
+| Halation, Bloom (Grain extras) | Off, 1–10 |
 
 A setting that another one overrides stays visible but muted, with the reason (Highlight and
 Shadow under DR-P, Color temperature outside Kelvin).
@@ -72,6 +78,38 @@ F-Log2 and the LUT, so the film simulation renders the glow like any other light
 
 At 0 the development is bit-identical to v0.2.2. The extras affect the developed photo only, not
 the viewfinder.
+
+## Development: First version and Clean (v0.3.1)
+
+Grain's own choice of how to develop the RAW, not a Fujifilm setting (it is the first row of the
+Grain extras; saved per film as `development`; settings saved before v0.3.1 keep the film's
+default). **Reggie's Portra starts on First version, every other film on Clean**; *Reset this look*
+returns to that default.
+
+| | First version (Grain v0.2.0) | Clean (v0.2.1 and later) |
+|---|---|---|
+| Colour noise | box blur of the opponent codes (r − Y, b − Y), luma kept; radius by ISO (1 up to ISO 200, 2 up to 800, 3 up to 3200, else 4), +1 per 3 steps of High ISO NR above −4, at most 4 | quarter-resolution luma-guided chroma filter plus a local Wiener step, from the measured noise curve |
+| Luminance noise | none at High ISO NR −4; each step above adds 1/8 of Clean's fine-scale (pixel) luma filter | two scales (pixel guided filter + quarter resolution), from the measured noise curve |
+| Sharpening | none at Sharpness −2; ±0.1 per step (softer below −2, sharper above) | 0.45 + 0.1 × Sharpness (0.25 at −2) |
+| Grain | the recipe amount, whatever the sensor noise | topped up to the recipe amount only (sensor noise counts) |
+| Color / Color Chrome / FX Blue | in OKLab (v0.2.0 constants) | in display-code opponent space, matched to the OKLab step |
+
+Everything else is shared: RAW calibration, white balance (Auto and the fixed modes), metering,
+Dynamic range and DR-P, the tone model, the LUT, Highlight/Shadow, Clarity, the Acros filters,
+Halation and Bloom, orientation and the receipt.
+
+The First version is the v0.2.0 code path, kept exactly. On the phone test DNG (ISO 2742),
+Reggie's Portra on First version is **bit-identical** to the v0.2.0 engine (tag `v0.2.0`, with
+the same grain texture placement: same textures, offset per photo), and that v0.2.0 engine
+reproduces the phone's own v0.2.0 JPEG of that frame (mean |difference| 0.36 of 255 after a light
+blur, which removes the random grain). A JUnit golden test pins the bit-identity on a synthetic
+frame (checked on Java 17 and 21). On Clean, Reggie's Portra and every other film are bit-identical
+to v0.3.0.
+
+Measured on that DNG (12.5 MP, ISO 2742), fine texture (luma, after a 1.5 px blur is removed) and
+colour noise, First version vs Clean: centre 11.0 vs 7.8 and 4.4 vs 3.0; a dark corner 17.1 vs 12.1
+and 5.7 vs 3.9. Tone and colour are otherwise the same (mean RGB within 1 level; Clean's shadows are
+about 1.3 levels darker, probably because less noise is clipped at black).
 
 ## White balance (v0.3.0)
 
@@ -119,7 +157,8 @@ not the gain numbers, is what is matched.
 
 The viewfinder and the reference JPEG use the nearest Camera2 preset (Daylight and Fluorescent 2 →
 DAYLIGHT, Shade → SHADE, Fluorescent 1 → CLOUDY_DAYLIGHT, Fluorescent 3 → FLUORESCENT, Incandescent →
-INCANDESCENT; Kelvin by range); hold-to-compare shows the phone's auto white balance. The developed
+INCANDESCENT; Kelvin: up to 3300 K INCANDESCENT, 3800 K WARM_FLUORESCENT, 4600 K FLUORESCENT, 5800 K
+DAYLIGHT, 7000 K CLOUDY_DAYLIGHT, above SHADE); hold-to-compare shows the phone's auto white balance. The developed
 photo always uses the exact white point.
 
 ## D-Range Priority (v0.3.0)
@@ -240,8 +279,13 @@ Local JUnit tests (`RawEngineTest`) check:
 - the LUT identity and its binary round trip;
 - neutral preservation on both colour paths;
 - that a flat Bayer field develops flat and neutral;
+- that Reggie's Portra carries its published settings, and that LUT files are matched to F-Log2
+  (never F-Log2C);
 - that the frame noise measurement recovers a known noise curve;
 - that noise reduction cleans flat areas without widening a strong edge;
+- (v0.2.2) that every film simulation in the official pack is offered (the Rec.709 transforms are
+  not), that a simulation on its own has neutral standard settings, and that the LUT preview keeps
+  greys neutral and ordered;
 - (v0.2.3) that Halation and Bloom leave uniform fields unchanged (clipped or not), that the
   halo around a clipped lamp is red-dominant and local and bloom is neutral, that Clarity lowers or
   raises local contrast without moving the mean, that tuning clamps to the camera ranges, that every
@@ -253,9 +297,15 @@ Local JUnit tests (`RawEngineTest`) check:
   Shade warm, Kelvin = the same Planckian white, WB shift still applied), that DR-P Weak equals DR400
   with H/S −2 and ignores Highlight/Shadow while Strong only darkens highlights, that Acros filters
   leave greys bit-identical and keep the picture black and white while +R lightens red and +G
-  darkens it, that the six recipes carry their published settings, and that the new settings clamp.
+  darkens it, that the six recipes carry their published settings, and that the new settings clamp;
+- (v0.3.1) that Reggie's Portra on First version is bit-identical to Grain v0.2.0 (golden hash of a
+  synthetic frame with this phone's matrices, from the v0.2.0 engine) and differs on Clean, that
+  First version uses no sharpening and the full grain at the defaults while every High ISO NR and
+  Sharpness position still changes the picture (NR cleaner, Sharpness crisper at each step), and
+  that Reggie starts on First version, every other film on Clean, through tuning and `with()`.
 
-On the phone test DNG (ISO 2742, indoor), Reggie's Portra develops bit-identically to v0.2.3.
+On the phone test DNG (ISO 2742, indoor), Reggie's Portra on First version develops bit-identically
+to the v0.2.0 engine; on Clean, it and the other films develop bit-identically to v0.3.0.
 
 ## First phone test (v0.2.0 → v0.2.1)
 
@@ -284,8 +334,12 @@ must be re-measured with the receipt's `timingMs`.
   under warm artificial light and teal in daylight.
 - (v0.3.0) Vibrant Arizona (DR-P Strong) on a bright, high-contrast scene: highlights should hold
   more detail than Kodak Gold 200 (DR400).
+- (v0.3.1) Reggie's Portra should look like the v0.2.0 photos again (grain and texture); compare a
+  shot with *Development: Clean*.
 
 Desktop harness: `tools/DevelopRaw.java` develops a raw Bayer dump with any `.cube` file. No Android
 is needed. `-Drecipe=<key>` picks a published recipe (e.g. `kodak-gold-200`, `vibrant-arizona`) or
 `sim-<LUT name>`; `-Dwb`, `-Dkelvin`, `-Ddr`, `-Dfilter`, `-DshiftR/-DshiftB`, `-Dhl/-Dsh`,
-`-Dhalation`, `-Dbloom`, `-Dclarity` override single settings.
+`-Dhalation`, `-Dbloom`, `-Dclarity`, `-Ddevelopment=CLEAN|FIRST_VERSION`, `-Dsharpness` and
+`-DhighIsoNr` override single settings; `-Dgrain=true`, `-Dseed`, `-Dthreads` and `-Dev` set the
+development options (`-Dnr` / `-Dsharpen` scale Clean's luma NR and sharpening, for tests).

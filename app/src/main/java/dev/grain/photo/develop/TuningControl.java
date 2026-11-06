@@ -172,12 +172,24 @@ public final class TuningControl {
     return s;
   }
 
-  /** Grain's optional extras: not part of any Fujifilm film simulation, Off by default. */
+  /**
+   * Grain's own settings, not part of any Fujifilm film simulation: how the RAW is developed, and
+   * the halation / bloom extras (Off by default).
+   */
   public static List<TuningControl> extras() {
     String[] labels = new String[FujiRecipe.EXTRA_MAX + 1];
     labels[0] = "Off";
     for (int i = 1; i < labels.length; i++) labels[i] = String.valueOf(i);
+    FujiRecipe.Development[] ways = FujiRecipe.Development.values();
+    String[] wayLabels = new String[ways.length];
+    for (int i = 0; i < ways.length; i++) wayLabels[i] = ways[i].label;
     List<TuningControl> s = new ArrayList<>();
+    s.add(
+        new TuningControl(
+            "Development",
+            wayLabels,
+            t -> t.development.ordinal(),
+            (t, i) -> t.development = FujiRecipe.Development.values()[i]));
     s.add(new TuningControl("Halation", labels, t -> t.halation, (t, i) -> t.halation = i));
     s.add(new TuningControl("Bloom", labels, t -> t.bloom, (t, i) -> t.bloom = i));
     return s;

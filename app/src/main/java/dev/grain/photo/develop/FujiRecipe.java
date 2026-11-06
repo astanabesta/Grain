@@ -65,6 +65,25 @@ public final class FujiRecipe {
     }
   }
 
+  /**
+   * How Grain develops the RAW (not a Fujifilm setting). CLEAN (v0.2.1 and later): noise reduction
+   * from the frame's measured noise curve at two scales, recipe sharpening, and grain topped up
+   * only to the recipe amount. FIRST_VERSION (Grain v0.2.0): colour noise reduction only, no
+   * luminance noise reduction at High ISO NR -4, no sharpening at Sharpness -2, the full recipe
+   * grain, and Color Chrome / Color applied in OKLab: a grittier, more film-like picture. Never
+   * reorder (saved by name).
+   */
+  public enum Development {
+    CLEAN("Clean"),
+    FIRST_VERSION("First version");
+
+    public final String label;
+
+    Development(String label) {
+      this.label = label;
+    }
+  }
+
   /** Acros filter variants (Fujifilm: ACROS+Ye, +R, +G), as positions 0..3. */
   public static final String[] MONO_FILTERS = {"None", "+Ye", "+R", "+G"};
 
@@ -95,6 +114,8 @@ public final class FujiRecipe {
    * Halation re-exposes mainly the red record around bright light; bloom spreads highlight light.
    */
   public final int halation, bloom;
+  /** How the RAW is developed (Grain's choice, not a Fujifilm setting); see {@link Development}. */
+  public final Development development;
 
   /** Tuning ranges, in Fujifilm's menu units (X-Trans IV / V). */
   public static final double TONE_MIN = -2, TONE_MAX = 4, TONE_STEP = 0.5;
@@ -158,7 +179,7 @@ public final class FujiRecipe {
     this(key, name, author, source, filmSimulation, filmLabel, dynamicRange, highlight, shadow, color,
         sharpness, noiseReduction, clarity, grainRoughness, grainLarge, colorChrome, colorChromeBlue,
         WhiteBalance.parse(whiteBalance), kelvinOf(whiteBalance), wbShiftRed, wbShiftBlue, halation,
-        bloom, 0, "");
+        bloom, 0, "", Development.CLEAN);
   }
 
   private FujiRecipe(
@@ -186,7 +207,8 @@ public final class FujiRecipe {
       int halation,
       int bloom,
       int monoFilter,
-      String exposureNote) {
+      String exposureNote,
+      Development development) {
     this.key = key;
     this.name = name;
     this.author = author;
@@ -213,6 +235,7 @@ public final class FujiRecipe {
     this.bloom = bloom;
     this.monoFilter = monochrome() ? Math.max(0, Math.min(MONO_FILTERS.length - 1, monoFilter)) : 0;
     this.exposureNote = exposureNote == null ? "" : exposureNote;
+    this.development = development == null ? Development.CLEAN : development;
   }
 
   /** The Kelvin value in a label such as "5800K", else {@link #KELVIN_DEFAULT}. */
@@ -315,7 +338,8 @@ public final class FujiRecipe {
     public FujiRecipe build() {
       return new FujiRecipe(key, name, author, source, lut, label, dynamicRange, highlight, shadow,
           color, sharpness, noiseReduction, clarity, grainRoughness, grainLarge, colorChrome,
-          colorChromeBlue, wbMode, kelvin, wbShiftRed, wbShiftBlue, 0, 0, monoFilter, exposureNote);
+          colorChromeBlue, wbMode, kelvin, wbShiftRed, wbShiftBlue, 0, 0, monoFilter, exposureNote,
+          Development.CLEAN);
     }
   }
 
@@ -331,6 +355,7 @@ public final class FujiRecipe {
     public int kelvin = KELVIN_DEFAULT;
     public int monoFilter;
     public int halation, bloom;
+    public Development development = Development.CLEAN;
   }
 
   public Tuning tuning() {
@@ -353,6 +378,7 @@ public final class FujiRecipe {
     t.monoFilter = monoFilter;
     t.halation = halation;
     t.bloom = bloom;
+    t.development = development;
     return t;
   }
 
@@ -383,7 +409,8 @@ public final class FujiRecipe {
         Math.max(0, Math.min(EXTRA_MAX, t.halation)),
         Math.max(0, Math.min(EXTRA_MAX, t.bloom)),
         monochrome() ? Math.max(0, Math.min(MONO_FILTERS.length - 1, t.monoFilter)) : 0,
-        exposureNote);
+        exposureNote,
+        t.development == null ? Development.CLEAN : t.development);
   }
 
   /**
@@ -408,7 +435,8 @@ public final class FujiRecipe {
         && wbShiftBlue == o.wbShiftBlue
         && monoFilter == o.monoFilter
         && halation == o.halation
-        && bloom == o.bloom;
+        && bloom == o.bloom
+        && development == o.development;
   }
 
   static int clamp(int v, int max) {
@@ -420,9 +448,12 @@ public final class FujiRecipe {
     return Math.max(TONE_MIN, Math.min(TONE_MAX, s)) + 0.0;
   }
 
-  /** Reggie Ballesteros' recipe as published by Fuji X Weekly (X-Trans IV), unchanged. */
+  /**
+   * Reggie Ballesteros' recipe as published by Fuji X Weekly (X-Trans IV), unchanged; developed
+   * like Grain's first version (v0.2.0) by default, the look chosen on the phone.
+   */
   public static final FujiRecipe REGGIES_PORTRA =
-      new FujiRecipe(
+      developed(Development.FIRST_VERSION, new FujiRecipe(
           "reggies-portra",
           "Reggie’s Portra",
           "Reggie Ballesteros",
@@ -442,7 +473,14 @@ public final class FujiRecipe {
           1,
           "Auto",
           2,
-          -4);
+          -4));
+
+  /** The same film and settings, developed the given way. */
+  static FujiRecipe developed(Development development, FujiRecipe film) {
+    Tuning t = film.tuning();
+    t.development = development;
+    return film.with(t);
+  }
 
   private static final String ROESCH = "Ritchie Roesch (Fuji X Weekly)";
 
@@ -658,6 +696,8 @@ public final class FujiRecipe {
     rows.add(new String[] {"Color Chrome FX Blue", level(colorChromeBlue) + (mono && colorChromeBlue > 0 ? notForMono : "")});
     rows.add(new String[] {"Halation (Grain extra)", halation == 0 ? "Off" : String.valueOf(halation)});
     rows.add(new String[] {"Bloom (Grain extra)", bloom == 0 ? "Off" : String.valueOf(bloom)});
+    rows.add(new String[] {"Development (Grain)",
+        development == Development.FIRST_VERSION ? "First version (as Grain v0.2.0)" : "Clean"});
     if (!exposureNote.isEmpty())
       rows.add(new String[] {"Exposure compensation (typical, not applied)", exposureNote});
     return rows.toArray(new String[0][]);

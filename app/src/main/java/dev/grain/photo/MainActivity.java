@@ -1007,7 +1007,13 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
       rows.add(stepper(panel, setting, work, defaults, changed));
     TextView extrasNote =
         paragraph(
-            "No Fujifilm film simulation has halation or bloom, so both start Off. Halation: a"
+            "Development: First version develops like Grain v0.2.0 — colour noise reduction"
+                + " only, no sharpening at Sharpness −2 and the full grain, so the picture is"
+                + " grittier and more like film. Raising High ISO NR adds luminance noise"
+                + " reduction and Sharpness above −2 sharpens. Clean (v0.2.1 and later) removes"
+                + " more noise and sharpens. Reggie’s Portra starts on First version, every"
+                + " other film on Clean.\n"
+                + "No Fujifilm film simulation has halation or bloom, so both start Off. Halation: a"
                 + " red-orange glow around bright lights, like film without an anti-halation"
                 + " layer. Bloom: a soft glow spreading from highlights, like a diffusion filter."
                 + " Both are made from the RAW light before the film simulation.");
