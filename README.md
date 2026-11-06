@@ -1,5 +1,9 @@
 # Grain Photo
 
+
+https://github.com/user-attachments/assets/a167faf0-27a8-4dbf-9627-14fa05a239da
+
+
 **A separate, native Android recipe camera for your Redmi Note 13 Pro Plus.**
 
 **v0.3.5 — Sony s709:** Sony's own cinema look ("developed alongside VENICE … subtle colours, smooth colour gradation and a softer low contrast tone curve") as a new film. Download Sony's free `s709Cubes.zip` from Sony's S-Log grading guide and import it like the Fujifilm pack (*Tune → Import s709 zip*); Grain never bundles it. Each photo is developed from the RAW into Sony's S-Log3 / S-Gamut3.Cine with Sony's published formulas, converted exactly for every pixel, then through Sony's table. Grain's own choices: the meter places the scene at Sony's 18 % grey, and the highlight shoulder is stretched where the phone's RAW clips, so clipped areas still reach white. Fujifilm-only settings (Dynamic range, Color Chrome, FX Blue) are not offered for it; white balance, tone, Color, sharpening, noise reduction, Clarity, Grain and the extras work. The Fujifilm films develop exactly as in v0.3.4. See [Sony s709](docs/RAW_FUJI_RECIPES.md#sony-s709-v035).
