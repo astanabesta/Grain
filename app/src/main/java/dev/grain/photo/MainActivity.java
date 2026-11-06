@@ -2630,8 +2630,8 @@ public final class MainActivity extends ComponentActivity
         public void run() {
           if (!resumed) return;
           main.postDelayed(this, 140);
-          if (!peaking || !ready || !powerOn || back == null || !texture.isAvailable()
-              || !("camera".equals(mode)) || dispMode == 1) {
+          if (!peaking || !ready || !powerOn || back == null || texture == null
+              || !texture.isAvailable() || !("camera".equals(mode)) || dispMode == 1) {
             if (back != null && back.state.peak != null) {
               back.state.peak = null;
               back.refresh();
