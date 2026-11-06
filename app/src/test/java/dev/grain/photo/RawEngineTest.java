@@ -1167,20 +1167,147 @@ public class RawEngineTest {
     return film.with(t);
   }
 
+  static FujiRecipe withFxBlue(FujiRecipe film, int level) {
+    FujiRecipe.Tuning t = film.tuning();
+    t.colorChromeBlue = level;
+    return film.with(t);
+  }
+
   /**
-   * Reggie's Portra develops exactly as Grain v0.2.0 did. The golden hash was computed by the
-   * v0.2.0 engine (tag v0.2.0), with only its grain texture placement changed to today's (same
-   * textures, offset per photo), and checked on Java 17 and 21; it must never change.
+   * Reggie's Portra develops as Grain v0.2.0 did, except FX Blue: v0.3.3 replaced the v0.2.0 FX
+   * Blue (at most 5 %, gated to very saturated blues) with the one fitted to Fujifilm camera
+   * JPEGs, shared by both developments. With FX Blue Off the output must stay bit-identical to
+   * Grain v0.3.2, so nothing but FX Blue changed: hashes computed by v0.3.2, whose First version
+   * was bit-identical to v0.2.0 (golden 0xed66690e26edf621 at Portra's FX Blue Weak, computed by
+   * the v0.2.0 engine with today's grain placement). The default hash pins the v0.3.3 FX Blue.
    */
   @Test
-  public void firstVersionIsBitIdenticalToGrainV020() throws Exception {
-    long golden = 0xed66690e26edf621L;
+  public void firstVersionIsGrainV020ExceptTheFittedFxBlue() throws Exception {
+    FujiRecipe portra = FujiRecipe.REGGIES_PORTRA;
     assertEquals(
-        "First version changed: it must stay bit-identical to Grain v0.2.0",
-        Long.toHexString(golden),
-        Long.toHexString(fnv(developGolden(FujiRecipe.REGGIES_PORTRA, true, null))));
-    FujiRecipe clean = developedAs(FujiRecipe.REGGIES_PORTRA, FujiRecipe.Development.CLEAN, -2, -4);
-    assertNotEquals(golden, fnv(developGolden(clean, true, null)));
+        "First version without FX Blue changed: it must stay bit-identical to Grain v0.2.0",
+        "ca376d33142387bf",
+        Long.toHexString(fnv(developGolden(withFxBlue(portra, 0), true, null))));
+    FujiRecipe clean = developedAs(portra, FujiRecipe.Development.CLEAN, -2, -4);
+    assertEquals(
+        "Clean without FX Blue changed",
+        "661181fc72585967",
+        Long.toHexString(fnv(developGolden(withFxBlue(clean, 0), true, null))));
+    long v033 = fnv(developGolden(portra, true, null));
+    assertEquals("the v0.3.3 FX Blue changed", "8f487b5241881196", Long.toHexString(v033));
+    assertNotEquals("the v0.2.0 FX Blue is gone", 0xed66690e26edf621L, v033);
+    assertNotEquals(v033, fnv(developGolden(clean, true, null)));
+  }
+
+  // ---------------------------------------------- v0.3.3: Color Chrome FX Blue fitted to Fujifilm
+
+  /**
+   * Mean sky colours (sRGB code values) of Fujifilm X100V camera JPEGs of one clear sky at FX Blue
+   * Off / Weak / Strong (Fuji X Weekly, 2020-06-30, Kodachrome 64 recipe), ten 280 x 40 px bands
+   * from the deep top of the sky to the pale bottom.
+   */
+  static final double[][] X100V_SKY_OFF = {
+    {127.2, 156.5, 241.7}, {133.8, 161.9, 249.2}, {140.1, 167.4, 253.9}, {145.8, 173.2, 254.5},
+    {151.3, 178.8, 254.4}, {156.8, 184.2, 254.4}, {161.8, 189.7, 254.4}, {166.9, 194.9, 254.4},
+    {171.7, 200.3, 254.3}, {176.2, 205.2, 254.5}
+  };
+  static final double[][] X100V_SKY_WEAK = {
+    {108.2, 138.1, 223.9}, {114.6, 143.8, 232.0}, {121.1, 149.1, 238.5}, {127.7, 155.3, 240.9},
+    {134.2, 161.6, 241.4}, {140.5, 168.3, 242.2}, {147.0, 175.0, 243.5}, {154.0, 182.1, 245.0},
+    {160.7, 189.4, 246.8}, {167.3, 196.1, 248.3}
+  };
+  static final double[][] X100V_SKY_STRONG = {
+    {89.2, 119.4, 206.2}, {95.0, 124.9, 213.6}, {101.2, 130.1, 220.0}, {108.9, 137.2, 223.4},
+    {116.7, 144.7, 225.0}, {124.2, 152.3, 226.7}, {132.0, 160.5, 229.3}, {141.0, 169.3, 232.7},
+    {149.6, 178.6, 236.3}, {158.1, 187.1, 239.5}
+  };
+
+  /**
+   * FX Blue reproduces Fujifilm's own on that sky: Weak and Strong within 2.5 code values in red
+   * and green (fit: rms 0.7). Blue is checked on the two top bands only: in the others the Off
+   * JPEG's blue is clipped at 255, so Fujifilm's blue there drops less than it would.
+   */
+  @Test
+  public void fxBlueMatchesFujifilmX100vSky() {
+    double darkenedBy = 0;
+    for (int i = 0; i < X100V_SKY_OFF.length; i++)
+      for (int level = 1; level <= 2; level++) {
+        double[] off = X100V_SKY_OFF[i], want = level == 2 ? X100V_SKY_STRONG[i] : X100V_SKY_WEAK[i];
+        float[] v = {(float) (off[0] / 255), (float) (off[1] / 255), (float) (off[2] / 255)};
+        RawDeveloper.fxBlue(v, RawDeveloper.fxBlueDepth(level));
+        for (int c = 0; c < (i < 2 ? 3 : 2); c++)
+          assertEquals("band " + i + ", level " + level + ", channel " + c, want[c], v[c] * 255, c < 2 ? 2.5 : 3.0);
+        if (i == 0 && level == 2) darkenedBy = 1 - lumaCode(v) * 255 / lumaCode(off);
+      }
+    assertEquals("Strong darkens the deep sky ~24 %, like a polarizer", 0.24, darkenedBy, 0.02);
+  }
+
+  static double lumaCode(double[] c) {
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  }
+
+  static double lumaCode(float[] c) {
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  }
+
+  /** Weak is half of Strong; neutrals, skin, reds, yellows, greens and grey-blues are untouched. */
+  @Test
+  public void fxBlueOnlyTouchesBlues() {
+    float strong = RawDeveloper.fxBlueDepth(2);
+    assertEquals(0f, RawDeveloper.fxBlueDepth(0), 0f);
+    assertEquals(strong / 2, RawDeveloper.fxBlueDepth(1), 1e-7f);
+    float[][] untouched = {
+      {0.5f, 0.5f, 0.5f}, {0.95f, 0.95f, 0.95f}, {0.04f, 0.04f, 0.04f}, // greys
+      {0.88f, 0.67f, 0.55f}, {0.55f, 0.38f, 0.29f}, // light and dark skin
+      {0.8f, 0.2f, 0.15f}, {0.9f, 0.8f, 0.2f}, {0.25f, 0.65f, 0.3f}, // red, yellow, green
+      {0.62f, 0.66f, 0.72f} // a grey-blue cloud, below the chroma gate
+    };
+    for (float[] c : untouched) {
+      float[] v = c.clone();
+      RawDeveloper.fxBlue(v, strong);
+      assertArrayEquals(java.util.Arrays.toString(c), c, v, 0f);
+    }
+    float[] sky = {0.45f, 0.6f, 0.9f}, v = sky.clone();
+    RawDeveloper.fxBlue(v, strong);
+    assertTrue("a blue sky darkens", lumaCode(v) < 0.88 * lumaCode(sky));
+    assertEquals("same hue: every channel drops by the same amount", sky[2] - sky[0], v[2] - v[0], 1e-6);
+    assertEquals(sky[1] - sky[0], v[1] - v[0], 1e-6);
+    float[] navy = {0.05f, 0.08f, 0.3f};
+    RawDeveloper.fxBlue(navy, strong);
+    assertTrue("dark blues deepen without crushing to black", navy[0] >= 0 && lumaCode(navy) > 0.7 * lumaCode(new float[] {0.05f, 0.08f, 0.3f}));
+  }
+
+  /**
+   * In the engine, FX Blue Strong deepens the bluest golden patch by several percent in both
+   * developments (v0.3.3: 6.5 % Clean, 7.1 % First version; v0.3.2's FX Blue: 0.4 % and 1.4 %)
+   * and leaves grey and warm patches exactly alone.
+   */
+  @Test
+  public void fxBlueDeepensBluesInTheEngine() throws Exception {
+    for (FujiRecipe.Development d : FujiRecipe.Development.values()) {
+      FujiRecipe superia = developedAs(FujiRecipe.REGGIES_SUPERIA, d, -2, -4);
+      int[] off = developGolden(withFxBlue(superia, 0), false, null);
+      int[] strong = developGolden(superia, false, null);
+      double deepest = 0;
+      for (int p = 0; p < 24; p++) {
+        int x0 = (p % 6) * 32 + 8, y0 = (p / 6) * 32 + 8;
+        double a = patchLuma(off, x0, y0), b = patchLuma(strong, x0, y0);
+        double hue = 360.0 * p / 24;
+        if (p % 4 == 3 || hue < 120) assertEquals(d + " patch " + p + " (grey or warm)", a, b, 0.01);
+        deepest = Math.max(deepest, 1 - b / a);
+      }
+      assertTrue(d + ": FX Blue Strong deepens the bluest patch by " + deepest, deepest > 0.045);
+    }
+  }
+
+  static double patchLuma(int[] img, int x0, int y0) {
+    double sum = 0;
+    for (int y = y0; y < y0 + 16; y++)
+      for (int x = x0; x < x0 + 16; x++) {
+        int p = img[y * 192 + x];
+        sum += 0.2126 * ((p >> 16) & 255) + 0.7152 * ((p >> 8) & 255) + 0.0722 * (p & 255);
+      }
+    return sum / 256;
   }
 
   /** First version: no sharpening and the full grain at the defaults; NR and Sharpness still work. */

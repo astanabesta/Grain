@@ -1,11 +1,13 @@
-# Fujifilm recipes from RAW (v0.3.2, engine `grain-raw-2`)
+# Fujifilm recipes from RAW (v0.3.3, engine `grain-raw-3`)
 
 Grain's Fujifilm recipes are developed from the phone's sensor RAW. They are not filters on the
 phone's finished JPEG. v0.3.2 has eight published recipes (Reggie's Portra and Reggie's Superia,
 plus six from Fuji X Weekly) and every film simulation in the imported pack on its own. v0.3.1 added
 the **Development** setting: Reggie's Portra develops like Grain's first version (v0.2.0) again,
 every other film stays on Clean (see [Development](#development-first-version-and-clean-v031)).
-v0.3.2 adds **Reggie's Superia**, which starts on First version like his Portra.
+v0.3.2 adds **Reggie's Superia**, which starts on First version like his Portra. v0.3.3 rebuilds
+**Color Chrome FX Blue** from Fujifilm's own camera JPEGs, for every film and both developments
+(see [FX Blue](#color-chrome-fx-blue-v033)).
 
 ## Published recipes (v0.3.0, Reggie's Superia v0.3.2)
 
@@ -100,24 +102,66 @@ Clean**; *Reset this look* returns to that default.
 | Luminance noise | none at High ISO NR −4; each step above adds 1/8 of Clean's fine-scale (pixel) luma filter | two scales (pixel guided filter + quarter resolution), from the measured noise curve |
 | Sharpening | none at Sharpness −2; ±0.1 per step (softer below −2, sharper above) | 0.45 + 0.1 × Sharpness (0.25 at −2) |
 | Grain | the recipe amount, whatever the sensor noise | topped up to the recipe amount only (sensor noise counts) |
-| Color / Color Chrome / FX Blue | in OKLab (v0.2.0 constants) | in display-code opponent space, matched to the OKLab step |
+| Color / Color Chrome | in OKLab (v0.2.0 constants) | in display-code opponent space, matched to the OKLab step |
 
 Everything else is shared: RAW calibration, white balance (Auto and the fixed modes), metering,
-Dynamic range and DR-P, the tone model, the LUT, Highlight/Shadow, Clarity, the Acros filters,
-Halation and Bloom, orientation and the receipt.
+Dynamic range and DR-P, the tone model, the LUT, FX Blue (since v0.3.3), Highlight/Shadow,
+Clarity, the Acros filters, Halation and Bloom, orientation and the receipt.
 
-The First version is the v0.2.0 code path, kept exactly. On the phone test DNG (ISO 2742),
-Reggie's Portra on First version is **bit-identical** to the v0.2.0 engine (tag `v0.2.0`, with
-the same grain texture placement: same textures, offset per photo), and that v0.2.0 engine
-reproduces the phone's own v0.2.0 JPEG of that frame (mean |difference| 0.36 of 255 after a light
-blur, which removes the random grain). A JUnit golden test pins the bit-identity on a synthetic
-frame (checked on Java 17 and 21). On Clean, Reggie's Portra and every other film are bit-identical
-to v0.3.0.
+The First version is the v0.2.0 code path, kept exactly except FX Blue, which v0.3.3 replaced in
+both developments (see [FX Blue](#color-chrome-fx-blue-v033)). Up to v0.3.2, Reggie's Portra on
+First version was **bit-identical** to the v0.2.0 engine on the phone test DNG (ISO 2742; tag
+`v0.2.0`, with the same grain texture placement: same textures, offset per photo), and that v0.2.0
+engine reproduces the phone's own v0.2.0 JPEG of that frame (mean |difference| 0.36 of 255 after a
+light blur, which removes the random grain). Since v0.3.3 a JUnit golden test pins that First
+version and Clean with FX Blue Off are bit-identical to v0.3.2 (so First version to v0.2.0), and
+pins the hash of the new FX Blue. Reggie's Portra (FX Blue Weak) therefore differs from v0.2.0 only
+in blues. On Clean, films with FX Blue Off are bit-identical to v0.3.0.
 
 Measured on that DNG (12.5 MP, ISO 2742), fine texture (luma, after a 1.5 px blur is removed) and
 colour noise, First version vs Clean: centre 11.0 vs 7.8 and 4.4 vs 3.0; a dark corner 17.1 vs 12.1
 and 5.7 vs 3.9. Tone and colour are otherwise the same (mean RGB within 1 level; Clean's shadows are
 about 1.3 levels darker, probably because less noise is clipped at black).
+
+## Color Chrome FX Blue (v0.3.3)
+
+Up to v0.3.2, FX Blue barely moved a real sky: it acted only on very saturated blues and darkened by
+at most 5 %. On sky colours through Reggie's Superia it changed lightness by 0–0.3 %, while
+Fujifilm's own FX Blue darkens a clear sky by 6–17 % (Strong, OKLab lightness).
+
+v0.3.3 replaces it, for every film and both developments, with a model fitted to Fujifilm camera
+JPEGs: Fuji X Weekly's X100V test of one clear sky at FX Blue Off, Weak and Strong
+([2020-06-30](https://fujixweekly.com/2020/06/30/fujifilm-x100v-new-feature-color-chrome-effect-blue/),
+Kodachrome 64 recipe). In ten 280 × 40 px sky bands from the deep top to the pale bottom:
+
+- every channel drops by nearly the same amount (deepest band: R −38, G −37, B −36 code values), so
+  the hue stays and the blue gets darker and relatively richer, like a polarizing filter;
+- Weak is exactly half of Strong;
+- the drop grows with how blue the colour is: Strong takes 9 % of the luma off the palest band and
+  24 % off the deepest;
+- Color Chrome Effect does not change the sky.
+
+Grain applies it right after the Fujifilm LUT, on display codes: every channel −= depth ×
+smoothstep(C; 0.08, 0.45) × hb⁴ × Y′, where Y′ is the BT.709 luma, C the chroma in the
+(B′ − Y′, R′ − Y′) plane and hb the cosine to the sky-blue direction (OKLab hue ≈ 264°); depth is
+0.277 for Strong and half for Weak. Over the 10 bands × Weak/Strong it reproduces Fujifilm's red and
+green within 2.0 code values (rms 0.7), and blue within 2.4 on the two bands whose blue is not
+clipped (elsewhere the Off JPEG's blue is clipped at 255, so Fujifilm's blue drops a little less
+there). Neutrals, grey-blue clouds (below the chroma gate), skin, reds, yellows and greens are not
+touched; dark blues deepen in proportion, without crushing.
+
+| Sky through Reggie's Superia (synthetic phone RAW), FX Blue Off → Strong | v0.3.2 | v0.3.3 |
+|---|---|---|
+| deep | −0.2 % | −7.7 % |
+| medium | −0.1 % | −7.4 % |
+| pale | 0 % | −5.5 % |
+
+Those skies start paler than the X100V test sky (Classic Negative here, a Classic Chrome recipe
+there), and FX Blue, like Fujifilm's, deepens a pale blue less than a deep one. The measurement is
+X-Trans IV; Reggie made Superia on X-Trans V, which renders Classic Negative blues about one FX Blue
+step deeper (Fuji X Weekly). With FX Blue Off every film develops bit-identically to v0.3.2. On the
+phone test DNG (indoor), Classic Neg. is bit-identical, Reggie's Superia changes 0.9 % of the pixels
+and Reggie's Portra 1.1 %, all of them blue.
 
 ## White balance (v0.3.0)
 
@@ -258,10 +302,11 @@ the simulations differ; photos are always developed from RAW.
    - pixel scale: a self-guided 5×5 filter whose epsilon follows the noise curve through gain, lens
      shading and the tone curve; High ISO NR sets strength and how much fine grain is kept;
    - Sharpness: unsharp mask on the denoised luma (Reggie's −2 is gentle).
-7. **Recipe controls** (Grain's approximations, not Fujifilm measurements):
+7. **Recipe controls** (Grain's approximations, except FX Blue, which is fitted to Fujifilm JPEGs):
    - Color = chroma scale in the code domain (calibrated to match the earlier OKLab step);
    - Color Chrome = depth on saturated colours;
-   - FX Blue = depth on blues;
+   - FX Blue = blues darker and relatively richer at the same hue, like a polarizer (v0.3.3, fitted
+     to Fujifilm X100V JPEGs; applied right after the LUT);
    - grain = cached tileable luminance-weighted textures; the amount is reduced where the image's
      own noise already provides texture (never below a quarter of the recipe amount);
    - WB shift = 0.04 log2 per step;
@@ -307,19 +352,26 @@ Local JUnit tests (`RawEngineTest`) check:
   leave greys bit-identical and keep the picture black and white while +R lightens red and +G
   darkens it, that the six recipes carry their published settings, and that the new settings clamp;
 - (v0.3.1) that Reggie's Portra on First version is bit-identical to Grain v0.2.0 (golden hash of a
-  synthetic frame with this phone's matrices, from the v0.2.0 engine) and differs on Clean, that
+  synthetic frame with this phone's matrices, from the v0.2.0 engine; since v0.3.3 with FX Blue
+  Off) and differs on Clean, that
   First version uses no sharpening and the full grain at the defaults while every High ISO NR and
   Sharpness position still changes the picture (NR cleaner, Sharpness crisper at each step), and
   that Reggie starts on First version, every other film on Clean, through tuning and `with()`;
 - (v0.3.2) that Reggie's Superia carries every published setting and receipt row (no typical
   exposure), is listed right after Reggie's Portra, starts on First version (Reggie's two recipes on
   First version, every other film on Clean, unique keys), and develops with no sharpening and the
-  full Strong / Large grain (heavier than Portra's Weak / Small) and deeper FX Blue.
+  full Strong / Large grain (heavier than Portra's Weak / Small) and deeper FX Blue;
+- (v0.3.3) that FX Blue reproduces Fujifilm's X100V sky (10 bands, Weak and Strong, red and green
+  within 2.5 code values), keeps the hue (every channel drops equally), leaves greys, skin, reds,
+  yellows, greens and grey-blue clouds untouched, deepens the bluest golden patch by 6.5–7.1 % in
+  the engine (v0.3.2: 0.4–1.4 %) while grey and warm patches stay exactly the same, and that both
+  developments with FX Blue Off stay bit-identical to v0.3.2 (First version: to v0.2.0).
 
 On the phone test DNG (ISO 2742, indoor), Reggie's Portra on First version develops bit-identically
 to the v0.2.0 engine; on Clean, it and the other films develop bit-identically to v0.3.0. Adding
 Reggie's Superia (v0.3.2) changed no engine code: Reggie's Portra and Pacific Blues develop
-bit-identically to v0.3.1 on that DNG.
+bit-identically to v0.3.1 on that DNG. The v0.3.3 FX Blue changes only blue pixels there (0.9 % for
+Reggie's Superia, 1.1 % for Reggie's Portra); Classic Neg. on its own is bit-identical.
 
 ## First phone test (v0.2.0 → v0.2.1)
 
@@ -352,6 +404,9 @@ must be re-measured with the receipt's `timingMs`.
   shot with *Development: Clean*.
 - (v0.3.2) Reggie's Superia on skin in directional light, the light it was made for; at high ISO,
   First version is very grainy (Strong / Large grain on top of sensor noise), so compare *Clean*.
+- (v0.3.3) A blue sky with Reggie's Superia (FX Blue Strong), and the same sky with FX Blue Off:
+  the sky should be clearly deeper, like with a polarizer. The DNG and receipt also show whether
+  the phone's white balance or a bright sky exposure makes the sky paler than on a Fujifilm.
 
 Desktop harness: `tools/DevelopRaw.java` develops a raw Bayer dump with any `.cube` file. No Android
 is needed. `-Drecipe=<key>` picks a published recipe (e.g. `kodak-gold-200`, `vibrant-arizona`, `reggies-superia`) or

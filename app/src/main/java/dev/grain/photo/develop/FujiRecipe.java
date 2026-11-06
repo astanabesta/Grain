@@ -70,8 +70,8 @@ public final class FujiRecipe {
    * from the frame's measured noise curve at two scales, recipe sharpening, and grain topped up
    * only to the recipe amount. FIRST_VERSION (Grain v0.2.0): colour noise reduction only, no
    * luminance noise reduction at High ISO NR -4, no sharpening at Sharpness -2, the full recipe
-   * grain, and Color Chrome / Color applied in OKLab: a grittier, more film-like picture. Never
-   * reorder (saved by name).
+   * grain, and Color Chrome / Color applied in OKLab: a grittier, more film-like picture. FX Blue
+   * is the same in both (fitted to Fujifilm JPEGs, v0.3.3). Never reorder (saved by name).
    */
   public enum Development {
     CLEAN("Clean"),

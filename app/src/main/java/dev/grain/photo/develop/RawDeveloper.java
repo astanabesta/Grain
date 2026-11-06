@@ -22,14 +22,15 @@ import java.util.concurrent.atomic.AtomicInteger;
  *       quarter-resolution pass removes blotchy low-frequency luma and chroma noise (guided filters),
  *       a full-resolution self-guided filter tames pixel-level luma noise, then sharpening
  *   <li>Fujifilm's official F-Log2 3-D LUT for the recipe's film simulation (user-imported)
- *   <li>Color (chroma), Color Chrome Effect / FX Blue (approximations) in a display-code opponent
- *       space, film grain scaled down when sensor noise already supplies texture
+ *   <li>Color Chrome FX Blue (fitted to Fujifilm camera JPEGs), then Color (chroma) and Color
+ *       Chrome Effect (approximations) in a display-code opponent space (OKLab for First version),
+ *       film grain scaled down when sensor noise already supplies texture
  * </ol>
  *
  * Work is split into 64-row strips processed in parallel, each with its own buffers.
  */
 public final class RawDeveloper {
-  public static final String VERSION = "grain-raw-2";
+  public static final String VERSION = "grain-raw-3";
 
   /**
    * Where Fujifilm places the centre-weighted log-average scene luminance, in F-Log2 scene-linear
@@ -57,17 +58,28 @@ public final class RawDeveloper {
     {1, 1, 1}, {1, 0.9, 0.1}, {1, 0.25, 0.02}, {0.4, 1, 0.4}
   };
 
-  /** Approximations of effects Fujifilm does not publish (see docs/RAW-ENGINE.md). */
-  static final float CCE_C0 = 0.18f, CCE_C1 = 0.50f, CCE_STRONG = 0.045f, BLUE_STRONG = 0.05f;
+  /** Approximations of effects Fujifilm does not publish (see docs/RAW_FUJI_RECIPES.md). */
+  static final float CCE_C0 = 0.18f, CCE_C1 = 0.50f, CCE_STRONG = 0.045f;
+
+  /**
+   * Color Chrome FX Blue (v0.3.3, both developments): every channel of a blue display-code colour
+   * drops by depth * smoothstep(C; FXB_C0, FXB_C1) * hb^4 * Y' (C and hb: chroma and sky-blue
+   * cosine in the (B'-Y', R'-Y') plane), so blues get darker and relatively richer at the same hue,
+   * like a polarizing filter. Fitted to Fujifilm X100V camera JPEGs of one clear sky at FX Blue
+   * Off / Weak / Strong (Fuji X Weekly, 2020-06-30): 10 sky bands, rms error 0.7 code values, and
+   * Weak measured at half of Strong.
+   */
+  static final float FXB_C0 = 0.08f, FXB_C1 = 0.45f, FXB_STRONG = 0.277f;
 
   static final float GRAIN_WEAK = 0.012f, GRAIN_STRONG = 0.020f;
   /** Display-code (B'-Y', R'-Y') direction of OKLab hue ~264 degrees (sky/deep blue). */
   static final float BLUE_U = 0.949f, BLUE_V = -0.314f;
   /**
-   * Development.FIRST_VERSION (Grain v0.2.0), kept exactly: Color Chrome Effect chroma ramp and
-   * FX Blue hue (~264 degrees) in OKLab, and the largest colour-noise box radius.
+   * Development.FIRST_VERSION (Grain v0.2.0), kept exactly: Color Chrome Effect chroma ramp in
+   * OKLab and the largest colour-noise box radius. Its OKLab FX Blue (at most 5 %, gated to very
+   * saturated blues) was replaced in v0.3.3 by the fitted FX Blue shared with Clean.
    */
-  static final float FV_CCE_C0 = 0.07f, FV_CCE_C1 = 0.19f, FV_BLUE_A = -0.1045f, FV_BLUE_B = -0.9945f;
+  static final float FV_CCE_C0 = 0.07f, FV_CCE_C1 = 0.19f;
 
   static final int FV_MAX_RADIUS = 4;
   static final int STRIP = 64, HALO = 5, GF_R = 2, NR_TABLE = 256;
@@ -544,8 +556,8 @@ public final class RawDeveloper {
       boolean mono = r.monochrome();
       chroma = mono ? 1f : (float) (1 + ToneModel.COLOR_KAPPA * r.color);
       cceDepth = mono ? 0 : r.colorChrome == 2 ? CCE_STRONG : r.colorChrome == 1 ? CCE_STRONG / 2 : 0;
-      blueDepth = mono ? 0 : r.colorChromeBlue == 2 ? BLUE_STRONG : r.colorChromeBlue == 1 ? BLUE_STRONG / 2 : 0;
-      post = chroma != 1f || cceDepth > 0 || blueDepth > 0;
+      blueDepth = mono ? 0 : fxBlueDepth(r.colorChromeBlue);
+      post = chroma != 1f || cceDepth > 0;
       stats.put("colorChromaScale", round(chroma, 4));
       stats.put("colorChromeDepth", cceDepth);
       stats.put("colorChromeBlueDepth", blueDepth);
@@ -1543,7 +1555,7 @@ public final class RawDeveloper {
     void finishRow(int r, int y) {
       final float amp = j.grainAmp;
       final float[] ga = j.grainA, gb = j.grainB;
-      final boolean post = j.post, cce = j.cceDepth > 0 || j.blueDepth > 0, mono = j.monoFilter;
+      final boolean post = j.post, cce = j.cceDepth > 0, mono = j.monoFilter;
       final boolean fv = j.firstVersion;
       final float chroma = j.chroma, cceDepth = j.cceDepth, blueDepth = j.blueDepth;
       int src = (r + HALO) * W, dst = r * W;
@@ -1551,10 +1563,11 @@ public final class RawDeveloper {
       int ox = j.grainOx;
       for (int x = 0; x < W; x++) {
         j.lut.sample(cr[src + x], cg[src + x], cb[src + x], lutOut);
+        if (blueDepth > 0) fxBlue(lutOut, blueDepth); // both developments (v0.3.3)
         float vr = lutOut[0], vg = lutOut[1], vb = lutOut[2];
         if (mono) vr = vg = vb = j.filterMono(cr[src + x], cg[src + x], cb[src + x], vg);
         if (post && fv) {
-          // First version (v0.2.0), unchanged: Color Chrome Effect / FX Blue / Color in OKLab
+          // First version (v0.2.0), unchanged: Color Chrome Effect / Color in OKLab
           float lr = j.decode(vr), lg = j.decode(vg), lb = j.decode(vb);
           float l = (float) Math.cbrt(0.4122214708f * lr + 0.5363325363f * lg + 0.0514459929f * lb);
           float mm = (float) Math.cbrt(0.2119034982f * lr + 0.6806995451f * lg + 0.1073969566f * lb);
@@ -1567,13 +1580,6 @@ public final class RawDeveloper {
             float w = C <= FV_CCE_C0 ? 0 : C >= FV_CCE_C1 ? 1 : (C - FV_CCE_C0) / (FV_CCE_C1 - FV_CCE_C0);
             w = w * w * (3 - 2 * w);
             float dL = cceDepth * w;
-            if (blueDepth > 0 && C > 1e-4f) {
-              float hb = (A * FV_BLUE_A + Bb * FV_BLUE_B) / C;
-              if (hb > 0) {
-                hb *= hb;
-                dL += blueDepth * w * hb * hb;
-              }
-            }
             L -= dL * L;
           }
           A *= chroma;
@@ -1596,13 +1602,6 @@ public final class RawDeveloper {
             float w = C <= CCE_C0 ? 0 : C >= CCE_C1 ? 1 : (C - CCE_C0) / (CCE_C1 - CCE_C0);
             w = w * w * (3 - 2 * w);
             float dL = cceDepth * w;
-            if (blueDepth > 0 && C > 1e-4f) {
-              float hb = (u * BLUE_U + v * BLUE_V) / C;
-              if (hb > 0) {
-                hb *= hb;
-                dL += blueDepth * w * hb * hb;
-              }
-            }
             Yd -= dL * Yd;
           }
           u *= chroma;
@@ -1627,6 +1626,32 @@ public final class RawDeveloper {
         argb[dst + x] = 0xff000000 | (ir << 16) | (ig << 8) | ib;
       }
     }
+  }
+
+  /** FX Blue depth for a recipe level: Off 0, Weak half of Strong (as measured), Strong. */
+  public static float fxBlueDepth(int level) {
+    return level >= 2 ? FXB_STRONG : level == 1 ? FXB_STRONG / 2 : 0;
+  }
+
+  /**
+   * Color Chrome FX Blue on one display-code RGB colour, in place (see FXB_STRONG): blues darken
+   * and get relatively richer at the same hue; neutrals, skin, reds, yellows and greens are not
+   * touched.
+   */
+  public static void fxBlue(float[] rgb, float depth) {
+    float r = rgb[0], g = rgb[1], b = rgb[2];
+    float y = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+    float cu = b - y, cv = r - y;
+    float c = (float) Math.sqrt(cu * cu + cv * cv);
+    if (depth <= 0 || y <= 0 || c <= FXB_C0) return;
+    float hb = (cu * BLUE_U + cv * BLUE_V) / c;
+    if (hb <= 0) return;
+    float t = c >= FXB_C1 ? 1 : (c - FXB_C0) / (FXB_C1 - FXB_C0);
+    hb *= hb;
+    float d = depth * t * t * (3 - 2 * t) * hb * hb * y;
+    rgb[0] = r > d ? r - d : 0;
+    rgb[1] = g > d ? g - d : 0;
+    rgb[2] = b > d ? b - d : 0;
   }
 
   /** Fraction of histogram samples whose log2 luminance is above the threshold. */
