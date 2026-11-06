@@ -8,6 +8,7 @@ import dev.grain.photo.develop.FLog2;
 import dev.grain.photo.develop.FujiRecipe;
 import dev.grain.photo.develop.RawDeveloper;
 import dev.grain.photo.develop.RawFrame;
+import dev.grain.photo.develop.SLog3;
 import dev.grain.photo.develop.ToneModel;
 import dev.grain.photo.develop.ToneTable;
 import java.io.ByteArrayInputStream;
@@ -1587,5 +1588,200 @@ public class RawEngineTest {
       default:
         return new double[] {x, y};
     }
+  }
+  // ---------------------------------------------------------------- v0.3.5: Sony s709
+
+  /** Sony's S-Log3 (Technical Summary): black 95, 18 % grey 420, 90 % white 598 of 1023. */
+  @Test
+  public void slog3MatchesSonysTechnicalSummary() {
+    assertEquals(95.0 / 1023, SLog3.encode(0), 1e-12);
+    assertEquals(420.0 / 1023, SLog3.encode(0.18), 1e-12);
+    assertEquals(SLog3.GREY_CODE, SLog3.encode(0.18), 1e-12);
+    assertEquals(598.0 / 1023, SLog3.encode(0.90), 0.5 / 1023);
+    assertEquals(SLog3.encode(0.01125 - 1e-12), SLog3.encode(0.01125), 1e-9); // continuous at the cut
+    for (double x = -0.01; x < 40; x = x < 0.02 ? x + 0.0005 : x * 1.07)
+      assertEquals("round trip " + x, x, SLog3.decode(SLog3.encode(x)), 1e-9 * Math.max(1, x));
+  }
+
+  /** S-Gamut3.Cine built from Sony's primaries equals Sony's published matrix; white stays white. */
+  @Test
+  public void sGamut3CineMatchesSonysPublishedMatrix() {
+    double[] sony = {
+      0.5990839208, 0.2489255161, 0.1024464902,
+      0.2150758201, 0.8850685017, -0.1001443219,
+      -0.0320658495, -0.0276583907, 1.1487819910
+    };
+    for (int i = 0; i < 9; i++) assertEquals("SGamut3.Cine to XYZ " + i, sony[i], SLog3.SGAMUT3_CINE_TO_XYZ[i], 1e-9);
+    for (double[] m : new double[][] {SLog3.REC2020_TO_SGAMUT3_CINE, SLog3.REC2020_TO_SGAMUT3})
+      for (int r = 0; r < 3; r++) assertEquals("neutral row " + r, 1, m[3 * r] + m[3 * r + 1] + m[3 * r + 2], 1e-9);
+    // BT.2020 red is inside S-Gamut3.Cine; BT.2020 green is outside it (negative red)
+    assertTrue(SLog3.REC2020_TO_SGAMUT3_CINE[0] > 0 && SLog3.REC2020_TO_SGAMUT3_CINE[3] > 0);
+    assertTrue(SLog3.REC2020_TO_SGAMUT3_CINE[1] < 0);
+  }
+
+  /**
+   * A Sony table converts each F-Log2 / F-Gamut sample exactly to S-Log3 / S-Gamut3.Cine before
+   * the lookup: through an identity table the output is the S-Log3 code of the converted colour.
+   */
+  @Test
+  public void sonyLutSamplesThroughAnExactSLog3Conversion() throws Exception {
+    CubeLut plain = identity(33);
+    CubeLut sony = plain.withInput(CubeLut.Input.SLOG3_SGAMUT3_CINE);
+    assertEquals(CubeLut.Input.FLOG2_FGAMUT, plain.input);
+    assertSame(plain.data, sony.data);
+    assertSame(sony, sony.withInput(CubeLut.Input.SLOG3_SGAMUT3_CINE));
+    double[] m = SLog3.REC2020_TO_SGAMUT3_CINE;
+    Random rnd = new Random(35);
+    float[] out = new float[3];
+    double worst = 0;
+    for (int i = 0; i < 20000; i++) {
+      double y = 0.18 * Math.pow(2, rnd.nextDouble() * 13 - 7);
+      double[] lin = {y * (0.3 + rnd.nextDouble()), y * (0.3 + rnd.nextDouble()), y * (0.3 + rnd.nextDouble())};
+      sony.sample(
+          (float) FLog2.encode(lin[0]), (float) FLog2.encode(lin[1]), (float) FLog2.encode(lin[2]), out);
+      double[] sg = ColorMath.mul(m, lin, true);
+      for (int c = 0; c < 3; c++) {
+        double want = Math.max(0, Math.min(1, SLog3.encode(sg[c])));
+        worst = Math.max(worst, Math.abs(out[c] - want));
+      }
+    }
+    assertTrue("worst S-Log3 code error " + worst, worst < 2e-5);
+    // F-Log2 tables are untouched by the conversion
+    plain.sample(0.3f, 0.5f, 0.7f, out);
+    assertArrayEquals(new float[] {0.3f, 0.5f, 0.7f}, out, 1e-6f);
+    // Sony's s709 file names; not the P3 files or Fujifilm's LUTs
+    java.util.regex.Matcher cine = CubeLut.SONY_S709.matcher("s709Cubes/SL3SG3Ctos709.cube");
+    assertTrue(cine.find());
+    assertEquals("C", cine.group(1));
+    java.util.regex.Matcher sg3 = CubeLut.SONY_S709.matcher("SL3SG3tos709.cube");
+    assertTrue(sg3.find());
+    assertEquals("", sg3.group(1));
+    assertFalse(CubeLut.SONY_S709.matcher("sP3Cubes/SL3SG3CtosP3D65.cube").find());
+    assertFalse(CubeLut.SONY_S709.matcher("FLog2_to_PROVIA_33grid_V.1.00.cube").find());
+    assertFalse(CubeLut.FUJI_FLOG2_33.matcher("s709Cubes/SL3SG3Ctos709.cube").find());
+  }
+
+  static RawFrame flatNeutral(int w, int h, double level) {
+    double[] n = {0.5, 1, 0.625};
+    short[] data = new short[w * h];
+    RawFrame f = new RawFrame(data, w, h, w);
+    for (int y = 0; y < h; y++)
+      for (int x = 0; x < w; x++) {
+        int c = f.color(x, y);
+        double v = level * (c == 0 ? n[0] : c == 2 ? n[2] : 1);
+        data[y * w + x] = (short) Math.round(64 + v * (1023 - 64));
+      }
+    f.neutral = n;
+    f.colorMatrix1 = CM;
+    f.iso = 100;
+    return f;
+  }
+
+  static double meanGreen(int[] img) {
+    double s = 0;
+    for (int p : img) s += (p >> 8) & 255;
+    return s / img.length;
+  }
+
+  /**
+   * Sony's s709 develops through its own S-Log3 table, metered to Sony's 18 % grey, without the
+   * Fujifilm stills offsets or dynamic range; a Sony film refuses a Fujifilm table and vice versa.
+   */
+  @Test
+  public void sonyS709DevelopsAtSonysGreyWithoutFujifilmTone() throws Exception {
+    RawFrame f = flatNeutral(256, 192, 0.10);
+    CubeLut sony = identity(33).withInput(CubeLut.Input.SLOG3_SGAMUT3_CINE);
+    RawDeveloper.Options o = new RawDeveloper.Options();
+    o.grain = false;
+    o.threads = 2;
+    int[] out = new int[f.width * f.height];
+    Map<String, Object> stats =
+        RawDeveloper.develop(f, FujiRecipe.SONY_S709, sony, o, (y, rows, argb, width) ->
+            System.arraycopy(argb, 0, out, y * width, rows * width));
+    // a flat field is metered to the key: through an identity table it shows S-Log3's grey code
+    assertEquals(SLog3.GREY_CODE * 255, meanGreen(out), 0.6);
+    assertEquals(RawDeveloper.SONY_KEY, (Double) stats.get("meterKey"), 0);
+    assertEquals("S-Log3 / S-Gamut3.Cine", stats.get("lutInput"));
+    assertTrue(String.valueOf(stats.get("dynamicRange")).startsWith("Not used"));
+    // the shoulder still maps the RAW clip point to the table's white
+    assertTrue((Double) stats.get("shoulderScale") > 1);
+    // the Sony curve is the LUT's own tone plus the shoulder: no Fujifilm offsets below the knee
+    ToneModel.Curve sonyCurve = ToneModel.curve(0, 0, 0, true, 1, false);
+    ToneModel.Curve fujiCurve = ToneModel.curve(0, 0, 0, true, 1);
+    for (double ev = -8; ev <= 6; ev += 0.25) {
+      double x = FLog2.encode(0.18 * Math.pow(2, ev));
+      assertEquals("Sony curve at " + ev, x, sonyCurve.apply(x), 1e-12);
+    }
+    assertNotEquals(FLog2.encode(0.18 * 16), fujiCurve.apply(FLog2.encode(0.18 * 16)), 1e-3);
+    assertTrue(fujiCurve.fujifilm && !sonyCurve.fujifilm);
+    // tables and films must match
+    FujiRecipe plain =
+        new FujiRecipe("plain", "Plain", "", "", "LUT", "LUT", FujiRecipe.DynamicRange.DR100,
+            0, 0, 0, 0, -4, 0, 0, false, 0, 0, "As shot", 0, 0);
+    try {
+      RawDeveloper.develop(f, FujiRecipe.SONY_S709, identity(33), o, (y, rows, argb, width) -> {});
+      fail("Sony film with an F-Log2 table");
+    } catch (IllegalArgumentException expected) {
+      assertTrue(expected.getMessage().contains("S-Log3"));
+    }
+    try {
+      RawDeveloper.develop(f, plain, sony, o, (y, rows, argb, width) -> {});
+      fail("Fujifilm film with a Sony table");
+    } catch (IllegalArgumentException expected) {
+      assertTrue(expected.getMessage().contains("F-Log2"));
+    }
+  }
+
+  /** Sony's s709: Fujifilm-only settings are not offered and stay off whatever the tuning holds. */
+  @Test
+  public void sonyS709HasNoFujifilmOnlySettings() {
+    FujiRecipe s = FujiRecipe.SONY_S709;
+    assertTrue(s.sony());
+    assertFalse(FujiRecipe.REGGIES_PORTRA.sony());
+    assertFalse(FujiRecipe.isTechnical(s.filmSimulation));
+    assertTrue(FujiRecipe.isTechnical("FLog2-709"));
+    assertTrue(FujiRecipe.isTechnical("WDR-709"));
+    assertEquals(FujiRecipe.DynamicRange.DR100, s.dynamicRange);
+    FujiRecipe.Tuning t = s.tuning();
+    t.dynamicRange = FujiRecipe.DynamicRange.DRP_STRONG;
+    t.colorChrome = 2;
+    t.colorChromeBlue = 2;
+    t.color = 3;
+    t.highlight = 1;
+    FujiRecipe tuned = s.with(t);
+    assertEquals(FujiRecipe.DynamicRange.DR100, tuned.dynamicRange);
+    assertEquals(0, tuned.colorChrome);
+    assertEquals(0, tuned.colorChromeBlue);
+    assertEquals(3, tuned.color);
+    assertEquals(1.0, tuned.highlight, 0);
+    java.util.Set<String> names = new java.util.HashSet<>();
+    for (dev.grain.photo.develop.TuningControl c : dev.grain.photo.develop.TuningControl.fujifilm(s)) {
+      names.add(c.name);
+      // every control offered for Sony works: it survives with()
+      for (int p = 0; p < c.labels.length; p++) {
+        FujiRecipe.Tuning u = s.tuning();
+        c.set(u, p);
+        assertEquals(c.name + " position " + p, p, c.at(s.with(u).tuning()));
+      }
+      // and the standard settings are all 0 / Off / Auto
+      if (c.enabled(s.tuning())) {
+        String v = c.labels[c.at(s.tuning())];
+        assertTrue(c.name + " standard is " + v, v.equals("0") || v.equals("Off") || v.equals("Auto"));
+      }
+    }
+    for (String fujiOnly : new String[] {"Dynamic range", "Color Chrome Effect", "Color Chrome FX Blue", "Filter"})
+      assertFalse(fujiOnly + " offered for Sony", names.contains(fujiOnly));
+    for (String works : new String[] {"White balance", "WB shift red", "Highlight", "Shadow", "Color", "Sharpness",
+        "High ISO NR", "Clarity", "Grain"})
+      assertTrue(works + " missing for Sony", names.contains(works));
+    String[][] rows = s.settings();
+    assertEquals("Look", rows[0][0]);
+    for (String[] row : rows) {
+      assertNotEquals("Dynamic range", row[0]);
+      assertNotEquals("Color Chrome Effect", row[0]);
+      assertNotEquals("Color Chrome FX Blue", row[0]);
+    }
+    assertEquals(FujiRecipe.Development.CLEAN, s.development);
+    assertEquals(0, s.grainRoughness);
   }
 }

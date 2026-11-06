@@ -23,7 +23,7 @@ import java.util.Map;
  *
  * <p>meta.txt: key=value lines — width, height, cfa (0 RGGB, 1 GRBG, 2 GBRG, 3 BGGR), black (4
  * comma values, row-major 2x2), white, neutral (3), cm1 (9, XYZ->camera), fm1 (optional, 9),
- * illuminant1, iso, recipe (reggie|plain|a published recipe key|sim-LUTNAME); optional cm2/fm2/illuminant2, shading (path to rows x cols x 4
+ * illuminant1, iso, recipe (reggie|plain|a published recipe key|sim-LUTNAME|sony-s709); optional cm2/fm2/illuminant2, shading (path to rows x cols x 4
  * little-endian float32, Camera2 order) with shadingRows/shadingCols, and noise (8 values: S,O per CFA
  * position, row-major). System properties: -Dgrain=true, -Dseed=N, -Dthreads=N, -Dev=EV, -Dnr=scale,
  * -Dsharpen=scale, -Dhalation=0..10, -Dbloom=0..10, -Dclarity=-5..5, -Drecipe=key, -Dwb=DAYLIGHT|KELVIN|...,
@@ -95,6 +95,15 @@ public final class DevelopRaw {
     if ("reggie".equals(wanted)) recipe = FujiRecipe.REGGIES_PORTRA;
     for (FujiRecipe p : FujiRecipe.PUBLISHED) if (p.key.equals(wanted)) recipe = p;
     if (wanted.startsWith("sim-")) recipe = FujiRecipe.standard(wanted.substring(4).toUpperCase(java.util.Locale.ROOT), wanted);
+    // Sony s709: the cube is Sony's SL3SG3Ctos709.cube (or SL3SG3tos709.cube with -DsonyGamut=SG3)
+    if (FujiRecipe.SONY_S709.key.equals(wanted)) {
+      recipe = FujiRecipe.SONY_S709;
+      lut =
+          lut.withInput(
+              "SG3".equalsIgnoreCase(System.getProperty("sonyGamut", ""))
+                  ? CubeLut.Input.SLOG3_SGAMUT3
+                  : CubeLut.Input.SLOG3_SGAMUT3_CINE);
+    }
     String[] tuned = {"halation", "bloom", "clarity", "wb", "kelvin", "dr", "filter", "shiftR", "shiftB", "hl", "sh",
         "development", "sharpness", "highIsoNr"};
     boolean any = false;

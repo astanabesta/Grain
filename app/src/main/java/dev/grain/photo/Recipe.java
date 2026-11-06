@@ -63,7 +63,7 @@ public final class Recipe {
       "Reggie Ballesteros’ published Fujifilm recipe: Classic Negative, moodier, grainier and more"
           + " contrasty than his Portra, made for rich skin tones in directional light."
     };
-    Recipe[] all = new Recipe[fixed.length + sims.length + recipes.length];
+    Recipe[] all = new Recipe[fixed.length + sims.length + recipes.length + 1];
     System.arraycopy(fixed, 0, all, 0, fixed.length);
     for (int i = 0; i < sims.length; i++) {
       int id = fixed.length + i;
@@ -87,6 +87,16 @@ public final class Recipe {
                   + " LUT.",
               false);
     }
+    // Sony's s709 (id 24): always shown; without Sony's LUT it explains where to get it
+    int sonyId = fixed.length + sims.length + recipes.length;
+    all[sonyId] =
+        new Recipe(
+            sonyId,
+            FujiRecipe.SONY_S709,
+            "Sony’s cinema look, developed alongside VENICE: subtle colours, smooth gradation and a"
+                + " softer, low-contrast tone curve close to film. Sony’s official s709 LUT,"
+                + " developed from this phone’s RAW through S-Log3 / S-Gamut3.Cine.",
+            true);
     return all;
   }
 
@@ -124,10 +134,13 @@ public final class Recipe {
   public final int id, referenceIso, whiteBalance, edgeMode, noiseMode;
   public final float exposureBias;
   public final String name, description;
-  /** Non-null for recipes developed from RAW with an official Fujifilm LUT. */
+  /** Non-null for films developed from RAW with an official LUT (Fujifilm, or Sony's s709). */
   public final FujiRecipe fuji;
   public final boolean raw;
-  /** A plain Fujifilm film simulation (standard settings), shown once its LUT is imported. */
+  /**
+   * A plain film simulation or Sony look at standard settings. Fujifilm ones show once their LUT
+   * is imported; Sony s709 always shows.
+   */
   public final boolean standard;
 
   private Recipe(int id, String name, int iso, String description, int wb) {
@@ -169,6 +182,8 @@ public final class Recipe {
    * Priority Weak like DR200, Strong like DR400); development meters the scene itself.
    */
   public static float rawCaptureBias(FujiRecipe f) {
+    // Sony's s709 has no dynamic range setting: 1/3 EV of highlight room, like DR-Auto
+    if (f.sony()) return -1f / 3;
     switch (f.dynamicRange) {
       case DR400:
       case DRP_STRONG:
@@ -250,15 +265,19 @@ public final class Recipe {
               .put("version", 2)
               .put(
                   "kind",
-                  standard
-                      ? "RAW development + official Fujifilm F-Log2 LUT, film simulation"
-                      : "RAW development + official Fujifilm F-Log2 LUT")
+                  fuji.sony()
+                      ? "RAW development + Sony's official s709 LUT (S-Log3 / S-Gamut3.Cine)"
+                      : standard
+                          ? "RAW development + official Fujifilm F-Log2 LUT, film simulation"
+                          : "RAW development + official Fujifilm F-Log2 LUT")
               .put("author", fuji.author)
               .put("source", fuji.source)
               .put("filmSimulationLut", fuji.filmSimulation)
               .put("settings", settings)
               .put("tuned", changed)
-              .put("defaultSettings", standard ? "Fujifilm standard settings" : "published recipe")
+              .put(
+                  "defaultSettings",
+                  fuji.sony() ? "Sony s709, standard settings" : standard ? "Fujifilm standard settings" : "published recipe")
               .put("captureEvBias", rawCaptureBias(f));
       if (changed) {
         JSONObject defaults = new JSONObject();

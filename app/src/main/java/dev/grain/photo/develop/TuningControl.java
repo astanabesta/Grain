@@ -60,12 +60,13 @@ public final class TuningControl {
 
   /**
    * Fujifilm's settings of a film. Black-and-white films get the Acros filter and no Color, Color
-   * Chrome Effect or FX Blue (Grain does not apply those to black and white).
+   * Chrome Effect or FX Blue (Grain does not apply those to black and white). Sony's s709 gets no
+   * Dynamic range, Color Chrome Effect or FX Blue: Fujifilm-only settings, fixed off for it.
    */
   public static List<TuningControl> fujifilm(FujiRecipe film) {
     List<TuningControl> s = new ArrayList<>();
     String[] levels = {"Off", "Weak", "Strong"};
-    boolean mono = film.monochrome();
+    boolean mono = film.monochrome(), sony = film.sony();
     if (mono)
       s.add(
           new TuningControl(
@@ -76,12 +77,13 @@ public final class TuningControl {
     FujiRecipe.DynamicRange[] ranges = FujiRecipe.DynamicRange.values();
     String[] rangeLabels = new String[ranges.length];
     for (int i = 0; i < ranges.length; i++) rangeLabels[i] = ranges[i].label;
-    s.add(
-        new TuningControl(
-            "Dynamic range",
-            rangeLabels,
-            t -> t.dynamicRange.ordinal(),
-            (t, i) -> t.dynamicRange = FujiRecipe.DynamicRange.values()[i]));
+    if (!sony)
+      s.add(
+          new TuningControl(
+              "Dynamic range",
+              rangeLabels,
+              t -> t.dynamicRange.ordinal(),
+              (t, i) -> t.dynamicRange = FujiRecipe.DynamicRange.values()[i]));
     FujiRecipe.WhiteBalance[] modes = FujiRecipe.WhiteBalance.values();
     String[] modeLabels = new String[modes.length];
     for (int i = 0; i < modes.length; i++) modeLabels[i] = modes[i].label;
@@ -163,7 +165,7 @@ public final class TuningControl {
               t.grainRoughness = (i + 1) / 2;
               t.grainLarge = i == 2 || i == 4;
             }));
-    if (!mono) {
+    if (!mono && !sony) {
       s.add(new TuningControl("Color Chrome Effect", levels, t -> t.colorChrome, (t, i) -> t.colorChrome = i));
       s.add(
           new TuningControl(

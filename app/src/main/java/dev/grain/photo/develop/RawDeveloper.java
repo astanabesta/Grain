@@ -22,7 +22,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   <li>noise reduction in the log domain, driven by a noise curve measured on the frame: a
  *       quarter-resolution pass removes blotchy low-frequency luma and chroma noise (guided filters),
  *       a full-resolution self-guided filter tames pixel-level luma noise, then sharpening
- *   <li>Fujifilm's official F-Log2 3-D LUT for the recipe's film simulation (user-imported)
+ *   <li>Fujifilm's official F-Log2 3-D LUT for the recipe's film simulation (user-imported), or
+ *       Sony's official s709 LUT, sampled through an exact per-pixel conversion to S-Log3 /
+ *       S-Gamut3.Cine (see {@link CubeLut.Input}, {@link SLog3})
  *   <li>Color Chrome FX Blue (fitted to Fujifilm camera JPEGs), then Color (chroma) and Color
  *       Chrome Effect (approximations) in a display-code opponent space (OKLab for First version),
  *       film grain scaled down when sensor noise already supplies texture
@@ -31,13 +33,21 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Work is split into 64-row strips processed in parallel, each with its own buffers.
  */
 public final class RawDeveloper {
-  public static final String VERSION = "grain-raw-4";
+  public static final String VERSION = "grain-raw-5";
 
   /**
    * Where Fujifilm places the centre-weighted log-average scene luminance, in F-Log2 scene-linear
    * units (median of 11 public RAF/JPEG pairs, spread 0.40 EV; fit_stills_model.py).
    */
   public static final double METERING_KEY = 0.148;
+
+  /**
+   * Scene key for Sony's s709 (v0.3.5): the metered average sits at Sony's own exposure reference,
+   * 18 % grey (S-Log3 code 420 of 1023), instead of Fujifilm's fitted {@link #METERING_KEY}. s709
+   * is a cinema look and no Sony stills data exists for it; this is Grain's choice, documented in
+   * docs/RAW_FUJI_RECIPES.md. Face exposure keeps its half stop above the key.
+   */
+  public static final double SONY_KEY = 0.18;
 
   /**
    * Face exposure, Grain's version of Fujifilm's Intelligent Face Detection, which "sets focus and
@@ -289,6 +299,11 @@ public final class RawDeveloper {
     Job(RawFrame f, FujiRecipe r, CubeLut lut, Options o, Map<String, Object> stats) {
       this.f = f;
       this.lut = lut;
+      // Sony's s709 film needs Sony's S-Log3 LUT; Fujifilm films need an F-Log2 table
+      boolean sony = r.sony();
+      if (sony != (lut.input != CubeLut.Input.FLOG2_FGAMUT))
+        throw new IllegalArgumentException(
+            r.name + " needs " + (sony ? "Sony's S-Log3 LUT" : "an F-Log2 LUT") + ", not " + lut.input.label);
       W = f.width;
       H = f.height;
       for (int k = 0; k < 4; k++) {
@@ -376,8 +391,9 @@ public final class RawDeveloper {
       double[] hist = new double[HIST_BINS];
       double[] meter = meter(cm.cameraToRec2020, hist);
       double logAverage = meter[0], rawClipped = meter[1];
-      double gain = METERING_KEY * Math.pow(2, o.exposureEv) / Math.max(1e-6, logAverage);
-      double faceEv = faceExposureEv(cm.cameraToRec2020, logAverage, o, stats);
+      double key = sony ? SONY_KEY : METERING_KEY;
+      double gain = key * Math.pow(2, o.exposureEv) / Math.max(1e-6, logAverage);
+      double faceEv = faceExposureEv(cm.cameraToRec2020, logAverage, key, o, stats);
       if (faceEv != 0) gain *= Math.pow(2, faceEv);
       gain = Math.max(1 / 64.0, Math.min(512, gain));
       if (o.fixedGain > 0) gain = o.fixedGain;
@@ -402,7 +418,7 @@ public final class RawDeveloper {
         stats.put("monoFilterMix", roundAll(mix, 4));
       }
       stats.put("meterLogAverage", round(logAverage, 6));
-      stats.put("meterKey", METERING_KEY);
+      stats.put("meterKey", key);
       stats.put("exposureEv", o.exposureEv);
       stats.put("developmentGain", round(gain, 4));
       stats.put("developmentGainEv", round(Math.log(gain) / Math.log(2), 3));
@@ -415,7 +431,7 @@ public final class RawDeveloper {
       boolean drp = r.dynamicRange.priority();
       double highlight = drp ? DRP_HIGHLIGHT : r.highlight, shadow = drp ? DRP_SHADOW : r.shadow;
       double extraEv = r.dynamicRange == FujiRecipe.DynamicRange.DRP_STRONG ? DRP_STRONG_EXTRA_EV : 0;
-      ToneModel.Curve probe = ToneModel.curve(0, highlight, shadow, o.stillsTone, 1);
+      ToneModel.Curve probe = ToneModel.curve(0, highlight, shadow, o.stillsTone, 1, !sony);
       double whiteEv = ToneModel.whiteEv(probe, lut);
       double above = fractionAbove(hist, whiteEv - gEv);
       int steps;
@@ -436,7 +452,9 @@ public final class RawDeveloper {
       }
       stats.put(
           "dynamicRange",
-          drp
+          sony
+              ? "Not used: Sony s709 has its own highlight roll-off"
+              : drp
               ? r.dynamicRange.label + " (approximation: DR400 tone with Highlight " + FujiRecipe.signed(DRP_HIGHLIGHT)
                   + ", Shadow " + FujiRecipe.signed(DRP_SHADOW)
                   + (extraEv > 0 ? ", highlight range +" + extraEv + " EV" : "") + ")"
@@ -455,14 +473,17 @@ public final class RawDeveloper {
         if (target != whiteEv) shoulder = (whiteEv - ToneModel.KNEE_EV) / (target - ToneModel.KNEE_EV);
       }
       stats.put("shoulderScale", round(shoulder, 4));
-      final ToneModel.Curve curve = ToneModel.curve(steps, highlight, shadow, o.stillsTone, shoulder);
+      final ToneModel.Curve curve = ToneModel.curve(steps, highlight, shadow, o.stillsTone, shoulder, !sony);
       tone =
           new ToneTable(
               x -> {
                 double v = curve.apply(FLog2.encode(x));
                 return v < 0 ? 0 : v > 1 ? 1 : v;
               });
-      stats.put("toneModel", ToneModel.VERSION);
+      stats.put(
+          "toneModel",
+          sony ? ToneModel.VERSION + ": shoulder remap and tuning only (Sony s709 tone, no Fujifilm offsets)"
+              : ToneModel.VERSION);
       stats.put("toneOffsetsAtKnots", curve.knots());
 
       int iso = Math.max(50, f.iso);
@@ -671,6 +692,7 @@ public final class RawDeveloper {
       stats.put("lut", lut.title.isEmpty() ? r.filmSimulation : lut.title);
       stats.put("lutGamut", lut.gamut);
       stats.put("lutModel", lut.model);
+      stats.put("lutInput", lut.input.label);
     }
 
     /** Quarter-resolution pre-pass in parallel, then its global noise reduction. */
@@ -1216,7 +1238,7 @@ public final class RawDeveloper {
      * Face exposure: the EV added to the scene metering so that the metered face sits at {@link
      * #FACE_KEY} (limited), or 0 when it is off or no usable face was found. Records why in stats.
      */
-    double faceExposureEv(double[] cam, double logAverage, Options o, Map<String, Object> stats) {
+    double faceExposureEv(double[] cam, double logAverage, double key, Options o, Map<String, Object> stats) {
       int count = f.faces == null ? 0 : f.faces.length / 4;
       if (!o.faceExposure) {
         stats.put("faceExposure", "Off");
@@ -1247,7 +1269,7 @@ public final class RawDeveloper {
       stats.put("faceRect", new int[] {l, t, r, b});
       if (f.faceScores != null && k < f.faceScores.length) stats.put("faceScore", f.faceScores[k]);
       stats.put("faceMeter", round(level, 6));
-      stats.put("faceKey", round(FACE_KEY, 4));
+      stats.put("faceKey", round(FACE_KEY * key / METERING_KEY, 4));
       stats.put("faceExposureEv", round(used, 3));
       if (used != ev) stats.put("faceExposureWanted", round(ev, 3));
       return used;

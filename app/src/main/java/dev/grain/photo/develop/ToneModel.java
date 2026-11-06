@@ -20,6 +20,10 @@ package dev.grain.photo.develop;
  *       below the curve's white point, the shoulder is expanded so clipped areas still reach white
  *       instead of flat grey.
  * </ul>
+ *
+ * <p>Sony's s709 (v0.3.5) uses neither the fitted Fujifilm offsets nor the DR200 modifier: its
+ * curve is Sony's LUT itself. Only the shoulder remap (s709 reaches white about 6 EV over grey,
+ * the phone's RAW usually clips 2-3.5 EV over grey) and the Highlight / Shadow tuning apply.
  */
 public final class ToneModel {
   public static final String VERSION = "stills-v2";
@@ -69,14 +73,19 @@ public final class ToneModel {
   public static final class Curve {
     public final int drSteps;
     public final double highlight, shadow, shoulderScale;
+    /** stills: Grain's stills tone at all (false = the LUT's own tone, a test hook). */
     public final boolean stills;
+    /** The fitted Fujifilm DR100 offsets (false for Sony s709: shoulder and tuning only). */
+    public final boolean fujifilm;
 
-    Curve(int drSteps, double highlight, double shadow, boolean stills, double shoulderScale) {
+    Curve(int drSteps, double highlight, double shadow, boolean stills, double shoulderScale,
+        boolean fujifilm) {
       this.drSteps = drSteps;
       this.highlight = highlight;
       this.shadow = shadow;
       this.stills = stills;
       this.shoulderScale = shoulderScale;
+      this.fujifilm = fujifilm;
     }
 
     /** F-Log2 code in, LUT input code out. */
@@ -87,7 +96,7 @@ public final class ToneModel {
         e = KNEE_EV + (e - KNEE_EV) * shoulderScale;
         x = FLog2.encode(0.18 * Math.pow(2, e));
       }
-      double d = base(x);
+      double d = fujifilm ? base(x) : 0;
       d += highlight * HIGHLIGHT_PER_STEP * smoothstep(0, 2.5, e);
       d -= shadow * SHADOW_PER_STEP * smoothstep(0, 3, -e);
       d -= drSteps * DR200_MODIFIER * smoothstep(0.5, 4, e);
@@ -103,7 +112,13 @@ public final class ToneModel {
   }
 
   public static Curve curve(int drSteps, double highlight, double shadow, boolean stills, double shoulderScale) {
-    return new Curve(drSteps, highlight, shadow, stills, shoulderScale);
+    return new Curve(drSteps, highlight, shadow, stills, shoulderScale, true);
+  }
+
+  /** As {@link #curve(int, double, double, boolean, double)}; fujifilm = false for Sony s709. */
+  public static Curve curve(
+      int drSteps, double highlight, double shadow, boolean stills, double shoulderScale, boolean fujifilm) {
+    return new Curve(drSteps, highlight, shadow, stills, shoulderScale, fujifilm);
   }
 
   /** Scene EV (re 18 % grey) where the curve + LUT first renders a neutral at >= 0.985. */
