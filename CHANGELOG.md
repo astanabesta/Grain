@@ -8,6 +8,29 @@ one was a separate APK install on the device.
 
 ---
 
+## v0.6.0 — Magnifier, AF-C face tracking, focus bracketing & in-app updates
+
+Completes the focusing suite planned in v0.5.0 and adds verified in-app self-updating from GitHub
+Releases so new builds no longer need manual APK downloads.
+
+- **Magnifier (`MENU → AF / FACE → MAGNIFIER`)** — **`OFF`**, **`4× HOLD`** (default), **`8× HOLD`**,
+  or **`4× ON`**. Press and hold on the preview to open a live `4×` or `8×` Focus Check loupe around
+  the active focus point or tracked face; in **MANUAL** focus, half-pressing the shutter also opens
+  the loupe and turning the **Command dial** steps `MF DISTANCE` live (`0..30`). When **PEAKING** is
+  on, sharp mid-tone edges are highlighted inside the loupe.
+- **AF-C face tracking (`FOCUS MODE: AF-C / AF-S / MANUAL` + `AF AREA: FACE`)** — activates Camera2
+  face detection across both ISP and RAW previews, tracks the subject with sticky proximity/ID
+  matching and exponential smoothing, updates the repeating preview `CONTROL_AF_REGIONS` as the
+  subject moves, and renders live corner brackets on the LCD/EVF (turning green on `PASSIVE_FOCUSED`).
+- **Focus bracketing (`DRIVE → FOCUS BKT`)** — captures **`3`**, **`5`**, or **`7`** frames
+  (`MENU → SHOOT → BKT FRAMES`) across **`NARROW`**, **`MEDIUM`**, or **`WIDE`** focus-distance
+  steps (`BKT STEP`), waiting for the lens to settle on each plane and holding AE across the stack.
+  Works with both ISP looks and RAW film recipes; each frame records `focusBracket` in its receipt.
+- **In-app updates & startup notification** — checks `astanabesta/Grain` GitHub Releases on launch
+  (and on demand via `MENU → SET UP → APP UPDATE`), alerts immediately when a newer release is
+  available, verifies the APK's SHA-256 digest before installing, and installs via Android's
+  `PackageInstaller` session API (`USER_ACTION_NOT_REQUIRED` on Android 12+ after initial install).
+
 ## v0.5.3 — Real manual focus + focus peaking
 
 **Focus plan, part three.** The v0.5.0 diagnostics reported `manualSensor: true` and that the HAL

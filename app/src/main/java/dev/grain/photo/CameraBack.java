@@ -35,6 +35,9 @@ final class CameraBack extends ViewGroup {
     /** Tap on the picture: raw screen position and the position within the picture (0..1). */
     void lcdTap(float rawX, float rawY, float x, float y);
 
+    /** Press-and-hold on the picture to open/close the Focus Check magnifier around the focus point. */
+    void lcdHold(float x, float y, boolean held);
+
     void pinch(float factor);
 
     /** Where the camera preview must be, in the parent's (screen) coordinates. */
@@ -52,15 +55,17 @@ final class CameraBack extends ViewGroup {
   static final class OsdState {
     String code = "", film = "", format = "", ratio = "", frames = "", mode = "P", shutter = "",
         aperture = "", iso = "", drive = "", zoom = "", status = "", countdown = "", toastTitle,
-        toastSub;
+        toastSub, magLabel = "";
     final List<String> icons = new ArrayList<>();
     boolean isoAuto = true, aeLock, grid, showHistogram = true, showLevel = true, busy, infoOff,
-        manual, exposureWarn;
+        manual, exposureWarn, faceActive, updateAvailable;
     int battery = -1, afState, afArea;
     /** The peaking edge map, or null to draw nothing. */
     Bitmap peak;
+    /** Held-to-magnify Focus Check patch around the focus point, or null when inactive. */
+    Bitmap mag;
     double exposure;
-    float level = Float.NaN, afX = .5f, afY = .5f;
+    float level = Float.NaN, afX = .5f, afY = .5f, faceL, faceT, faceR, faceB;
     int[] histogram;
     long toastAt;
   }
@@ -149,7 +154,8 @@ final class CameraBack extends ViewGroup {
     q.setContentDescription("Quick menu");
     addView(q);
     drive = key(c, "DRIVE", false, K_DRIVE);
-    drive.setContentDescription("Drive: single, self-timer, film simulation bracketing; delete in playback");
+    drive.setContentDescription(
+        "Drive: single, self-timer, film simulation bracketing, focus bracketing; delete in playback");
     addView(drive);
     play = key(c, "▶", false, K_PLAY);
     play.setContentDescription("Playback");
@@ -1498,8 +1504,9 @@ final class CameraBack extends ViewGroup {
     private final RectF img = new RectF();
     private final Path path = new Path();
     private final ScaleGestureDetector scale;
-    private float downX, downY;
-    private boolean multi;
+    private float downX, downY, holdX, holdY;
+    private boolean multi, holding;
+    private final Runnable holdTask;
 
     Osd(Context c) {
       super(c);
@@ -1515,6 +1522,14 @@ final class CameraBack extends ViewGroup {
                   return true;
                 }
               });
+      holdTask =
+          () -> {
+            if (!multi && !scale.isInProgress()) {
+              holding = true;
+              performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+              host.lcdHold(holdX, holdY, true);
+            }
+          };
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -1526,11 +1541,36 @@ final class CameraBack extends ViewGroup {
           downX = e.getX();
           downY = e.getY();
           multi = false;
+          holding = false;
+          if (img.contains(downX, downY) && img.width() > 0 && img.height() > 0) {
+            holdX = (downX - img.left) / img.width();
+            holdY = (downY - img.top) / img.height();
+            postDelayed(holdTask, 340);
+          }
           return true;
         case MotionEvent.ACTION_POINTER_DOWN:
           multi = true;
+          removeCallbacks(holdTask);
+          if (holding) {
+            holding = false;
+            host.lcdHold(holdX, holdY, false);
+          }
+          return true;
+        case MotionEvent.ACTION_MOVE:
+          if (!holding && Math.hypot(e.getX() - downX, e.getY() - downY) >= 16 * density) {
+            removeCallbacks(holdTask);
+          } else if (holding && (multi || scale.isInProgress())) {
+            holding = false;
+            host.lcdHold(holdX, holdY, false);
+          }
           return true;
         case MotionEvent.ACTION_UP:
+          removeCallbacks(holdTask);
+          if (holding) {
+            holding = false;
+            host.lcdHold(holdX, holdY, false);
+            return true;
+          }
           float dx = e.getX() - downX, dy = e.getY() - downY;
           if (multi || scale.isInProgress()) return true;
           if (Math.hypot(dx, dy) < 16 * density) {
@@ -1539,6 +1579,13 @@ final class CameraBack extends ViewGroup {
                   e.getRawX(), e.getRawY(), (e.getX() - img.left) / img.width(), (e.getY() - img.top) / img.height());
           } else if (Math.abs(dx) > 60 * density && Math.abs(dx) > 2 * Math.abs(dy))
             host.key(K_SWIPE, dx < 0 ? 1 : -1);
+          return true;
+        case MotionEvent.ACTION_CANCEL:
+          removeCallbacks(holdTask);
+          if (holding) {
+            holding = false;
+            host.lcdHold(holdX, holdY, false);
+          }
           return true;
         default:
           return true;
@@ -1624,23 +1671,86 @@ final class CameraBack extends ViewGroup {
       if (o.peak != null && img.width() > 0) {
         c.drawBitmap(o.peak, null, img, null);
       }
-      if (o.afArea == 2) {
-        float zs = Math.min(img.width(), img.height()) * .25f;
+      int afColor = o.afState == 2 ? GREEN : o.afState == 3 ? 0xffff5a3c : 0xf0ffffff;
+      if (o.afArea == GrainCamera.AF_FACE && o.faceActive && img.width() > 0) {
+        float fl = img.left + o.faceL * img.width(), ft = img.top + o.faceT * img.height();
+        float fr = img.left + o.faceR * img.width(), fb = img.top + o.faceB * img.height();
+        float corner = Math.max(6 * u, Math.min(fr - fl, fb - ft) * .24f);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(Math.max(1, 1.6f * u));
+        p.setColor(afColor);
+        p.setShadowLayer(1.2f * u, 0, 0, 0x90000000);
+        c.drawLine(fl, ft, fl + corner, ft, p);
+        c.drawLine(fl, ft, fl, ft + corner, p);
+        c.drawLine(fr - corner, ft, fr, ft, p);
+        c.drawLine(fr, ft, fr, ft + corner, p);
+        c.drawLine(fl, fb - corner, fl, fb, p);
+        c.drawLine(fl, fb, fl + corner, fb, p);
+        c.drawLine(fr - corner, fb, fr, fb, p);
+        c.drawLine(fr, fb - corner, fr, fb, p);
+        float fcx = (fl + fr) * .5f, fcy = (ft + fb) * .5f;
+        p.setStrokeWidth(Math.max(1, u));
+        c.drawLine(fcx - 2.5f * u, fcy, fcx + 2.5f * u, fcy, p);
+        c.drawLine(fcx, fcy - 2.5f * u, fcx, fcy + 2.5f * u, p);
+        p.clearShadowLayer();
+        p.setStyle(Paint.Style.FILL);
+      } else {
+        if (o.afArea == GrainCamera.AF_CENTER) {
+          ax = img.centerX();
+          ay = img.centerY();
+        }
+        if (o.afArea == 2) {
+          float zs = Math.min(img.width(), img.height()) * .25f;
+          p.setStyle(Paint.Style.STROKE);
+          p.setStrokeWidth(Math.max(1, .9f * u));
+          p.setColor(0xb0ffffff);
+          c.drawRect(ax - zs, ay - zs, ax + zs, ay + zs, p);
+        }
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(Math.max(1, 1.4f * u));
+        p.setColor(afColor);
+        p.setShadowLayer(1.2f * u, 0, 0, 0x90000000);
+        c.drawRect(ax - as, ay - as, ax + as, ay + as, p);
+        p.setStrokeWidth(Math.max(1, u));
+        c.drawLine(ax - 3 * u, ay, ax + 3 * u, ay, p);
+        c.drawLine(ax, ay - 3 * u, ax, ay + 3 * u, p);
+        p.clearShadowLayer();
+        p.setStyle(Paint.Style.FILL);
+      }
+      if (o.mag != null && img.width() > 0 && img.height() > 0) {
+        float mx = o.afArea == GrainCamera.AF_FACE && o.faceActive ? (o.faceL + o.faceR) * .5f : o.afX;
+        float my = o.afArea == GrainCamera.AF_FACE && o.faceActive ? (o.faceT + o.faceB) * .5f : o.afY;
+        if (o.afArea == GrainCamera.AF_CENTER) {
+          mx = .5f;
+          my = .5f;
+        }
+        float[] mb = FocusMath.magnifierBox(img.left, img.top, img.width(), img.height(), mx, my, 6 * u);
+        RectF mr = new RectF(mb[0], mb[1], mb[2], mb[3]);
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(0xb8000000);
+        c.drawRoundRect(
+            mr.left - 2.2f * u, mr.top - 2.2f * u, mr.right + 2.2f * u, mr.bottom + 2.2f * u,
+            4 * u, 4 * u, p);
+        c.save();
+        c.clipRect(mr);
+        c.drawBitmap(o.mag, null, mr, null);
+        c.restore();
+        float mcx = mr.centerX(), mcy = mr.centerY();
         p.setStyle(Paint.Style.STROKE);
         p.setStrokeWidth(Math.max(1, .9f * u));
-        p.setColor(0xb0ffffff);
-        c.drawRect(ax - zs, ay - zs, ax + zs, ay + zs, p);
+        p.setColor(0xd8ffffff);
+        c.drawLine(mcx - 11 * u, mcy, mcx - 3 * u, mcy, p);
+        c.drawLine(mcx + 3 * u, mcy, mcx + 11 * u, mcy, p);
+        c.drawLine(mcx, mcy - 11 * u, mcx, mcy - 3 * u, p);
+        c.drawLine(mcx, mcy + 3 * u, mcx, mcy + 11 * u, p);
+        p.setStrokeWidth(Math.max(1, 1.3f * u));
+        p.setColor(afColor);
+        c.drawRoundRect(mr, 2.5f * u, 2.5f * u, p);
+        p.setStyle(Paint.Style.FILL);
+        if (o.magLabel != null && !o.magLabel.isEmpty()) {
+          tag(c, o.magLabel, mr.left + 4 * u, mr.top + 4 * u + fs * .88f, fs * .82f, true, white);
+        }
       }
-      p.setStyle(Paint.Style.STROKE);
-      p.setStrokeWidth(Math.max(1, 1.4f * u));
-      p.setColor(o.afState == 2 ? GREEN : o.afState == 3 ? 0xffff5a3c : 0xf0ffffff);
-      p.setShadowLayer(1.2f * u, 0, 0, 0x90000000);
-      c.drawRect(ax - as, ay - as, ax + as, ay + as, p);
-      p.setStrokeWidth(Math.max(1, u));
-      c.drawLine(ax - 3 * u, ay, ax + 3 * u, ay, p);
-      c.drawLine(ax, ay - 3 * u, ax, ay + 3 * u, p);
-      p.clearShadowLayer();
-      p.setStyle(Paint.Style.FILL);
       if (!o.infoOff) {
         boolean bandTop = img.top >= 22 * u;
         float yTop = bandTop ? img.top - 8 * u : img.top + pad + fs;
@@ -1673,7 +1783,13 @@ final class CameraBack extends ViewGroup {
           tagRight(c, o.drive, hx + hw, ty, fs, white);
           ty += fs * 1.8f;
         }
-        if (!o.zoom.isEmpty()) tagRight(c, o.zoom, hx + hw, ty, fs, white);
+        if (!o.zoom.isEmpty()) {
+          tagRight(c, o.zoom, hx + hw, ty, fs, white);
+          ty += fs * 1.8f;
+        }
+        if (o.updateAvailable) {
+          tagRight(c, "UPDATE", hx + hw, ty, fs, ORANGE);
+        }
         boolean bandBottom = (h - img.bottom) >= 22 * u;
         float yb = bandBottom ? img.bottom + 15 * u : img.bottom - pad - u;
         float bx = img.left + pad;

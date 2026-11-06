@@ -114,6 +114,50 @@ public class CameraBackScreensTest {
           key(CameraBack.K_POWER, 0);
         });
     step("16-power-on", () -> key(CameraBack.K_POWER, 1));
+    step(
+        "17-menu-af-face",
+        () -> {
+          key(CameraBack.K_OK, 0);
+          key(CameraBack.K_LEVER, CameraBack.LEVER_RIGHT);
+        });
+    step(
+        "18-menu-shoot-bkt",
+        () -> {
+          key(CameraBack.K_LEVER, CameraBack.LEVER_RIGHT);
+          key(CameraBack.K_COMMAND, 1);
+        });
+    step(
+        "19-afc-face-tracking",
+        () -> {
+          key(CameraBack.K_DISP, 0);
+          Field afAreaField = MainActivity.class.getDeclaredField("afArea");
+          afAreaField.setAccessible(true);
+          afAreaField.setInt(activity, GrainCamera.AF_FACE);
+          GrainCamera.Meter m =
+              new GrainCamera.Meter(
+                  8_000_000L,
+                  200,
+                  0.0,
+                  4,
+                  2,
+                  false,
+                  2.5f,
+                  new double[] {0.32, 0.22, 0.68, 0.56});
+          activity.meter(m);
+        });
+    step(
+        "20-magnifier-hold",
+        () -> {
+          activity.lcdHold(0.5f, 0.4f, true);
+        });
+    step(
+        "21-release-hold-and-settings",
+        () -> {
+          activity.lcdHold(0.5f, 0.4f, false);
+          Method showSettings = MainActivity.class.getDeclaredMethod("showSettings");
+          showSettings.setAccessible(true);
+          showSettings.invoke(activity);
+        });
     StringBuilder logs = new StringBuilder();
     for (ShadowLog.LogItem item : ShadowLog.getLogs())
       if (item.type >= Log.WARN || "Grain".equals(item.tag))

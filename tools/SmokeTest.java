@@ -42,6 +42,19 @@ public final class SmokeTest {
     }
     if (Math.abs(sampled - .086242) > .001) throw new AssertionError("Shadow toe undersampled");
     count++;
-    System.out.println("PASS: " + count + " crop/curve/preview cases; no Android SDK used.");
+    for (int cnt : FocusMath.BKT_COUNTS) {
+      for (int step = 0; step < 3; step++) {
+        for (float start : new float[] {0f, .1f, .5f, .9f, 1f}) {
+          float[] plan = FocusMath.bracketFractions(start, cnt, step);
+          if (plan.length != cnt) throw new AssertionError("Wrong bracket count");
+          for (int i = 0; i < plan.length; i++) {
+            if (plan[i] < 0f || plan[i] > 1f) throw new AssertionError("Bracket out of bounds");
+            if (i > 0 && plan[i] <= plan[i - 1]) throw new AssertionError("Bracket non-increasing");
+          }
+          count++;
+        }
+      }
+    }
+    System.out.println("PASS: " + count + " crop/curve/preview/focus cases; no Android SDK used.");
   }
 }

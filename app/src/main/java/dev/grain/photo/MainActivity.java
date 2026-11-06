@@ -3,6 +3,7 @@ package dev.grain.photo;
 import android.Manifest;
 import android.app.*;
 import android.content.*;
+import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
 import android.graphics.*;
 import android.graphics.drawable.GradientDrawable;
@@ -27,6 +28,7 @@ import java.io.File;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.IntConsumer;
 import java.util.function.Supplier;
 import org.json.JSONObject;
@@ -41,6 +43,7 @@ public final class MainActivity extends ComponentActivity
       LINE = 0xffd6ddca;
   private final Handler main = new Handler(Looper.getMainLooper());
   private final ExecutorService files = Executors.newSingleThreadExecutor();
+  private final ExecutorService network = Executors.newSingleThreadExecutor();
   private FrameLayout root, frame, ui;
   /** The camera back (dials, screen, buttons); turned with the phone inside {@link #ui}. */
   private CameraBack back;
@@ -86,7 +89,7 @@ public final class MainActivity extends ComponentActivity
     50, 64, 80, 100, 125, 160, 200, 250, 320, 400, 500, 640, 800, 1000, 1250, 1600, 2000, 2500, 3200,
     4000, 5000, 6400, 8000, 10000, 12800
   };
-  private static final String[] DRIVES = {"SINGLE", "TIMER 3S", "TIMER 5S", "FS BKT"};
+  private static final String[] DRIVES = {"SINGLE", "TIMER 3S", "TIMER 5S", "FS BKT", "FOCUS BKT"};
   private static final String[] VIEW_MODES = {"EYE SENSOR", "EVF ONLY", "LCD ONLY"};
   private static final String[] EV_LABELS = {
     "−2", "−1⅔", "−1⅓", "−1", "−⅔", "−⅓", "0", "+⅓", "+⅔", "+1", "+1⅓", "+1⅔", "+2", "C"
@@ -105,6 +108,7 @@ public final class MainActivity extends ComponentActivity
   /** Saved per-film tuning of the RAW films. */
   private RecipeTuning tuning;
   private ActivityResultLauncher<String[]> lutPicker;
+  private ActivityResultLauncher<Intent> installPermissionLauncher;
   private boolean keepRawFiles = true;
   private Runnable afterLutImport;
   private String ratio = "3:4";
@@ -114,12 +118,34 @@ public final class MainActivity extends ComponentActivity
   private int afArea = GrainCamera.AF_SINGLE;
   /** The AF area modes this phone can really do, in menu order. See {@link #ready}. */
   private final List<Integer> afAreas = new ArrayList<>();
+  /** Focus mode: {@link FocusMath#FOCUS_AFC}, {@link FocusMath#FOCUS_AFS}, or {@link FocusMath#FOCUS_MANUAL}. */
+  private int focusMode = FocusMath.FOCUS_AFC;
   /** Manual focus: the lens is driven from a distance instead of by the autofocus. */
   private boolean mfOn;
   /** The manual-focus step; 0 is infinity, {@link #MF_STEPS} is the lens' closest focus. */
   private int mfStep = MF_STEPS / 2;
   /** Peaking: the preview's edges are drawn back over it, so focus is visible. */
   private boolean peaking;
+  /** Focus Check magnifier mode: {@link FocusMath#MAG_OFF}..{@link FocusMath#MAG_4X_ON}. */
+  private int magnifier = FocusMath.MAG_4X_HOLD;
+  private boolean magHeld;
+  private static final int MAG_SRC_W = 540, MAG_SRC_H = 720, MAG_OUT = 240;
+  private Bitmap magSource, magPatch;
+  private Canvas magCanvas;
+  private final Matrix magMatrix = new Matrix();
+  private final Matrix magTexMatrix = new Matrix();
+  private final Paint magPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+  private int[] magPixels, magLuma;
+  /** Focus Bracketing settings & active sequence state. */
+  private int bktFramesIndex = 1, bktStepMode = FocusMath.BKT_STEP_MEDIUM;
+  private float[] focusBracketPlan;
+  private int focusBracketStep;
+  private long focusBracketStartNs;
+  /** In-app update state. */
+  private boolean notifyUpdates = true, updateDownloading;
+  private String skippedUpdateTag = "", startupNotifiedTag = "";
+  private long lastUpdateCheckMs;
+  private AppUpdater.Release availableUpdate, pendingInstallRelease;
   private boolean grid,
       keepFull = true,
       faceExposure = true,
@@ -156,6 +182,31 @@ public final class MainActivity extends ComponentActivity
             uri -> {
               if (uri != null) importLuts(uri);
             });
+    installPermissionLauncher =
+        registerForActivityResult(
+            new ActivityResultContracts.StartActivityForResult(),
+            res -> {
+              AppUpdater.Release pending = pendingInstallRelease;
+              pendingInstallRelease = null;
+              if (pending != null && getPackageManager().canRequestPackageInstalls()) {
+                startUpdateDownload(pending);
+              }
+            });
+    AppUpdater.setStatusListener(
+        (installStatus, msg) -> {
+          if (isDestroyed()) return;
+          if (installStatus == PackageInstaller.STATUS_SUCCESS) {
+            availableUpdate = null;
+            pushOsd();
+            message("Grain updated successfully.");
+          } else if (installStatus == PackageInstaller.STATUS_FAILURE_ABORTED) {
+            message("Update cancelled.");
+          } else {
+            message(
+                "Update could not install"
+                    + (msg != null && !msg.isEmpty() ? ": " + msg : " (matching signing key required)"));
+          }
+        });
     build();
     getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
       @Override public void handleOnBackPressed() { navigateBack(); }
@@ -165,7 +216,7 @@ public final class MainActivity extends ComponentActivity
     camera.setFaceLandmarks(faceLandmarks);
     camera.setAfArea(afArea);
     camera.setAfLock(afLock);
-    camera.setManualFocus(mfOn);
+    camera.setFocusMode(focusMode);
     camera.setFocusFraction(mfStep / (float) MF_STEPS);
     sound = new MediaActionSound();
     sound.load(MediaActionSound.SHUTTER_CLICK);
@@ -1223,6 +1274,36 @@ public final class MainActivity extends ComponentActivity
           savePrefs();
           applyRawFilesPreference();
         });
+    sectionLabel(body, "APP UPDATES");
+    preferenceInfo(
+        body,
+        "Installed version",
+        "Checks GitHub Releases (astanabesta/Grain) and verifies SHA-256 before installing.",
+        availableUpdate != null
+            ? "v" + BuildConfig.VERSION_NAME + " → " + availableUpdate.tagName
+            : "v" + BuildConfig.VERSION_NAME);
+    preferenceToggle(
+        body,
+        "Notify when an update is ready",
+        "Checks on launch and offers one-tap in-app update whenever a newer APK is published.",
+        notifyUpdates,
+        v -> {
+          notifyUpdates = v;
+          savePrefs();
+        });
+    TextView updateBtn =
+        button(
+            availableUpdate != null
+                ? "Install Grain " + availableUpdate.tagName + " ↗"
+                : "Check for updates now ↗",
+            11,
+            availableUpdate != null ? ORANGE : INK,
+            () -> {
+              if (availableUpdate != null) showUpdateDialog(availableUpdate);
+              else checkForUpdates(true);
+            });
+    updateBtn.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+    body.addView(updateBtn, new LinearLayout.LayoutParams(-1, dp(43)));
     sectionLabel(body, "YOUR PHOTOS. YOUR DEVICE.");
     preferenceInfo(body, "Photo storage", "No accounts. Nothing uploaded.", "Private on-device");
     preferenceInfo(
@@ -1253,6 +1334,12 @@ public final class MainActivity extends ComponentActivity
               evCustom = false;
               aeLock = false;
               camera.setAeLock(false);
+              focusMode = FocusMath.FOCUS_AFC;
+              mfOn = false;
+              camera.setFocusMode(focusMode);
+              magnifier = FocusMath.MAG_4X_HOLD;
+              bktFramesIndex = 1;
+              bktStepMode = FocusMath.BKT_STEP_MEDIUM;
               grid = false;
               keepFull = true;
               larger = false;
@@ -1391,6 +1478,7 @@ public final class MainActivity extends ComponentActivity
 
   private void captureNow() {
     busy = true;
+    stopMagnifier();
     camera.neutralPreview(false);
     neutralHeld = false;
     Recipe r = Recipe.ALL[recipe];
@@ -1399,6 +1487,18 @@ public final class MainActivity extends ComponentActivity
     back.state.countdown = "";
     shutter.setText("·");
     shutter.setContentDescription("Capturing photo");
+    if (drive == 4) {
+      if (camera.focusBracketingAvailable()) {
+        int count = FocusMath.BKT_COUNTS[Math.max(0, Math.min(FocusMath.BKT_COUNTS.length - 1, bktFramesIndex))];
+        focusBracketPlan = FocusMath.bracketFractions(camera.currentFocusFraction(), count, bktStepMode);
+        focusBracketStep = 0;
+        focusBracketStartNs = System.nanoTime();
+        pushOsd();
+        runFocusBracketStep();
+        return;
+      }
+      back.toast("FOCUS BKT", "manual focus distance unavailable · single frame");
+    }
     status.setText(
         r.raw
             ? (bracketFilms != null && bracketFilms.length > 1
@@ -1408,6 +1508,42 @@ public final class MainActivity extends ComponentActivity
     shutter.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
     playShutterSound();
     camera.capture(snapshot());
+  }
+
+  private void runFocusBracketStep() {
+    if (!busy || focusBracketPlan == null || !resumed || !powerOn || camera == null) {
+      abortFocusBracket();
+      return;
+    }
+    int step = focusBracketStep, total = focusBracketPlan.length;
+    status.setText("Focus bracket " + (step + 1) + " of " + total + " · positioning lens…");
+    camera.prepareBracketStep(
+        focusBracketPlan[step],
+        step,
+        total,
+        () -> {
+          if (!busy || focusBracketPlan == null || !resumed || !powerOn || camera == null) {
+            abortFocusBracket();
+            return;
+          }
+          status.setText("Focus bracket " + (step + 1) + " of " + total + " · capturing…");
+          if (step == 0) shutter.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+          playShutterSound();
+          camera.capture(snapshot());
+        });
+  }
+
+  private void abortFocusBracket() {
+    focusBracketPlan = null;
+    focusBracketStep = 0;
+    if (camera != null) camera.clearBracket();
+    saving = false;
+    busy = false;
+    if (shutter != null) {
+      shutter.setText("◉");
+      shutter.setContentDescription("Take photo");
+    }
+    pushOsd();
   }
 
   private void playShutterSound() {
@@ -1468,12 +1604,18 @@ public final class MainActivity extends ComponentActivity
 
   @Override
   public void error(String text) {
+    if (focusBracketPlan != null) {
+      focusBracketPlan = null;
+      focusBracketStep = 0;
+      if (camera != null) camera.clearBracket();
+    }
     saving = false;
     busy = false;
     shutter.setText("◉");
     shutter.setContentDescription("Take photo");
     status.setText("Camera needs attention · shutter reconnects");
     ready = false;
+    pushOsd();
     message(text);
   }
 
@@ -1486,15 +1628,52 @@ public final class MainActivity extends ComponentActivity
   public void captured(byte[] jpeg, GrainCamera.Snapshot settings, JSONObject receipt) {
     if (isDestroyed() || isFinishing()) return;
     saving = true;
-    status.setText("Saving your moment…");
+    int fStep = focusBracketPlan != null ? focusBracketStep : -1;
+    int fTotal = focusBracketPlan != null ? focusBracketPlan.length : 0;
+    status.setText(
+        fTotal > 0
+            ? "Saving focus bracket " + (fStep + 1) + " of " + fTotal + "…"
+            : "Saving your moment…");
     files.execute(
         () -> {
           try {
+            if (fTotal > 0) receipt.put("focusBracketSummary", (fStep + 1) + " of " + fTotal);
             PhotoStore.Photo photo =
                 store.save(jpeg, settings.ratio, settings.zoom, settings.keepFull, receipt);
             runOnUiThread(
                 () -> {
                   if (isDestroyed()) return;
+                  if (focusBracketPlan != null) {
+                    focusBracketStep++;
+                    if (focusBracketStep < focusBracketPlan.length && resumed && powerOn) {
+                      saving = false;
+                      runFocusBracketStep();
+                      return;
+                    }
+                    int doneCount = focusBracketPlan.length;
+                    focusBracketPlan = null;
+                    focusBracketStep = 0;
+                    camera.clearBracket();
+                    saving = false;
+                    busy = false;
+                    shutter.setText("◉");
+                    shutter.setContentDescription("Take photo");
+                    status.setText(
+                        photo.metadata.optInt("width")
+                            + " × "
+                            + photo.metadata.optInt("height")
+                            + " · "
+                            + doneCount
+                            + " focus planes saved");
+                    updateThumb();
+                    syncMagnifier();
+                    message(
+                        doneCount
+                            + " focus-bracketed frames saved ("
+                            + FocusMath.BKT_STEP_NAMES[bktStepMode].toLowerCase(Locale.ROOT)
+                            + " step)");
+                    return;
+                  }
                   saving = false;
                   busy = false;
                   shutter.setText("◉");
@@ -1505,6 +1684,7 @@ public final class MainActivity extends ComponentActivity
                           + photo.metadata.optInt("height")
                           + " · saved privately");
                   updateThumb();
+                  syncMagnifier();
                   boolean warn =
                       receipt.has("ispWarning")
                           || receipt.optJSONObject("requested").optJSONArray("warnings").length()
@@ -1555,14 +1735,19 @@ public final class MainActivity extends ComponentActivity
         manual != null && manual.has("developEv")
             ? (float) Math.max(-4, Math.min(4, manual.optDouble("developEv")))
             : settings.ev;
+    int fStep = focusBracketPlan != null ? focusBracketStep : -1;
+    int fTotal = focusBracketPlan != null ? focusBracketPlan.length : 0;
     status.setText(
-        bracket.length > 1
-            ? "Developing " + bracket.length + " films from one RAW…"
-            : "Developing " + filmName + " from RAW…");
+        fTotal > 0
+            ? "Developing focus bracket " + (fStep + 1) + " of " + fTotal + " · " + filmName + "…"
+            : bracket.length > 1
+                ? "Developing " + bracket.length + " films from one RAW…"
+                : "Developing " + filmName + " from RAW…");
     files.execute(
         () -> {
           try {
             long t = System.nanoTime();
+            if (fTotal > 0) receipt.put("focusBracketSummary", (fStep + 1) + " of " + fTotal);
             PhotoStore.Photo photo = null;
             for (int i = 0; i < bracket.length; i++) {
               FujiRecipe f = bracketTuning[i];
@@ -1606,6 +1791,40 @@ public final class MainActivity extends ComponentActivity
             runOnUiThread(
                 () -> {
                   if (isDestroyed()) return;
+                  if (focusBracketPlan != null) {
+                    focusBracketStep++;
+                    if (focusBracketStep < focusBracketPlan.length && resumed && powerOn) {
+                      saving = false;
+                      runFocusBracketStep();
+                      return;
+                    }
+                    int doneCount = focusBracketPlan.length;
+                    long totalBurstMs = (System.nanoTime() - focusBracketStartNs) / 1_000_000;
+                    focusBracketPlan = null;
+                    focusBracketStep = 0;
+                    camera.clearBracket();
+                    saving = false;
+                    busy = false;
+                    shutter.setText("◉");
+                    shutter.setContentDescription("Take photo");
+                    status.setText(
+                        first.metadata.optInt("width")
+                            + " × "
+                            + first.metadata.optInt("height")
+                            + " · "
+                            + doneCount
+                            + " RAW focus planes ("
+                            + String.format(Locale.US, "%.1f s", totalBurstMs / 1000.0)
+                            + ")");
+                    updateThumb();
+                    syncMagnifier();
+                    message(
+                        doneCount
+                            + " RAW focus-bracketed frames developed ("
+                            + filmName
+                            + ")");
+                    return;
+                  }
                   saving = false;
                   busy = false;
                   shutter.setText("◉");
@@ -1614,6 +1833,7 @@ public final class MainActivity extends ComponentActivity
                       first.metadata.optInt("width") + " × " + first.metadata.optInt("height")
                           + " · " + filmName + " · developed in " + String.format(Locale.US, "%.1f s", ms / 1000.0));
                   updateThumb();
+                  syncMagnifier();
                   message(
                       receipt.has("focusWarning")
                           ? "Saved, but the camera reported not focused. Tap the subject and retry."
@@ -1627,11 +1847,17 @@ public final class MainActivity extends ComponentActivity
             String why = e instanceof OutOfMemoryError ? "not enough memory" : String.valueOf(e.getMessage());
             runOnUiThread(
                 () -> {
+                  if (focusBracketPlan != null) {
+                    focusBracketPlan = null;
+                    focusBracketStep = 0;
+                    if (camera != null) camera.clearBracket();
+                  }
                   saving = false;
                   busy = false;
                   shutter.setText("◉");
                   shutter.setContentDescription("Take photo");
                   status.setText("RAW development failed · camera still ready");
+                  syncMagnifier();
                   message("RAW development failed: " + why);
                 });
           }
@@ -1673,6 +1899,8 @@ public final class MainActivity extends ComponentActivity
     }
   }
 
+  private final Runnable startupUpdateTask = () -> checkForUpdates(false);
+
   @Override
   protected void onResume() {
     super.onResume();
@@ -1685,7 +1913,15 @@ public final class MainActivity extends ComponentActivity
     main.removeCallbacks(histogramTask);
     main.postDelayed(histogramTask, 500);
     if (peaking) startPeaking();
+    syncMagnifier();
     updateThumb();
+    if (notifyUpdates
+        && !"1".equals(System.getenv("GRAIN_SCREENS"))
+        && (lastUpdateCheckMs == 0L
+            || SystemClock.elapsedRealtime() - lastUpdateCheckMs > 15 * 60_000L)) {
+      main.removeCallbacks(startupUpdateTask);
+      main.postDelayed(startupUpdateTask, 1800);
+    }
   }
 
   @Override
@@ -1693,12 +1929,19 @@ public final class MainActivity extends ComponentActivity
     if (orientationListener != null) orientationListener.disable();
     main.removeCallbacks(histogramTask);
     main.removeCallbacks(peakingTask);
+    main.removeCallbacks(startupUpdateTask);
+    stopMagnifier();
     if (halfPressed) releaseHalf();
     neutralHeld = false;
     dismissCameraTool();
     resumed = false;
     cancelTimer();
+    if (focusBracketPlan != null) {
+      focusBracketPlan = null;
+      focusBracketStep = 0;
+    }
     if (camera != null) {
+      camera.clearBracket();
       camera.neutralPreview(false);
       camera.close();
     }
@@ -1713,10 +1956,12 @@ public final class MainActivity extends ComponentActivity
 
   @Override
   protected void onDestroy() {
+    AppUpdater.setStatusListener(null);
     if (camera != null) camera.close();
     if (sound != null) sound.release();
     main.removeCallbacksAndMessages(null);
     files.shutdown();
+    network.shutdownNow();
     super.onDestroy();
   }
 
@@ -1763,6 +2008,7 @@ public final class MainActivity extends ComponentActivity
 
   private void openPanel(String title, String subtitle) {
     cancelTimer();
+    stopMagnifier();
     dismissCameraTool();
     closePanel();
     page = "photos";
@@ -1812,6 +2058,7 @@ public final class MainActivity extends ComponentActivity
       panel = null;
     }
     page = "camera";
+    syncMagnifier();
   }
 
   private void showGallery() {
@@ -2080,8 +2327,18 @@ public final class MainActivity extends ComponentActivity
     afArea = Math.max(0, Math.min(4, preferences.getInt("afArea", GrainCamera.AF_SINGLE)));
     afLock = preferences.getBoolean("afLock", false);
     mfOn = preferences.getBoolean("mfOn", false);
+    focusMode =
+        preferences.contains("focusMode")
+            ? Math.max(0, Math.min(2, preferences.getInt("focusMode", FocusMath.FOCUS_AFC)))
+            : (mfOn ? FocusMath.FOCUS_MANUAL : FocusMath.FOCUS_AFC);
+    mfOn = focusMode == FocusMath.FOCUS_MANUAL;
     mfStep = Math.max(0, Math.min(MF_STEPS, preferences.getInt("mfStep", MF_STEPS / 2)));
     peaking = preferences.getBoolean("peaking", false);
+    magnifier = Math.max(0, Math.min(3, preferences.getInt("magnifier", FocusMath.MAG_4X_HOLD)));
+    bktFramesIndex = Math.max(0, Math.min(2, preferences.getInt("bktFramesIndex", 1)));
+    bktStepMode = Math.max(0, Math.min(2, preferences.getInt("bktStepMode", FocusMath.BKT_STEP_MEDIUM)));
+    notifyUpdates = preferences.getBoolean("notifyUpdates", true);
+    skippedUpdateTag = preferences.getString("skippedUpdateTag", "");
     timerSeconds = preferences.getInt("timer", 0);
     if (timerSeconds != 3 && timerSeconds != 5) timerSeconds = 0;
     drive = preferences.getInt("drive", timerSeconds == 3 ? 1 : timerSeconds == 5 ? 2 : 0);
@@ -2110,9 +2367,15 @@ public final class MainActivity extends ComponentActivity
             .putBoolean("faceLandmarks", faceLandmarks)
             .putInt("afArea", afArea)
             .putBoolean("afLock", afLock)
+            .putInt("focusMode", focusMode)
             .putBoolean("mfOn", mfOn)
             .putInt("mfStep", mfStep)
             .putBoolean("peaking", peaking)
+            .putInt("magnifier", magnifier)
+            .putInt("bktFramesIndex", bktFramesIndex)
+            .putInt("bktStepMode", bktStepMode)
+            .putBoolean("notifyUpdates", notifyUpdates)
+            .putString("skippedUpdateTag", skippedUpdateTag)
             .putBoolean("keepRawFiles", keepRawFiles)
             .putInt("timer", timerSeconds)
             .putInt("drive", drive)
@@ -2524,6 +2787,10 @@ public final class MainActivity extends ComponentActivity
       }
       if (faceExposure) o.icons.add("FACE");
     } else o.icons.add("ISP " + strengths[recipe] + "%");
+    if (mfOn) o.icons.add("MF");
+    else if (afArea == GrainCamera.AF_FACE)
+      o.icons.add(focusMode == FocusMath.FOCUS_AFS ? "AF-S" : "AF-C");
+    else if (focusMode == FocusMath.FOCUS_AFS) o.icons.add("AF-S");
     double[] plan = exposurePlan();
     o.mode = shutterNs > 0 && isoSetting > 0 ? "M" : shutterNs > 0 ? "S" : "P";
     o.shutter = shutterText((long) plan[0], false);
@@ -2534,8 +2801,16 @@ public final class MainActivity extends ComponentActivity
     o.manual = shutterNs > 0 || isoSetting > 0;
     o.exposure = plan[2];
     o.exposureWarn = plan[3] > 0;
-    o.drive = drive == 0 ? "" : drive == 3 ? "FS BKT" : "◷ " + timerSeconds + "S";
+    o.drive =
+        drive == 0
+            ? ""
+            : drive == 3
+                ? "FS BKT"
+                : drive == 4
+                    ? "BKT " + FocusMath.BKT_COUNTS[bktFramesIndex]
+                    : "◷ " + timerSeconds + "S";
     o.zoom = zoom > 1.04 ? String.format(Locale.US, "%.1f×", zoom) : "";
+    o.updateAvailable = availableUpdate != null && !availableUpdate.tagName.equals(skippedUpdateTag);
     o.aeLock = aeLock;
     o.grid = grid;
     o.showHistogram = showHistogram;
@@ -2545,6 +2820,7 @@ public final class MainActivity extends ComponentActivity
     o.afX = afX;
     o.afY = afY;
     o.afArea = afArea;
+    if (afArea != GrainCamera.AF_FACE) o.faceActive = false;
     o.afState = afFeedback;
     o.busy = busy;
     back.refresh();
@@ -2668,17 +2944,172 @@ public final class MainActivity extends ComponentActivity
         }
       };
 
+  private boolean magnifierActive() {
+    if (!powerOn || busy || counting || back == null || !"camera".equals(page) || !"camera".equals(mode))
+      return false;
+    if (magnifier == FocusMath.MAG_4X_ON) return true;
+    return magHeld && (magnifier == FocusMath.MAG_4X_HOLD || magnifier == FocusMath.MAG_8X_HOLD);
+  }
+
+  private String currentMagLabel() {
+    int factor = FocusMath.magFactor(magnifier);
+    if (factor <= 1) return "";
+    if (!mfOn) return factor + "×";
+    return factor + "× · " + (mfStep == 0 ? "INF" : mfStep + "/" + MF_STEPS);
+  }
+
+  private void syncMagnifier() {
+    if (magnifierActive()) {
+      main.removeCallbacks(magnifierTask);
+      main.post(magnifierTask);
+    } else {
+      stopMagnifier();
+    }
+  }
+
+  private void stopMagnifier() {
+    main.removeCallbacks(magnifierTask);
+    magHeld = false;
+    if (back != null && back.state.mag != null) {
+      back.state.mag = null;
+      back.state.magLabel = "";
+      back.refresh();
+    }
+  }
+
+  /**
+   * Focus Check magnifier: samples the live TextureView around the active focus point (or tracked
+   * face) at {@code 4×} or {@code 8×} magnification, rotating into the OSD's upright orientation and
+   * optionally overlaying mid-tone peaking edges when Peaking is enabled.
+   */
+  private final Runnable magnifierTask =
+      new Runnable() {
+        @Override
+        public void run() {
+          if (!resumed || !magnifierActive()) {
+            stopMagnifier();
+            return;
+          }
+          main.postDelayed(this, 65);
+          if (magPatch == null) {
+            magPatch = Bitmap.createBitmap(MAG_OUT, MAG_OUT, Bitmap.Config.ARGB_8888);
+            magCanvas = new Canvas(magPatch);
+          }
+          magCanvas.drawColor(0xff101110);
+          int factor = FocusMath.magFactor(magnifier);
+          if (texture != null && texture.isAvailable() && frame != null && frame.getWidth() > 0 && frame.getHeight() > 0) {
+            if (magSource == null) {
+              magSource = Bitmap.createBitmap(MAG_SRC_W, MAG_SRC_H, Bitmap.Config.ARGB_8888);
+            }
+            Bitmap src = texture.getBitmap(magSource);
+            if (src != null) {
+              float mx =
+                  afArea == GrainCamera.AF_FACE && back.state.faceActive
+                      ? (back.state.faceL + back.state.faceR) * .5f
+                      : afArea == GrainCamera.AF_CENTER ? .5f : afX;
+              float my =
+                  afArea == GrainCamera.AF_FACE && back.state.faceActive
+                      ? (back.state.faceT + back.state.faceB) * .5f
+                      : afArea == GrainCamera.AF_CENTER ? .5f : afY;
+              float[] rootPt = back.imagePointToRoot(mx, my);
+              float fx = rootPt[0] - frame.getLeft();
+              float fy = rootPt[1] - frame.getTop();
+              RectF imgRect = back.screenRect();
+              float patchScreen = Math.max(48f, Math.min(imgRect.width(), imgRect.height()) * .42f);
+              float zoomScale = factor * (MAG_OUT / patchScreen);
+              texture.getTransform(magTexMatrix);
+              magMatrix.reset();
+              magMatrix.postScale(
+                  frame.getWidth() / (float) MAG_SRC_W,
+                  frame.getHeight() / (float) MAG_SRC_H);
+              magMatrix.postConcat(magTexMatrix);
+              magMatrix.postTranslate(-fx, -fy);
+              magMatrix.postRotate(-uiRotation);
+              magMatrix.postScale(zoomScale, zoomScale);
+              magMatrix.postTranslate(MAG_OUT * .5f, MAG_OUT * .5f);
+              magCanvas.drawBitmap(src, magMatrix, magPaint);
+              if (peaking) {
+                if (magPixels == null) {
+                  magPixels = new int[MAG_OUT * MAG_OUT];
+                  magLuma = new int[MAG_OUT * MAG_OUT];
+                }
+                magPatch.getPixels(magPixels, 0, MAG_OUT, 0, 0, MAG_OUT, MAG_OUT);
+                for (int i = 0; i < magPixels.length; i++) {
+                  int c = magPixels[i];
+                  magLuma[i] = (((c >> 16) & 255) * 54 + ((c >> 8) & 255) * 183 + (c & 255) * 19) >> 8;
+                }
+                for (int y = 1; y < MAG_OUT - 1; y++) {
+                  int row = y * MAG_OUT;
+                  for (int x = 1; x < MAG_OUT - 1; x++) {
+                    int idx = row + x;
+                    int l = magLuma[idx];
+                    if (l <= 24 || l >= 232) continue;
+                    int edge =
+                        Math.abs(magLuma[idx + 1] - magLuma[idx - 1])
+                            + Math.abs(magLuma[idx + MAG_OUT] - magLuma[idx - MAG_OUT]);
+                    if (edge > 38) {
+                      int a = Math.min(220, edge * 2);
+                      int c = magPixels[idx];
+                      int r = ((c >> 16) & 255) + (((255 - ((c >> 16) & 255)) * a) >> 8);
+                      int g = ((c >> 8) & 255) + (((255 - ((c >> 8) & 255)) * a) >> 8);
+                      int b = (c & 255) + (((255 - (c & 255)) * a) >> 8);
+                      magPixels[idx] = 0xff000000 | (r << 16) | (g << 8) | b;
+                    }
+                  }
+                }
+                magPatch.setPixels(magPixels, 0, MAG_OUT, 0, 0, MAG_OUT, MAG_OUT);
+              }
+            }
+          }
+          back.state.mag = magPatch;
+          back.state.magLabel = currentMagLabel();
+          back.refresh();
+        }
+      };
+
   @Override
   public void meter(GrainCamera.Meter m) {
     lastMeter = m;
+    if (back != null) {
+      if (afArea == GrainCamera.AF_FACE && m.faceUpright != null) {
+        float[] osdBox =
+            FocusMath.uprightBoxToOsd(
+                m.faceUpright, sourceWidth, sourceHeight, ratio, zoom, uiRotation);
+        if (osdBox != null) {
+          back.state.faceActive = true;
+          back.state.faceL = osdBox[0];
+          back.state.faceT = osdBox[1];
+          back.state.faceR = osdBox[2];
+          back.state.faceB = osdBox[3];
+        } else {
+          back.state.faceActive = false;
+        }
+      } else {
+        back.state.faceActive = false;
+      }
+    }
     if (halfPressed && afFeedback == 1) {
-      if (m.afState == android.hardware.camera2.CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED) {
+      if (m.afState == android.hardware.camera2.CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED
+          || m.afState == android.hardware.camera2.CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED) {
         afFeedback = 2;
         back.lamp.set(1);
         if (sounds && sound != null) sound.play(MediaActionSound.FOCUS_COMPLETE);
       } else if (m.afState == android.hardware.camera2.CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED) {
         afFeedback = 3;
         back.lamp.set(3);
+      }
+    } else if (!halfPressed) {
+      if (focusMode == FocusMath.FOCUS_AFC
+          && afArea == GrainCamera.AF_FACE
+          && back != null
+          && back.state.faceActive) {
+        afFeedback =
+            m.afState == android.hardware.camera2.CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED
+                    || m.afState == android.hardware.camera2.CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED
+                ? 2
+                : 0;
+      } else if (afFeedback == 2 && focusMode == FocusMath.FOCUS_AFC) {
+        afFeedback = 0;
       }
     }
     pushOsd();
@@ -2712,6 +3143,30 @@ public final class MainActivity extends ComponentActivity
   }
 
   @Override
+  public void lcdHold(float x, float y, boolean held) {
+    if (!held) {
+      if (magHeld) {
+        magHeld = false;
+        syncMagnifier();
+      }
+      return;
+    }
+    if (!"camera".equals(mode) || busy || counting || !powerOn) return;
+    if (magnifier == FocusMath.MAG_OFF) {
+      back.toast("MAGNIFIER OFF", "MENU → AF / FACE → MAGNIFIER to enable");
+      return;
+    }
+    if (afArea != GrainCamera.AF_FACE && afArea != GrainCamera.AF_CENTER) {
+      afX = Math.max(.06f, Math.min(.94f, x));
+      afY = Math.max(.06f, Math.min(.94f, y));
+      focusAt(afX, afY, false);
+    }
+    magHeld = true;
+    syncMagnifier();
+    pushOsd();
+  }
+
+  @Override
   public void pinch(float factor) {
     if ("camera".equals(mode) && powerOn) setZoom(zoom * factor);
   }
@@ -2723,18 +3178,8 @@ public final class MainActivity extends ComponentActivity
     double px = (p[0] - frame.getLeft()) / frame.getWidth(), py = (p[1] - frame.getTop()) / frame.getHeight();
     double[] mapped = Framing.sourcePoint(px, py, sourceWidth, sourceHeight, ratio, zoom);
     int rotation = capabilities.optInt("sensorOrientation", 90);
-    double sx = mapped[0], sy = mapped[1];
-    if (rotation == 90) {
-      sx = mapped[1];
-      sy = 1 - mapped[0];
-    } else if (rotation == 270) {
-      sx = 1 - mapped[1];
-      sy = mapped[0];
-    } else if (rotation == 180) {
-      sx = 1 - sx;
-      sy = 1 - sy;
-    }
-    camera.focus(sx, sy, hold);
+    double[] sensorPt = FocusMath.uprightPointToSensor(mapped[0], mapped[1], rotation, front);
+    camera.focus(sensorPt[0], sensorPt[1], hold);
   }
 
   @Override
@@ -2854,8 +3299,24 @@ public final class MainActivity extends ComponentActivity
       }
       if (!ready || busy || counting) return;
       halfPressed = true;
+      if (mfOn) {
+        if (magnifier == FocusMath.MAG_4X_HOLD || magnifier == FocusMath.MAG_8X_HOLD) {
+          magHeld = true;
+          syncMagnifier();
+        }
+        pushOsd();
+        return;
+      }
       afFeedback = 1;
-      focusAt(afX, afY, true);
+      float fx =
+          afArea == GrainCamera.AF_FACE && back.state.faceActive
+              ? (back.state.faceL + back.state.faceR) * .5f
+              : afX;
+      float fy =
+          afArea == GrainCamera.AF_FACE && back.state.faceActive
+              ? (back.state.faceT + back.state.faceB) * .5f
+              : afY;
+      focusAt(fx, fy, true);
       pushOsd();
       return;
     }
@@ -2869,6 +3330,10 @@ public final class MainActivity extends ComponentActivity
     }
     boolean wasHalf = halfPressed;
     halfPressed = false;
+    if (magHeld) {
+      magHeld = false;
+      syncMagnifier();
+    }
     if (!"camera".equals(mode)) {
       closeOverlays();
       return;
@@ -2883,6 +3348,10 @@ public final class MainActivity extends ComponentActivity
     if (halfPressed && camera != null) camera.releaseFocus();
     halfPressed = false;
     afFeedback = 0;
+    if (magHeld) {
+      magHeld = false;
+      syncMagnifier();
+    }
     if (back != null) {
       back.lamp.set(busy ? 2 : 0);
       pushOsd();
@@ -2954,7 +3423,16 @@ public final class MainActivity extends ComponentActivity
     setDrive(drive + 1);
     back.toast(
         DRIVES[drive],
-        drive == 3 ? "one RAW, developed as three films" : drive == 0 ? "one frame per press" : "self-timer · tap the shutter to cancel");
+        drive == 3
+            ? "one RAW, developed as three films"
+            : drive == 4
+                ? FocusMath.BKT_COUNTS[bktFramesIndex]
+                    + " focus planes · "
+                    + FocusMath.BKT_STEP_NAMES[bktStepMode].toLowerCase(Locale.ROOT)
+                    + " step"
+                : drive == 0
+                    ? "one frame per press"
+                    : "self-timer · tap the shutter to cancel");
   }
 
   private void toggleAeLock() {
@@ -3033,6 +3511,16 @@ public final class MainActivity extends ComponentActivity
           camera.update(snapshot());
           pushOsd();
           back.toast(String.format(Locale.US, "%+.1f EV", ev), null);
+        } else if (mfOn && magnifierActive()) {
+          mfStep = Math.max(0, Math.min(MF_STEPS, mfStep + steps));
+          camera.setFocusFraction(mfStep / (float) MF_STEPS);
+          camera.update(snapshot());
+          savePrefs();
+          back.state.magLabel = currentMagLabel();
+          pushOsd();
+          back.toast(
+              mfStep == 0 ? "MF INFINITY" : "MF STEP " + mfStep + " / " + MF_STEPS,
+              "manual focus distance");
         } else setZoom(Math.round((zoom + steps * .1) * 10) / 10.0);
         break;
     }
@@ -3145,6 +3633,7 @@ public final class MainActivity extends ComponentActivity
     playImage = null;
     playInfo = null;
     playReceipt = null;
+    syncMagnifier();
     pushOsd();
   }
 
@@ -3202,6 +3691,7 @@ public final class MainActivity extends ComponentActivity
   }
 
   private void openQ() {
+    stopMagnifier();
     mode = "q";
     back.showOverlay(buildQ());
     refreshQ();
@@ -3461,10 +3951,11 @@ public final class MainActivity extends ComponentActivity
         items.add(
             new Item(
                 "FOCUS MODE",
-                () -> mfOn ? "MANUAL" : "AUTO",
+                () -> FocusMath.FOCUS_MODE_NAMES[focusMode],
                 d -> {
-                  mfOn = !mfOn;
-                  camera.setManualFocus(mfOn);
+                  focusMode = (focusMode + (d < 0 ? 2 : 1)) % 3;
+                  mfOn = focusMode == FocusMath.FOCUS_MANUAL;
+                  camera.setFocusMode(focusMode);
                   camera.update(snapshot());
                   savePrefs();
                   pushOsd();
@@ -3473,13 +3964,24 @@ public final class MainActivity extends ComponentActivity
         items.add(
             new Item(
                 "MF DISTANCE",
-                () -> mfOn ? (mfStep == 0 ? "INFINITY" : "STEP " + mfStep + " / " + MF_STEPS) : "AUTO",
+                () -> mfOn ? (mfStep == 0 ? "INFINITY" : "STEP " + mfStep + " / " + MF_STEPS) : FocusMath.FOCUS_MODE_NAMES[focusMode],
                 d -> {
                   if (!mfOn) return;
                   mfStep = Math.max(0, Math.min(MF_STEPS, mfStep + (d < 0 ? -1 : 1)));
                   camera.setFocusFraction(mfStep / (float) MF_STEPS);
                   camera.update(snapshot());
                   savePrefs();
+                },
+                false));
+        items.add(
+            new Item(
+                "MAGNIFIER",
+                () -> FocusMath.MAG_NAMES[magnifier],
+                d -> {
+                  magnifier = (magnifier + (d < 0 ? 3 : 1)) % 4;
+                  savePrefs();
+                  syncMagnifier();
+                  pushOsd();
                 },
                 false));
         items.add(
@@ -3502,6 +4004,25 @@ public final class MainActivity extends ComponentActivity
         break;
       case 2:
         items.add(new Item("DRIVE", () -> DRIVES[drive], d -> setDrive(drive + (d < 0 ? -1 : 1)), false));
+        items.add(
+            new Item(
+                "BKT FRAMES",
+                () -> FocusMath.BKT_COUNTS[bktFramesIndex] + " FRAMES",
+                d -> {
+                  bktFramesIndex = (bktFramesIndex + (d < 0 ? 2 : 1)) % FocusMath.BKT_COUNTS.length;
+                  savePrefs();
+                  pushOsd();
+                },
+                false));
+        items.add(
+            new Item(
+                "BKT STEP",
+                () -> FocusMath.BKT_STEP_NAMES[bktStepMode],
+                d -> {
+                  bktStepMode = (bktStepMode + (d < 0 ? 2 : 1)) % FocusMath.BKT_STEP_NAMES.length;
+                  savePrefs();
+                },
+                false));
         items.add(new Item("SHUTTER / ISO", () -> shutterNs > 0 || isoSetting > 0
             ? (shutterNs > 0 ? shutterText(shutterNs, false) : "A") + " · " + (isoSetting > 0 ? "ISO " + isoSetting : "ISO A")
             : "AUTO", d -> {
@@ -3553,6 +4074,16 @@ public final class MainActivity extends ComponentActivity
           back.setFinish(finish);
           savePrefs();
         }, false));
+        items.add(
+            new Item(
+                "APP UPDATE",
+                () -> availableUpdate != null ? "NEW · " + availableUpdate.tagName : "CHECK ↗",
+                d -> {
+                  closeOverlays();
+                  if (availableUpdate != null) showUpdateDialog(availableUpdate);
+                  else checkForUpdates(true);
+                },
+                true));
         items.add(new Item("ALL PREFERENCES", () -> "›", d -> {
           closeOverlays();
           showSettings();
@@ -3568,6 +4099,7 @@ public final class MainActivity extends ComponentActivity
   }
 
   private void openMenu() {
+    stopMagnifier();
     mode = "menu";
     menuIndex = 0;
     back.showOverlay(buildMenu());
@@ -3777,6 +4309,9 @@ public final class MainActivity extends ComponentActivity
         (playIndex + 1) + " / " + playList.size() + "    "
             + (r == null ? "PHOTO" : r.optString("name").toUpperCase(Locale.ROOT))
             + (p.metadata.has("bracket") ? "  ·  FS BKT " + p.metadata.optString("bracket") : "")
+            + (p.metadata.has("focusBracketSummary")
+                ? "  ·  FOCUS BKT " + p.metadata.optString("focusBracketSummary")
+                : "")
             + (p.dng != null ? "  ·  DNG" : ""));
     playReceipt.setText(receiptText(p));
   }
@@ -3797,6 +4332,7 @@ public final class MainActivity extends ComponentActivity
     JSONObject manual = q == null ? null : q.optJSONObject("manual");
     if (manual != null) receiptLine(s, "MANUAL", manual.optString("mode"));
     if (q != null && q.optBoolean("aeLock")) receiptLine(s, "AE-L", "locked");
+    if (q != null && q.has("focusMode")) receiptLine(s, "FOCUS", q.optString("focusMode").toUpperCase(Locale.ROOT));
     if (d != null) {
       if (d.has("developmentGainEv"))
         receiptLine(s, "GAIN", String.format(Locale.US, "%+.2f EV", d.optDouble("developmentGainEv")));
@@ -3805,6 +4341,7 @@ public final class MainActivity extends ComponentActivity
       if (d.has("totalMs")) receiptLine(s, "DEVELOPED", String.format(Locale.US, "%.1f s", d.optLong("totalMs") / 1000.0));
     }
     receiptLine(s, "FS BKT", m.optString("bracket", ""));
+    receiptLine(s, "FOCUS BKT", m.optString("focusBracketSummary", ""));
     receiptLine(s, "SIZE", m.optInt("width") + " × " + m.optInt("height") + "  ·  " + m.optString("ratio"));
     receiptLine(s, "FILES", "JPEG" + (p.dng != null ? " + DNG" : "") + (m.optBoolean("phoneJpegKept") ? " + phone JPEG" : ""));
     return s.toString().trim();
@@ -3840,6 +4377,200 @@ public final class MainActivity extends ComponentActivity
             playList.add(Math.min(at, playList.size()), p);
             playIndex = Math.min(at, playList.size() - 1);
             showPlayed();
+          }
+        });
+  }
+
+  // ───────────────────────────── In-app updates ─────────────────────────────
+
+  private void checkForUpdates(boolean manual) {
+    if (manual) message("Checking GitHub Releases for updates…");
+    String token = preferences.getString("githubToken", "");
+    network.execute(
+        () -> {
+          try {
+            AppUpdater.Release rel = AppUpdater.checkLatest(BuildConfig.VERSION_NAME, null, token);
+            runOnUiThread(
+                () -> {
+                  if (isDestroyed() || isFinishing()) return;
+                  lastUpdateCheckMs = SystemClock.elapsedRealtime();
+                  availableUpdate = rel;
+                  pushOsd();
+                  if ("menu".equals(mode)) refreshMenu();
+                  if (rel == null) {
+                    if (manual) {
+                      back.toast(
+                          "UP TO DATE",
+                          "Grain v" + BuildConfig.VERSION_NAME + " is the latest release");
+                    }
+                    return;
+                  }
+                  if (manual) {
+                    showUpdateDialog(rel);
+                  } else if (!rel.tagName.equals(skippedUpdateTag)
+                      && !rel.tagName.equals(startupNotifiedTag)
+                      && resumed
+                      && !busy
+                      && !counting) {
+                    startupNotifiedTag = rel.tagName;
+                    showUpdateDialog(rel);
+                  }
+                });
+          } catch (Exception e) {
+            runOnUiThread(
+                () -> {
+                  if (!isDestroyed() && manual) {
+                    message("Update check failed: " + e.getMessage());
+                  }
+                });
+          }
+        });
+  }
+
+  private void showUpdateDialog(AppUpdater.Release rel) {
+    if (isDestroyed() || isFinishing()) return;
+    StringBuilder body = new StringBuilder();
+    body.append("Installed: v")
+        .append(BuildConfig.VERSION_NAME)
+        .append("  →  Latest: ")
+        .append(rel.tagName);
+    if (rel.sizeBytes > 0) {
+      body.append(String.format(Locale.US, " (%.1f MB)", rel.sizeBytes / 1048576.0));
+    }
+    if (rel.expectedSha256 != null || rel.sha256Url != null) {
+      body.append("\nSHA-256 verified before install.");
+    }
+    if (rel.notes != null && !rel.notes.isEmpty()) {
+      body.append("\n\n").append(rel.notes);
+    }
+    new AlertDialog.Builder(this)
+        .setTitle("Update available · Grain " + rel.tagName)
+        .setMessage(body.toString())
+        .setPositiveButton("Update now", (d, w) -> beginInAppUpdate(rel))
+        .setNeutralButton(
+            "Skip " + rel.tagName,
+            (d, w) -> {
+              skippedUpdateTag = rel.tagName;
+              savePrefs();
+              pushOsd();
+            })
+        .setNegativeButton("Later", null)
+        .show();
+  }
+
+  private void beginInAppUpdate(AppUpdater.Release rel) {
+    if (updateDownloading) {
+      message("Update download is already in progress…");
+      return;
+    }
+    if (!getPackageManager().canRequestPackageInstalls()) {
+      pendingInstallRelease = rel;
+      new AlertDialog.Builder(this)
+          .setTitle("Allow in-app updates once")
+          .setMessage(
+              "Android asks permission once so Grain can install its own updates directly inside"
+                  + " the app. Turn on \"Allow from this source\", and the update will begin"
+                  + " automatically.")
+          .setPositiveButton(
+              "Allow",
+              (d, w) ->
+                  installPermissionLauncher.launch(
+                      new Intent(
+                          Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                          Uri.parse("package:" + getPackageName()))))
+          .setNegativeButton(
+              "Cancel",
+              (d, w) -> pendingInstallRelease = null)
+          .show();
+      return;
+    }
+    startUpdateDownload(rel);
+  }
+
+  private void startUpdateDownload(AppUpdater.Release rel) {
+    if (updateDownloading || isDestroyed() || isFinishing()) return;
+    updateDownloading = true;
+    AtomicBoolean cancelled = new AtomicBoolean(false);
+    LinearLayout box = column();
+    box.setPadding(dp(22), dp(16), dp(22), dp(8));
+    TextView label = text("Downloading " + rel.apkName + "…", 11, INK);
+    label.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+    box.addView(label, new LinearLayout.LayoutParams(-1, -2));
+    ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+    bar.setMax(100);
+    bar.setIndeterminate(rel.sizeBytes <= 0);
+    LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-1, -2);
+    bp.topMargin = dp(12);
+    box.addView(bar, bp);
+    AlertDialog dialog =
+        new AlertDialog.Builder(this)
+            .setTitle("Updating Grain to " + rel.tagName)
+            .setView(box)
+            .setCancelable(false)
+            .setNegativeButton(
+                "Cancel",
+                (d, w) -> {
+                  cancelled.set(true);
+                  updateDownloading = false;
+                })
+            .create();
+    dialog.show();
+    String token = preferences.getString("githubToken", "");
+    File dest = new File(new File(getCacheDir(), "updates"), rel.apkName);
+    network.execute(
+        () -> {
+          try {
+            File apk =
+                AppUpdater.downloadApk(
+                    rel,
+                    dest,
+                    token,
+                    (done, total) ->
+                        runOnUiThread(
+                            () -> {
+                              if (isDestroyed() || !dialog.isShowing()) return;
+                              if (total > 0) {
+                                int pct = (int) Math.min(100L, (done * 100L) / total);
+                                bar.setIndeterminate(false);
+                                bar.setProgress(pct);
+                                label.setText(
+                                    String.format(
+                                        Locale.US,
+                                        "Downloading %s… %d%% (%.1f / %.1f MB)",
+                                        rel.tagName,
+                                        pct,
+                                        done / 1048576.0,
+                                        total / 1048576.0));
+                              } else {
+                                label.setText(
+                                    String.format(
+                                        Locale.US,
+                                        "Downloading %s… %.1f MB",
+                                        rel.tagName,
+                                        done / 1048576.0));
+                              }
+                            }),
+                    cancelled);
+            runOnUiThread(
+                () -> {
+                  updateDownloading = false;
+                  if (isDestroyed() || isFinishing()) return;
+                  if (dialog.isShowing()) dialog.dismiss();
+                  try {
+                    AppUpdater.installApk(this, apk);
+                  } catch (Exception e) {
+                    message("Could not launch installer: " + e.getMessage());
+                  }
+                });
+          } catch (Exception e) {
+            runOnUiThread(
+                () -> {
+                  updateDownloading = false;
+                  if (dialog.isShowing()) dialog.dismiss();
+                  if (!cancelled.get() && !isDestroyed()) {
+                    message("Update failed: " + e.getMessage());
+                  }
+                });
           }
         });
   }

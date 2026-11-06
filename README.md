@@ -13,7 +13,7 @@ wrapped in the back of a Fujifilm camera.
 [![Latest release](https://img.shields.io/github/v/release/astanabesta/Grain?include_prereleases&label=release&color=b5532a)](https://github.com/astanabesta/Grain/releases)
 [![Android](https://img.shields.io/badge/Android-10%2B-3ddc84?logo=android&logoColor=white)](#compatibility-and-test-status)
 
-**v0.5.3 · device-test beta · Redmi Note 13 Pro+**
+**v0.6.0 · device-test beta · Redmi Note 13 Pro+**
 
 </div>
 
@@ -62,7 +62,9 @@ Grain is a separate, installable camera app (`dev.grain.photo`) built around two
 On top of that sits a full screen that behaves like the back of a Fujifilm camera: a film dial, a
 shutter-speed dial, a command dial, a five-way lever, a memo holder and a knurled shutter button.
 
-Everything runs offline. There is no account, no backend and no network permission.
+All capture and RAW development run 100% on-device with no account, analytics or backend; network
+access is used only to check GitHub Releases for app updates and download verified APKs when you
+choose to update.
 
 **What it is not:** not a replacement for the stock camera, not a 200 MP mode, not a video recorder,
 and not an optical-zoom camera. Zoom and framing are digital.
@@ -109,7 +111,8 @@ The package is `dev.grain.photo`, so Grain installs alongside any other camera a
 
 | Coming from | What to do |
 | --- | --- |
-| v0.2.1 – v0.5.2 | Install over it. Photos, imported LUTs and tuning are kept. |
+| v0.6.0 or newer | Updates directly inside the app on launch (or via **MENU → SET UP → APP UPDATE**). |
+| v0.2.1 – v0.5.3 | Install v0.6.0 over it once. Photos, imported LUTs and tuning are kept, and future updates happen in-app. |
 | v0.2.0 or older | Export the photos you want (**photo → Save to device gallery**), uninstall, install this APK, then re-import the LUT pack. |
 
 Every release from v0.2.1 is signed with the same personal key, certificate SHA-256:
@@ -364,8 +367,9 @@ pin older behaviours bit-for-bit.
 
 ## Privacy and data
 
-- **No network permission.** Grain cannot upload anything; there is no account, analytics or
-  backend.
+- **No accounts, analytics or telemetry.** Your photos, LUTs and settings never leave the device;
+  network access (`INTERNET`) is used solely to query `api.github.com/repos/astanabesta/Grain/releases`
+  for new Grain releases and download SHA-256-verified update APKs when requested.
 - **Photos are private to the app** until you export or share one. Export writes to
   `Pictures/Grain` through MediaStore.
 - **One capture at a time**, and a photo is committed atomically — nothing appears in the gallery
@@ -596,7 +600,8 @@ This repository does not yet carry a project license; choose one before public r
 
 | Version | Headline |
 | --- | --- |
-| **v0.5.3** | Real manual focus in 30 steps + focus peaking |
+| **v0.6.0** | Held-to-magnify loupe (`4×`/`8×`), AF-C face tracking, focus bracketing & in-app updates |
+| v0.5.3 | Real manual focus in 30 steps + focus peaking |
 | v0.5.2 | AF menu matched to the phone's real capabilities (no multi-point AF, no eye AF) |
 | v0.5.1 | AF area (single / zone / centre / face) and AF lock |
 | v0.5.0 | Focus probe: full Camera2 capability diagnostics |

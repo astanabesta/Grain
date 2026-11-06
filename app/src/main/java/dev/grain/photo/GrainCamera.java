@@ -48,14 +48,28 @@ public final class GrainCamera {
     public final double compensationEv;
     public final int afState, aeState;
     public final boolean aeLocked;
+    /** Latest lens focus distance reported by the HAL (>= 0), or -1 when unreported. */
+    public final float focusDistance;
+    /** Upright normalized [l, t, r, b] box of the actively tracked face in AF_FACE mode, or null. */
+    public final double[] faceUpright;
 
-    Meter(long exposureNs, int iso, double compensationEv, int afState, int aeState, boolean aeLocked) {
+    Meter(
+        long exposureNs,
+        int iso,
+        double compensationEv,
+        int afState,
+        int aeState,
+        boolean aeLocked,
+        float focusDistance,
+        double[] faceUpright) {
       this.exposureNs = exposureNs;
       this.iso = iso;
       this.compensationEv = compensationEv;
       this.afState = afState;
       this.aeState = aeState;
       this.aeLocked = aeLocked;
+      this.focusDistance = focusDistance;
+      this.faceUpright = faceUpright;
     }
 
     /** Exposure (ns × ISO) the meter asks for at 0 EV. */
@@ -186,22 +200,29 @@ public final class GrainCamera {
   private volatile int afArea = AF_SINGLE;
   private volatile boolean afLocked;
   /**
-   * Manual focus (v0.5.0 plan): with {@code MANUAL_SENSOR} the lens can be driven straight from a
-   * distance instead of by the autofocus. {@code CONTROL_AF_MODE_OFF} takes the lens out of the
-   * autofocus loop and {@code LENS_FOCUS_DISTANCE} positions it: 0 is infinity, and the camera's own
-   * {@code LENS_INFO_MINIMUM_FOCUS_DISTANCE} is the closest it goes. Only the two ends are known to
-   * be right on every HAL, so the control moves between them as a fraction and the receipt reports
-   * the distance the lens actually reported.
+   * Focus mode: {@link FocusMath#FOCUS_AFC} (continuous AF with live face tracking),
+   * {@link FocusMath#FOCUS_AFS} (single-shot AF), or {@link FocusMath#FOCUS_MANUAL} (direct
+   * {@code LENS_FOCUS_DISTANCE} between 0 = infinity and {@code LENS_INFO_MINIMUM_FOCUS_DISTANCE}).
    */
-  private volatile boolean manualFocus;
+  private volatile int focusMode = FocusMath.FOCUS_AFC;
   /** 0 = infinity, 1 = the lens' closest focus. */
   private volatile float focusFraction = 1f;
   /** The lens' closest focus distance as the HAL reports it; 0 when it reports none. */
   private volatile float minFocusDistance;
+  /** Latest preview-reported lens focus distance and movement state. */
+  private volatile float lastFocusDistance = -1f;
+  private volatile int lastLensState = -1;
+  /** Active focus-bracketing override (>= 0 while a focus-bracket step is active). */
+  private volatile float bracketFraction = -1f;
+  private volatile int bracketIndex, bracketTotal;
+  private volatile boolean bracketAeHold;
   /** The touch point, normalized to the active array (0..1). */
   private float afX = .5f, afY = .5f;
-  /** The last face the preview reported, in active-array coordinates. */
+  /** The last face the preview reported, in active-array coordinates, plus AF-C tracking state. */
   private final RectF faceBox = new RectF();
+  private float[] trackedFaceNorm, submittedFaceNorm, lastPostedFaceNorm;
+  private int trackedFaceId = -1;
+  private long lastFaceSeenMs, lastFaceRepeatMs;
   /** AE-L: the preview's auto exposure holds its values; stills keep them (plus the film's headroom). */
   private volatile boolean aeLock;
   /** Until then stills keep the lens where a focus request put it (half-pressed shutter, tap). */
@@ -220,7 +241,23 @@ public final class GrainCamera {
           Integer comp = result.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION);
           Integer af = result.get(CaptureResult.CONTROL_AF_STATE);
           Integer ae = result.get(CaptureResult.CONTROL_AE_STATE);
-          if (afArea == AF_FACE) trackFace(result);
+          Float fd = result.get(CaptureResult.LENS_FOCUS_DISTANCE);
+          if (fd != null && fd >= 0f) lastFocusDistance = fd;
+          Integer ls = result.get(CaptureResult.LENS_STATE);
+          lastLensState = ls == null ? -1 : ls;
+          if (afArea == AF_FACE && bracketFraction < 0f) trackFace(result);
+          else if (afArea != AF_FACE && trackedFaceNorm != null) clearTrackedFace();
+          double[] faceUpright =
+              afArea == AF_FACE && trackedFaceNorm != null
+                  ? FocusMath.sensorBoxToUpright(
+                      trackedFaceNorm[0],
+                      trackedFaceNorm[1],
+                      trackedFaceNorm[2],
+                      trackedFaceNorm[3],
+                      sensorRotation,
+                      front)
+                  : null;
+          boolean faceUiChanged = FocusMath.movedEnough(lastPostedFaceNorm, trackedFaceNorm, 0.012f);
           CameraCharacteristics c = chars;
           Rational step = c == null ? null : c.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP);
           Meter m =
@@ -230,12 +267,15 @@ public final class GrainCamera {
                   comp == null || step == null ? 0 : comp * step.doubleValue(),
                   af == null ? -1 : af,
                   ae == null ? -1 : ae,
-                  aeLock);
+                  aeLock,
+                  lastFocusDistance,
+                  faceUpright);
           meter = m;
           long now = SystemClock.uptimeMillis();
-          if (now - lastMeterPost >= 200 || m.afState != lastAfState) {
+          if (now - lastMeterPost >= 160 || m.afState != lastAfState || faceUiChanged) {
             lastMeterPost = now;
             lastAfState = m.afState;
+            lastPostedFaceNorm = trackedFaceNorm == null ? null : trackedFaceNorm.clone();
             main.post(() -> listener.meter(m));
           }
         }
@@ -547,11 +587,19 @@ public final class GrainCamera {
     return manualSensor;
   }
 
-  /** AF mode for a request: the lens stays put while a focus request holds it or AF is locked. */
+  /** AF mode for a request: AF-C tracks continuously; AF-S and AF lock hold between triggers. */
   private int afMode(boolean still) {
-    if (manualFocus) return CaptureRequest.CONTROL_AF_MODE_OFF;
-    if (afLocked || (still && SystemClock.uptimeMillis() < afHoldUntil))
-      return CaptureRequest.CONTROL_AF_MODE_AUTO;
+    if (bracketFraction >= 0f || focusMode == FocusMath.FOCUS_MANUAL)
+      return CaptureRequest.CONTROL_AF_MODE_OFF;
+    if (focusMode == FocusMath.FOCUS_AFS
+        || afLocked
+        || (still && SystemClock.uptimeMillis() < afHoldUntil)) {
+      return chooseMode(
+          chars.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES),
+          CaptureRequest.CONTROL_AF_MODE_AUTO,
+          CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE,
+          CaptureRequest.CONTROL_AF_MODE_OFF);
+    }
     return chooseMode(
         chars.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES),
         CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE,
@@ -629,7 +677,7 @@ public final class GrainCamera {
     set(b, CaptureRequest.CONTROL_AF_MODE, afMode(still));
     applyAfArea(b, applied);
     applyManualFocus(b, applied);
-    if (aeLock) {
+    if (aeLock || bracketAeHold) {
       set(b, CaptureRequest.CONTROL_AE_LOCK, true);
       applied.put("aeLock", true);
     }
@@ -708,7 +756,7 @@ public final class GrainCamera {
     } else if (safeMode)
       warnings.add(
           "Compatibility mode: custom tone/edge/noise requests omitted after a capture failure.");
-    if (recipe.raw) applyFaceDetection(b, applied);
+    if (recipe.raw || afArea == AF_FACE) applyFaceDetection(b, applied);
     if (still) {
       set(b, CaptureRequest.JPEG_QUALITY, (byte) 97);
       set(b, CaptureRequest.JPEG_ORIENTATION, jpegOrientation());
@@ -728,7 +776,7 @@ public final class GrainCamera {
     set(b, CaptureRequest.CONTROL_AF_MODE, afMode(true));
     applyAfArea(b, applied);
     applyManualFocus(b, applied);
-    if (aeLock) {
+    if (aeLock || bracketAeHold) {
       set(b, CaptureRequest.CONTROL_AE_LOCK, true);
       applied.put("aeLock", true);
     }
@@ -779,11 +827,11 @@ public final class GrainCamera {
   }
 
   /**
-   * Face exposure: asks the camera's face detector to report faces (simple mode is enough: the
-   * rectangles and confidences). Off in compatibility mode or when the setting is off.
+   * Face detection: asks the camera's face detector to report faces for RAW face exposure and/or
+   * AF-C face tracking ({@code AF_FACE}). Off in compatibility mode or when neither feature wants it.
    */
   private void applyFaceDetection(CaptureRequest.Builder b, JSONObject applied) throws Exception {
-    if (!faceDetection) {
+    if (!faceDetection && afArea != AF_FACE) {
       applied.put("faceDetectMode", "off (setting)");
       return;
     }
@@ -837,13 +885,107 @@ public final class GrainCamera {
     return afArea;
   }
 
+  /** Sets the focus mode ({@link FocusMath#FOCUS_AFC}, {@link FocusMath#FOCUS_AFS}, {@link FocusMath#FOCUS_MANUAL}). */
+  public void setFocusMode(int mode) {
+    focusMode = Math.max(0, Math.min(2, mode));
+  }
+
+  public int focusMode() {
+    return focusMode;
+  }
+
   /** Turns manual focus on: the lens is driven from {@link #setFocusFraction} and the autofocus off. */
   public void setManualFocus(boolean on) {
-    manualFocus = on;
+    focusMode = on ? FocusMath.FOCUS_MANUAL : FocusMath.FOCUS_AFC;
   }
 
   public boolean manualFocus() {
-    return manualFocus;
+    return focusMode == FocusMath.FOCUS_MANUAL;
+  }
+
+  /** True when the camera supports direct focus-distance stepping for Focus Bracketing. */
+  public boolean focusBracketingAvailable() {
+    return manualSensor
+        && minFocusDistance > 0f
+        && requestKeys.contains(CaptureRequest.LENS_FOCUS_DISTANCE);
+  }
+
+  /** Starting focus fraction in [0..1] (0 = infinity, 1 = closest focus) for Focus Bracketing. */
+  public float currentFocusFraction() {
+    if (focusMode == FocusMath.FOCUS_MANUAL) return focusFraction;
+    if (minFocusDistance > 0f && lastFocusDistance >= 0f) {
+      return Math.max(0f, Math.min(1f, lastFocusDistance / minFocusDistance));
+    }
+    return 0.5f;
+  }
+
+  /**
+   * Positions the physical lens on the preview stream for step {@code index} of a Focus Bracket,
+   * waits briefly until the VCM settles (or the settle cap elapses), and invokes {@code onSettled}
+   * on the main thread so the still is captured at the requested focus plane.
+   */
+  public void prepareBracketStep(float fraction, int index, int total, Runnable onSettled) {
+    Handler h = handler;
+    if (h == null || closed) {
+      postError("Camera is not ready for focus bracketing");
+      return;
+    }
+    int token = generation;
+    h.post(
+        () -> {
+          if (closed || token != generation || session == null) return;
+          bracketFraction = Math.max(0f, Math.min(1f, fraction));
+          bracketIndex = index;
+          bracketTotal = total;
+          bracketAeHold = index > 0 || aeLock;
+          float targetDistance = bracketFraction * minFocusDistance;
+          try {
+            repeat();
+          } catch (Exception e) {
+            postError("Focus bracket step failed: " + e.getMessage());
+            return;
+          }
+          long startMs = SystemClock.uptimeMillis();
+          Runnable waitLens =
+              new Runnable() {
+                @Override
+                public void run() {
+                  if (closed || token != generation || session == null || bracketFraction < 0f) return;
+                  long elapsed = SystemClock.uptimeMillis() - startMs;
+                  boolean stationary =
+                      lastLensState == CaptureResult.LENS_STATE_STATIONARY
+                          || (lastFocusDistance >= 0f
+                              && Math.abs(lastFocusDistance - targetDistance)
+                                  <= Math.max(0.15f, minFocusDistance * 0.025f));
+                  if ((elapsed >= 90 && stationary) || elapsed >= 210) {
+                    main.post(onSettled);
+                  } else {
+                    h.postDelayed(this, 35);
+                  }
+                }
+              };
+          h.postDelayed(waitLens, 90);
+        });
+  }
+
+  /** Ends a Focus Bracketing burst and restores normal preview AF/AE. */
+  public void clearBracket() {
+    bracketFraction = -1f;
+    bracketIndex = 0;
+    bracketTotal = 0;
+    bracketAeHold = false;
+    Handler h = handler;
+    if (h != null && !closed) {
+      h.post(
+          () -> {
+            if (!closed && session != null && !inFlight) {
+              try {
+                repeat();
+              } catch (Exception ignored) {
+              }
+            }
+          });
+    }
   }
 
   /** The focus position as a fraction: 0 is infinity, 1 is the lens' closest focus. */
@@ -1075,9 +1217,10 @@ public final class GrainCamera {
    * {@link #releaseFocus}; otherwise continuous autofocus resumes after two seconds.
    */
   public void focus(double sourceX, double sourceY, boolean hold) {
-    afHoldUntil = hold ? Long.MAX_VALUE : SystemClock.uptimeMillis() + 2000;
     afX = (float) sourceX;
     afY = (float) sourceY;
+    if (focusMode == FocusMath.FOCUS_MANUAL || afLocked) return;
+    afHoldUntil = hold ? Long.MAX_VALUE : SystemClock.uptimeMillis() + 2000;
     Handler h = handler;
     if (h == null || closed) return;
     h.post(
@@ -1177,45 +1320,129 @@ public final class GrainCamera {
     return (sensorRotation + (front ? degrees : -degrees) + 360) % 360;
   }
 
+  private void clearTrackedFace() {
+    trackedFaceNorm = null;
+    submittedFaceNorm = null;
+    trackedFaceId = -1;
+    faceBox.setEmpty();
+  }
+
   /**
-   * FACE area: remember the last face the camera detected so the AF region follows it. Face bounds
-   * are already in active-array coordinates; the face nearest the frame centre wins, matching
-   * Fujifilm's Intelligent Face Detection.
+   * AF-C face tracking: follows the subject's face across preview frames using sticky proximity/ID
+   * matching and exponential smoothing, and re-submits the repeating preview request whenever the
+   * face is acquired, moves significantly, or leaves the frame after a short grace window.
    */
   private void trackFace(TotalCaptureResult result) {
     Face[] faces = result.get(CaptureResult.STATISTICS_FACES);
     Rect active =
         chars == null ? null : chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
-    if (faces == null || faces.length == 0 || active == null) return;
-    int best = -1;
-    double bestDist = Double.MAX_VALUE;
-    for (int i = 0; i < faces.length; i++) {
+    if (active == null || active.width() <= 0 || active.height() <= 0) return;
+    long now = SystemClock.uptimeMillis();
+    int rawCount = faces == null ? 0 : faces.length;
+    float[] boxes = new float[rawCount * 4];
+    int[] ids = new int[rawCount];
+    int valid = 0;
+    float aw = active.width(), ah = active.height();
+    for (int i = 0; i < rawCount; i++) {
       Face f = faces[i];
       if (f == null || f.getBounds() == null) continue;
       Rect r = f.getBounds();
-      double dx = ((r.left + r.right) * .5 - (active.left + active.right) * .5) / active.width();
-      double dy = ((r.top + r.bottom) * .5 - (active.top + active.bottom) * .5) / active.height();
-      double d = dx * dx + dy * dy;
-      if (d < bestDist) {
-        bestDist = d;
-        best = i;
+      if (r.width() <= 0 || r.height() <= 0) continue;
+      int pad = Math.max(1, Math.min(r.width(), r.height()) / 10);
+      float nl = Math.max(0f, (r.left - pad - active.left) / aw);
+      float nt = Math.max(0f, (r.top - pad - active.top) / ah);
+      float nr = Math.min(1f, (r.right + pad - active.left) / aw);
+      float nb = Math.min(1f, (r.bottom + pad - active.top) / ah);
+      if (nr <= nl || nb <= nt) continue;
+      boxes[valid * 4] = nl;
+      boxes[valid * 4 + 1] = nt;
+      boxes[valid * 4 + 2] = nr;
+      boxes[valid * 4 + 3] = nb;
+      ids[valid] = f.getId() == Face.ID_UNSUPPORTED ? -1 : f.getId();
+      valid++;
+    }
+    boolean hasPrev = trackedFaceNorm != null && (now - lastFaceSeenMs) <= 650;
+    float prevCx = hasPrev ? (trackedFaceNorm[0] + trackedFaceNorm[2]) * 0.5f : 0.5f;
+    float prevCy = hasPrev ? (trackedFaceNorm[1] + trackedFaceNorm[3]) * 0.5f : 0.5f;
+    int picked =
+        FocusMath.pickTrackedFace(boxes, valid, ids, trackedFaceId, prevCx, prevCy, hasPrev);
+    if (picked >= 0) {
+      float[] next = {
+        boxes[picked * 4], boxes[picked * 4 + 1], boxes[picked * 4 + 2], boxes[picked * 4 + 3]
+      };
+      trackedFaceNorm = FocusMath.smoothBox(hasPrev ? trackedFaceNorm : null, next, 0.48f);
+      trackedFaceId = ids[picked];
+      lastFaceSeenMs = now;
+      faceBox.set(
+          active.left + trackedFaceNorm[0] * aw,
+          active.top + trackedFaceNorm[1] * ah,
+          active.left + trackedFaceNorm[2] * aw,
+          active.top + trackedFaceNorm[3] * ah);
+      if (focusMode == FocusMath.FOCUS_AFC
+          && !afLocked
+          && !inFlight
+          && session != null
+          && now >= afHoldUntil) {
+        boolean shouldRepeat =
+            submittedFaceNorm == null
+                || (now - lastFaceRepeatMs >= 180
+                    && FocusMath.movedEnough(submittedFaceNorm, trackedFaceNorm, 0.025f));
+        if (shouldRepeat) {
+          submittedFaceNorm = trackedFaceNorm.clone();
+          lastFaceRepeatMs = now;
+          try {
+            repeat();
+          } catch (Exception ignored) {
+          }
+        }
+      }
+    } else if (trackedFaceNorm != null && (now - lastFaceSeenMs) > 650) {
+      boolean hadSubmitted = submittedFaceNorm != null;
+      clearTrackedFace();
+      if (hadSubmitted
+          && focusMode == FocusMath.FOCUS_AFC
+          && !afLocked
+          && !inFlight
+          && session != null
+          && now >= afHoldUntil) {
+        lastFaceRepeatMs = now;
+        try {
+          repeat();
+        } catch (Exception ignored) {
+        }
       }
     }
-    if (best < 0) return;
-    Rect r = faces[best].getBounds();
-    int pad = Math.max(1, Math.min(r.width(), r.height()) / 10);
-    faceBox.set(
-        Math.max(active.left, r.left - pad), Math.max(active.top, r.top - pad),
-        Math.min(active.right, r.right + pad), Math.min(active.bottom, r.bottom + pad));
   }
 
   /**
-   * Positions the lens directly when manual focus is on. The fraction is turned into a distance
-   * between infinity (0) and the lens' own closest focus (1). A camera that reports no closest focus
-   * distance cannot be driven this way, and says so rather than writing a guessed number.
+   * Positions the lens directly when manual focus or focus bracketing is active; otherwise records
+   * the autofocus mode (AF-C / AF-S) and face-tracking status for the capture receipt.
    */
   private void applyManualFocus(CaptureRequest.Builder b, JSONObject applied) throws Exception {
-    if (!manualFocus) return;
+    if (bracketFraction >= 0f) {
+      if (!manualSensor || minFocusDistance <= 0f) {
+        warnings.add("Focus bracketing is unavailable on this camera");
+        return;
+      }
+      double distance = Math.max(0, Math.min(1, bracketFraction)) * minFocusDistance;
+      if (set(b, CaptureRequest.LENS_FOCUS_DISTANCE, (float) distance)) {
+        applied.put("focusMode", "focus-bracket");
+        applied.put("focusDistance", distance);
+        applied.put(
+            "focusBracket",
+            new JSONObject()
+                .put("frame", bracketIndex + 1)
+                .put("of", bracketTotal)
+                .put("focusFraction", bracketFraction)
+                .put("focusDistance", distance));
+      } else warnings.add("The lens focus distance was rejected by this camera");
+      return;
+    }
+    if (focusMode != FocusMath.FOCUS_MANUAL) {
+      applied.put("focusMode", focusMode == FocusMath.FOCUS_AFS ? "af-s" : "af-c");
+      if (afArea == AF_FACE) applied.put("faceTracked", trackedFaceNorm != null);
+      return;
+    }
     if (!manualSensor) {
       warnings.add("This camera does not advertise MANUAL_SENSOR; manual focus is unavailable");
       return;
@@ -1294,9 +1521,21 @@ public final class GrainCamera {
             MeteringRectangle.METERING_WEIGHT_MAX - 1)
       };
     }
+    if (afArea == AF_FACE && !faceBox.isEmpty()) {
+      float fcx = faceBox.centerX(), fcy = faceBox.centerY();
+      float hw = Math.max(box, faceBox.width() * 0.5f);
+      float hh = Math.max(box, faceBox.height() * 0.5f);
+      return new MeteringRectangle[] {
+        new MeteringRectangle(
+            Math.max(active.left, Math.round(fcx - hw)),
+            Math.max(active.top, Math.round(fcy - hh)),
+            Math.min(active.right, Math.round(fcx + hw)),
+            Math.min(active.bottom, Math.round(fcy + hh)),
+            MeteringRectangle.METERING_WEIGHT_MAX - 1)
+      };
+    }
     RectF r;
-    if (afArea == AF_FACE && !faceBox.isEmpty()) r = faceBox;
-    else if (afArea == AF_CENTER)
+    if (afArea == AF_CENTER)
       r = new RectF(active.left + w * .5f, active.top + h * .5f, active.left + w * .5f,
           active.top + h * .5f);
     else r = new RectF(cx, cy, cx, cy);
@@ -1518,6 +1757,9 @@ public final class GrainCamera {
       h.post(
           () -> {
             clearPending();
+            bracketFraction = -1f;
+            bracketAeHold = false;
+            clearTrackedFace();
             if (session != null) {
               session.close();
               session = null;

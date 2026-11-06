@@ -1,53 +1,30 @@
-## Grain Photo vVERSION — manual focus + peaking (v0.5.3, device-test beta)
+## Grain Photo vVERSION — magnifier, AF-C face tracking, focus bracketing & in-app updates (device-test beta)
 
-Install **Grain-vVERSION.apk** on the Redmi Note 13 Pro+.
-- **From v0.2.1 – v0.5.2:** it installs as an update. Your photos, imported LUTs and tuning stay.
-- **From v0.2.0 or older:** first save the photos you want to keep (photo → **Save to device gallery**), uninstall Grain, install this APK, then re-import the LUT pack (*Tune → Import LUT pack*).
+Install **Grain-vVERSION.apk** once on the Redmi Note 13 Pro+ — from this build onward, **Grain checks GitHub Releases on launch and updates itself directly inside the app**.
+- **From v0.2.1 – v0.5.3:** installs cleanly as an update. Your photos, imported LUTs and tuning stay intact.
+- **From v0.2.0 or older:** first export the photos you want to keep (photo → **Save to device gallery**), uninstall Grain, install this APK, then re-import your LUT pack (*Tune → Import LUT pack*).
 
-### Why this build exists
+### What's new in v0.6.0
 
-Your diagnostics said `manualSensor: true` and that the HAL accepts `android.lens.focusDistance`. The
-v0.5.0 plan assumed the opposite and settled for peaking + magnifier as *aids*. On your phone the lens
-can be driven directly, so this is a real manual focus — and peaking is the aid that makes it usable.
+#### 1. Focus Check Magnifier (`4×` / `8×` held-to-magnify)
+- **Press and hold** anywhere on the picture to open a live `4×` or `8×` magnified loupe centered on the active focus point (or tracked face), and lift your finger to dismiss it without firing a tap-focus.
+- **MENU → AF / FACE → MAGNIFIER** switches between **`OFF`**, **`4× HOLD`** (default), **`8× HOLD`**, and **`4× ON`** (continuous loupe).
+- In **MANUAL** focus, half-pressing the shutter also opens the Focus Check loupe, and turning the **Command dial** while magnified steps `MF DISTANCE` (`0..30`) live with instant readout (`4× · 15/30`). When **PEAKING** is on, mid-tone sharp edges are highlighted right inside the loupe.
 
-### Manual focus
+#### 2. AF-C Face Tracking
+- **MENU → AF / FACE → FOCUS MODE** now separates **`AF-C`** (continuous tracking), **`AF-S`** (single-servo autofocus), and **`MANUAL`**.
+- With **`AF AREA → FACE`** in **`AF-C`**, Grain enables Camera2 face detection on both ISP and RAW previews, tracks your subject with sticky proximity/ID locking and exponential smoothing, re-aims the live `CONTROL_AF_REGIONS` repeating request as the face moves across the frame, and draws live corner brackets that turn green on `PASSIVE_FOCUSED`.
 
-**MENU → AF / FACE → FOCUS MODE** switches between **AUTO** and **MANUAL**. In MANUAL the autofocus is
-taken out of the loop (`CONTROL_AF_MODE_OFF`) and the lens is positioned straight from a distance
-(`LENS_FOCUS_DISTANCE`). **MF DISTANCE** moves it in thirty steps:
+#### 3. Focus Bracketing (`FOCUS BKT`)
+- Press **DRIVE** (or **MENU → SHOOT → DRIVE**) to select **`FOCUS BKT`**.
+- Configure **BKT FRAMES** (**`3`**, **`5`**, or **`7`** frames) and **BKT STEP** (**`NARROW`**, **`MEDIUM`**, or **`WIDE`**) in **MENU → SHOOT**.
+- Pressing the shutter steps `LENS_FOCUS_DISTANCE` across focus planes around your current focus distance (locking AE after the first frame for consistent exposure across the stack), waits for `LENS_STATE_STATIONARY` on each plane, and captures either ISP JPEGs or developed RAW frames with per-frame `focusBracket` metadata in the receipt.
 
-- **STEP 0** is **INFINITY** — the lens is fully retracted, far things are sharp.
-- **STEP 30 / 30** is the lens' own **closest focus**, which your camera reports as `minFocusDistance: 10`.
-- Between them the distance is interpolated linearly, so the steps are even in *distance*, not in
-  how near things look. Dial toward infinity for a landscape, toward 30 for something close.
+#### 4. In-App Update + Startup Notification
+- On launch, Grain checks `astanabesta/Grain` GitHub Releases in the background and notifies you immediately when a newer version is published (**Update now** / **Skip** / **Later**).
+- **Update now** downloads the release APK with live progress, verifies its **SHA-256** digest against GitHub's release metadata / `SHA256SUMS.txt` before touching the installer, and commits a `PackageInstaller` session directly inside Grain (on Android 12+, subsequent updates can complete without extra confirmation prompts).
+- Manual check and notification toggle live in **MENU → SET UP → APP UPDATE** and **ALL PREFERENCES → APP UPDATES**.
 
-The fraction is mapped onto whatever the HAL reports, so the control works whatever unit the phone uses.
-Only the two ends are guaranteed on every camera; the receipt reports the distance the lens actually
-reports back, so you can see whether it took the value.
+Nothing in the RAW colour science or LUT development pipeline changed — same engines, same goldens.
 
-### Peaking
-
-**MENU → AF / FACE → PEAKING** draws the preview's own edges back over the picture in white, brighter
-where the contrast is sharper. Turn it on, switch to MANUAL, and dial **MF DISTANCE** until the edges
-you care about glow — that is the lens actually on the subject. It reads a small (160 × 120) copy of the
-preview about seven times a second, so it costs the preview very little.
-
-Peaking only marks **mid-tones**. Pure white and pure black carry no focus information; marking them
-would just make the sky and the shadows glow.
-
-### The receipt
-
-`requested.applied` now carries `focusMode` and `focusDistance` when manual focus is on, and `actual`
-carries `focusDistance` — the value the lens reported back. A camera that cannot do it says so in
-`warnings` rather than writing a guessed distance.
-
-### Still missing
-
-- **Magnifier** — a held-to-magnify view around the focus point.
-- **AF-C face tracking** — continuous focus following the face between shots.
-- **Focus bracketing** — a burst across focus distances (planned for v0.5.2 in the focus plan).
-
-Nothing in the RAW development or recipe pipeline changed. Same engines, same goldens.
-
-This is a personal device-test build, signed with the project's personal key (certificate
-SHA-256 6e073ef6…). SHA256SUMS.txt verifies the APK download.
+Signed with the project's personal key (certificate SHA-256 `6e073ef6…`). `SHA256SUMS.txt` verifies the APK download.

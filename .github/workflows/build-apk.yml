@@ -98,22 +98,16 @@ jobs:
           PY
           fi
           exit "$CODE"
-      # Dev branches: camera-back screenshots (CameraBackScreensTest) go to the ci-screens branch,
-      # so the layout can be reviewed without a phone.
-      - name: Publish camera-back screenshots (dev branches)
-        if: always() && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/dev/')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ ! -d app/build/screens ]; then echo "No screenshots"; exit 0; fi
-          cd app/build/screens
-          git init -q
-          git checkout -q -b ci-screens
-          git add -A
-          git -c user.name="Grain CI" -c user.email="grain-ci@users.noreply.github.com" commit -q -m "Camera-back screens for ${GITHUB_SHA::7}"
-          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ci-screens
+      # Dev branches: upload camera-back screenshots (CameraBackScreensTest) as a workflow artifact
+      # instead of creating extra branches or bot commits in the repository.
+      - name: Upload camera-back screenshots (dev branches)
+        if: always() && startsWith(github.ref, 'refs/heads/dev/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: grain-screens-${{ github.run_number }}
+          path: app/build/screens/
+          if-no-files-found: ignore
+          retention-days: 14
       - uses: actions/upload-artifact@v4
         with:
           name: grain-photo-${{ github.run_number }}
