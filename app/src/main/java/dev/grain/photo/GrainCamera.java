@@ -185,6 +185,19 @@ public final class GrainCamera {
   public static final int AF_SINGLE = 0, AF_MULTI = 1, AF_ZONE = 2, AF_CENTER = 3, AF_FACE = 4;
   private volatile int afArea = AF_SINGLE;
   private volatile boolean afLocked;
+  /**
+   * Manual focus (v0.5.0 plan): with {@code MANUAL_SENSOR} the lens can be driven straight from a
+   * distance instead of by the autofocus. {@code CONTROL_AF_MODE_OFF} takes the lens out of the
+   * autofocus loop and {@code LENS_FOCUS_DISTANCE} positions it: 0 is infinity, and the camera's own
+   * {@code LENS_INFO_MINIMUM_FOCUS_DISTANCE} is the closest it goes. Only the two ends are known to
+   * be right on every HAL, so the control moves between them as a fraction and the receipt reports
+   * the distance the lens actually reported.
+   */
+  private volatile boolean manualFocus;
+  /** 0 = infinity, 1 = the lens' closest focus. */
+  private volatile float focusFraction = 1f;
+  /** The lens' closest focus distance as the HAL reports it; 0 when it reports none. */
+  private volatile float minFocusDistance;
   /** The touch point, normalized to the active array (0..1). */
   private float afX = .5f, afY = .5f;
   /** The last face the preview reported, in active-array coordinates. */
@@ -536,6 +549,7 @@ public final class GrainCamera {
 
   /** AF mode for a request: the lens stays put while a focus request holds it or AF is locked. */
   private int afMode(boolean still) {
+    if (manualFocus) return CaptureRequest.CONTROL_AF_MODE_OFF;
     if (afLocked || (still && SystemClock.uptimeMillis() < afHoldUntil))
       return CaptureRequest.CONTROL_AF_MODE_AUTO;
     return chooseMode(
@@ -614,6 +628,7 @@ public final class GrainCamera {
     set(b, CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
     set(b, CaptureRequest.CONTROL_AF_MODE, afMode(still));
     applyAfArea(b, applied);
+    applyManualFocus(b, applied);
     if (aeLock) {
       set(b, CaptureRequest.CONTROL_AE_LOCK, true);
       applied.put("aeLock", true);
@@ -712,6 +727,7 @@ public final class GrainCamera {
     set(b, CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
     set(b, CaptureRequest.CONTROL_AF_MODE, afMode(true));
     applyAfArea(b, applied);
+    applyManualFocus(b, applied);
     if (aeLock) {
       set(b, CaptureRequest.CONTROL_AE_LOCK, true);
       applied.put("aeLock", true);
@@ -819,6 +835,29 @@ public final class GrainCamera {
 
   public int afArea() {
     return afArea;
+  }
+
+  /** Turns manual focus on: the lens is driven from {@link #setFocusFraction} and the autofocus off. */
+  public void setManualFocus(boolean on) {
+    manualFocus = on;
+  }
+
+  public boolean manualFocus() {
+    return manualFocus;
+  }
+
+  /** The focus position as a fraction: 0 is infinity, 1 is the lens' closest focus. */
+  public void setFocusFraction(float fraction) {
+    focusFraction = Math.max(0, Math.min(1, fraction));
+  }
+
+  public float focusFraction() {
+    return focusFraction;
+  }
+
+  /** The closest the lens goes, or 0 when the camera does not report one. */
+  public float minFocusDistance() {
+    return minFocusDistance;
   }
 
   /** Locks the AF region and the lens where they are, until the next focus. */
@@ -1000,6 +1039,7 @@ public final class GrainCamera {
     put(j, "awbState", r.get(CaptureResult.CONTROL_AWB_STATE));
     put(j, "aeState", r.get(CaptureResult.CONTROL_AE_STATE));
     put(j, "afState", r.get(CaptureResult.CONTROL_AF_STATE));
+    put(j, "focusDistance", r.get(CaptureResult.LENS_FOCUS_DISTANCE));
     put(j, "tonemapMode", r.get(CaptureResult.TONEMAP_MODE));
     put(j, "edgeMode", r.get(CaptureResult.EDGE_MODE));
     put(j, "noiseReductionMode", r.get(CaptureResult.NOISE_REDUCTION_MODE));
@@ -1167,6 +1207,28 @@ public final class GrainCamera {
     faceBox.set(
         Math.max(active.left, r.left - pad), Math.max(active.top, r.top - pad),
         Math.min(active.right, r.right + pad), Math.min(active.bottom, r.bottom + pad));
+  }
+
+  /**
+   * Positions the lens directly when manual focus is on. The fraction is turned into a distance
+   * between infinity (0) and the lens' own closest focus (1). A camera that reports no closest focus
+   * distance cannot be driven this way, and says so rather than writing a guessed number.
+   */
+  private void applyManualFocus(CaptureRequest.Builder b, JSONObject applied) throws Exception {
+    if (!manualFocus) return;
+    if (!manualSensor) {
+      warnings.add("This camera does not advertise MANUAL_SENSOR; manual focus is unavailable");
+      return;
+    }
+    if (minFocusDistance <= 0) {
+      warnings.add("This camera reports no closest focus distance; manual focus is unavailable");
+      return;
+    }
+    double distance = Math.max(0, Math.min(1, focusFraction)) * minFocusDistance;
+    if (set(b, CaptureRequest.LENS_FOCUS_DISTANCE, (float) distance)) {
+      applied.put("focusMode", "manual");
+      applied.put("focusDistance", distance);
+    } else warnings.add("The lens focus distance was rejected by this camera");
   }
 
   /** Puts the current AF area on the request, and records it for the receipt. */
@@ -1352,7 +1414,9 @@ public final class GrainCamera {
         "faceDetectModes",
         ints(chars.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_FACE_DETECT_MODES)));
     put(focus, "maxFaces", chars.get(CameraCharacteristics.STATISTICS_INFO_MAX_FACE_COUNT));
-    put(focus, "minFocusDistance", chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE));
+    Range<Float> closest = chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE);
+    if (closest != null) minFocusDistance = closest.getUpper();
+    put(focus, "minFocusDistance", minFocusDistance > 0 ? minFocusDistance : null);
     JSONArray focusKeys = new JSONArray();
     for (CaptureRequest.Key<?> k :
         new CaptureRequest.Key<?>[] {

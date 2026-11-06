@@ -57,6 +57,8 @@ final class CameraBack extends ViewGroup {
     boolean isoAuto = true, aeLock, grid, showHistogram = true, showLevel = true, busy, infoOff,
         manual, exposureWarn;
     int battery = -1, afState, afArea;
+    /** The peaking edge map, or null to draw nothing. */
+    Bitmap peak;
     double exposure;
     float level = Float.NaN, afX = .5f, afY = .5f;
     int[] histogram;
@@ -1618,6 +1620,9 @@ final class CameraBack extends ViewGroup {
           c.drawLine(img.left, img.top + img.height() * n / 3, img.right, img.top + img.height() * n / 3,
               p);
         }
+      }
+      if (o.peak != null && img.width() > 0) {
+        c.drawBitmap(o.peak, null, img, null);
       }
       if (o.afArea == 2) {
         float zs = Math.min(img.width(), img.height()) * .25f;
