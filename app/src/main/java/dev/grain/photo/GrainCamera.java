@@ -175,6 +175,20 @@ public final class GrainCamera {
   /** Face exposure: the camera's face detector runs for RAW films so development can meter faces. */
   private volatile boolean faceDetection = true;
   private volatile boolean faceLandmarks;
+
+  /**
+   * AF area modes (v0.5.0): where the lens looks for focus. SINGLE is a point you tap; MULTI is a
+   * grid across the frame; ZONE is a larger box around the point; CENTER is the middle; FACE follows
+   * the camera's face detector. The region goes on every request, so continuous AF searches only
+   * inside it, and a one-shot focus triggers on it.
+   */
+  public static final int AF_SINGLE = 0, AF_MULTI = 1, AF_ZONE = 2, AF_CENTER = 3, AF_FACE = 4;
+  private volatile int afArea = AF_SINGLE;
+  private volatile boolean afLocked;
+  /** The touch point, normalized to the active array (0..1). */
+  private float afX = .5f, afY = .5f;
+  /** The last face the preview reported, in active-array coordinates. */
+  private final RectF faceBox = new RectF();
   /** AE-L: the preview's auto exposure holds its values; stills keep them (plus the film's headroom). */
   private volatile boolean aeLock;
   /** Until then stills keep the lens where a focus request put it (half-pressed shutter, tap). */
@@ -193,6 +207,7 @@ public final class GrainCamera {
           Integer comp = result.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION);
           Integer af = result.get(CaptureResult.CONTROL_AF_STATE);
           Integer ae = result.get(CaptureResult.CONTROL_AE_STATE);
+          if (afArea == AF_FACE) trackFace(result);
           CameraCharacteristics c = chars;
           Rational step = c == null ? null : c.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP);
           Meter m =
@@ -519,9 +534,9 @@ public final class GrainCamera {
     return manualSensor;
   }
 
-  /** AF mode for a request: the lens stays put while a focus request holds it. */
+  /** AF mode for a request: the lens stays put while a focus request holds it or AF is locked. */
   private int afMode(boolean still) {
-    if (still && SystemClock.uptimeMillis() < afHoldUntil)
+    if (afLocked || (still && SystemClock.uptimeMillis() < afHoldUntil))
       return CaptureRequest.CONTROL_AF_MODE_AUTO;
     return chooseMode(
         chars.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES),
@@ -598,6 +613,7 @@ public final class GrainCamera {
     set(b, CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO);
     set(b, CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
     set(b, CaptureRequest.CONTROL_AF_MODE, afMode(still));
+    applyAfArea(b, applied);
     if (aeLock) {
       set(b, CaptureRequest.CONTROL_AE_LOCK, true);
       applied.put("aeLock", true);
@@ -695,6 +711,7 @@ public final class GrainCamera {
     set(b, CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO);
     set(b, CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
     set(b, CaptureRequest.CONTROL_AF_MODE, afMode(true));
+    applyAfArea(b, applied);
     if (aeLock) {
       set(b, CaptureRequest.CONTROL_AE_LOCK, true);
       applied.put("aeLock", true);
@@ -793,6 +810,24 @@ public final class GrainCamera {
    */
   public void setFaceLandmarks(boolean on) {
     faceLandmarks = on;
+  }
+
+  /** The AF area mode; see the AF_* constants. */
+  public void setAfArea(int area) {
+    afArea = area;
+  }
+
+  public int afArea() {
+    return afArea;
+  }
+
+  /** Locks the AF region and the lens where they are, until the next focus. */
+  public void setAfLock(boolean on) {
+    afLocked = on;
+  }
+
+  public boolean afLocked() {
+    return afLocked;
   }
 
   private <T> boolean set(CaptureRequest.Builder b, CaptureRequest.Key<T> key, T value) {
@@ -1001,34 +1036,23 @@ public final class GrainCamera {
    */
   public void focus(double sourceX, double sourceY, boolean hold) {
     afHoldUntil = hold ? Long.MAX_VALUE : SystemClock.uptimeMillis() + 2000;
+    afX = (float) sourceX;
+    afY = (float) sourceY;
     Handler h = handler;
     if (h == null || closed) return;
     h.post(
         () -> {
           if (session == null || inFlight) return;
           try {
-            Integer max = chars.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF);
-            Rect active = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
-            if (max == null || max == 0 || active == null) {
+            MeteringRectangle[] regions = afRegions();
+            if (regions == null) {
               main.post(() -> listener.status("Tap focus regions are not exposed by this camera"));
               return;
             }
-            int cx = active.left + (int) (sourceX * active.width()),
-                cy = active.top + (int) (sourceY * active.height()),
-                half = Math.max(24, Math.min(active.width(), active.height()) / 20);
-            Rect box =
-                new Rect(
-                    Math.max(active.left, cx - half),
-                    Math.max(active.top, cy - half),
-                    Math.min(active.right, cx + half),
-                    Math.min(active.bottom, cy + half));
             CaptureRequest.Builder b = request(CameraDevice.TEMPLATE_PREVIEW, current, false);
             b.addTarget(previewSurface);
             set(b, CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO);
-            set(
-                b,
-                CaptureRequest.CONTROL_AF_REGIONS,
-                new MeteringRectangle[] {new MeteringRectangle(box, 1000)});
+            set(b, CaptureRequest.CONTROL_AF_REGIONS, regions);
             set(b, CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START);
             session.capture(b.build(), null, handler);
             set(b, CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE);
@@ -1111,6 +1135,115 @@ public final class GrainCamera {
   private int jpegOrientation() {
     int degrees = displayDegrees();
     return (sensorRotation + (front ? degrees : -degrees) + 360) % 360;
+  }
+
+  /**
+   * FACE area: remember the last face the camera detected so the AF region follows it. Face bounds
+   * are already in active-array coordinates; the face nearest the frame centre wins, matching
+   * Fujifilm's Intelligent Face Detection.
+   */
+  private void trackFace(TotalCaptureResult result) {
+    Face[] faces = result.get(CaptureResult.STATISTICS_FACES);
+    Rect active =
+        chars == null ? null : chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+    if (faces == null || faces.length == 0 || active == null) return;
+    int best = -1;
+    double bestDist = Double.MAX_VALUE;
+    for (int i = 0; i < faces.length; i++) {
+      Face f = faces[i];
+      if (f == null || f.getBounds() == null) continue;
+      Rect r = f.getBounds();
+      double dx = ((r.left + r.right) * .5 - (active.left + active.right) * .5) / active.width();
+      double dy = ((r.top + r.bottom) * .5 - (active.top + active.bottom) * .5) / active.height();
+      double d = dx * dx + dy * dy;
+      if (d < bestDist) {
+        bestDist = d;
+        best = i;
+      }
+    }
+    if (best < 0) return;
+    Rect r = faces[best].getBounds();
+    int pad = Math.max(1, Math.min(r.width(), r.height()) / 10);
+    faceBox.set(
+        Math.max(active.left, r.left - pad), Math.max(active.top, r.top - pad),
+        Math.min(active.right, r.right + pad), Math.min(active.bottom, r.bottom + pad));
+  }
+
+  /** Puts the current AF area on the request, and records it for the receipt. */
+  private void applyAfArea(CaptureRequest.Builder b, JSONObject applied) throws Exception {
+    MeteringRectangle[] regions = afRegions();
+    if (regions == null) {
+      if (afArea != AF_SINGLE)
+        warnings.add("This camera exposes no AF regions; the AF area control is unavailable");
+      return;
+    }
+    if (set(b, CaptureRequest.CONTROL_AF_REGIONS, regions)) {
+      applied.put("afArea", afAreaName()).put("afRegions", regions.length);
+      if (afLocked) applied.put("afLock", true);
+    } else warnings.add("AF regions were rejected by this camera");
+  }
+
+  private String afAreaName() {
+    return switch (afArea) {
+      default -> "single";
+      case AF_MULTI -> "multi";
+      case AF_ZONE -> "zone";
+      case AF_CENTER -> "center";
+      case AF_FACE -> "face";
+    };
+  }
+
+  /**
+   * The metering regions for the current AF area, in active-array coordinates. Null when this HAL
+   * exposes no AF regions at all, in which case nothing is set and the receipt says why.
+   */
+  private MeteringRectangle[] afRegions() {
+    Rect active = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+    Integer max = chars.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF);
+    if (active == null || active.width() <= 0 || active.height() <= 0) return null;
+    if (max == null || max <= 0) return null;
+    int w = active.width(), h = active.height();
+    int cx = active.left + (int) (afX * w), cy = active.top + (int) (afY * h);
+    int box = Math.max(24, Math.min(w, h) / 20);
+    int zone = Math.max(box, Math.min(w, h) / 4);
+    if (afArea == AF_MULTI) {
+      int count = Math.min(max, 9), cols = (int) Math.ceil(Math.sqrt(count));
+      int rows = Math.max(1, (int) Math.ceil((double) count / cols));
+      List<MeteringRectangle> list = new ArrayList<>();
+      for (int r = 0; r < rows && list.size() < count; r++)
+        for (int c = 0; c < cols && list.size() < count; c++) {
+          int l = active.left + c * w / cols, t = active.top + r * h / rows;
+          int right = active.left + (c + 1) * w / cols, b = active.top + (r + 1) * h / rows;
+          int overlap = Math.max(1, Math.min(right - l, b - t) / 8);
+          list.add(
+              new MeteringRectangle(
+                  Math.max(active.left, l - overlap / 2), Math.max(active.top, t - overlap / 2),
+                  Math.min(active.right, right + overlap / 2),
+                  Math.min(active.bottom, b + overlap / 2),
+                  MeteringRectangle.METERING_WEIGHT_MAX / count));
+        }
+      return list.toArray(new MeteringRectangle[0]);
+    }
+    if (afArea == AF_ZONE) {
+      return new MeteringRectangle[] {
+        new MeteringRectangle(
+            Math.max(active.left, cx - zone), Math.max(active.top, cy - zone),
+            Math.min(active.right, cx + zone), Math.min(active.bottom, cy + zone),
+            MeteringRectangle.METERING_WEIGHT_MAX - 1)
+      };
+    }
+    RectF r;
+    if (afArea == AF_FACE && !faceBox.isEmpty()) r = faceBox;
+    else if (afArea == AF_CENTER)
+      r = new RectF(active.left + w * .5f, active.top + h * .5f, active.left + w * .5f,
+          active.top + h * .5f);
+    else r = new RectF(cx, cy, cx, cy);
+    return new MeteringRectangle[] {
+      new MeteringRectangle(
+          Math.max(active.left, (int) r.left - box), Math.max(active.top, (int) r.top - box),
+          Math.min(active.right, (int) r.right + box), Math.min(active.bottom, (int) r.bottom + box),
+          MeteringRectangle.METERING_WEIGHT_MAX - 1)
+    };
   }
 
   /**
