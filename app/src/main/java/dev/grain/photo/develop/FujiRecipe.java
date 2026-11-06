@@ -482,6 +482,27 @@ public final class FujiRecipe {
     return film.with(t);
   }
 
+  /**
+   * Reggie Ballesteros' Classic Negative recipe as published by Fuji X Weekly (X-Trans V, also for
+   * X-Trans IV), unchanged; no typical exposure (removed at his request, as for Reggie's Portra).
+   * Developed like his Portra (First version) by default.
+   */
+  public static final FujiRecipe REGGIES_SUPERIA =
+      developed(Development.FIRST_VERSION, new Builder(
+              "reggies-superia",
+              "Reggie’s Superia",
+              "Reggie Ballesteros",
+              "https://fujixweekly.com/2026/03/12/reggies-superia-a-fujifilm-recipe-for-x-trans-iv-v-cameras/",
+              "CLASSIC-Neg.",
+              "Classic Neg.")
+          .whiteBalance(WhiteBalance.AUTO, 1, -3)
+          .tone(-2, -1)
+          .color(1)
+          .detail(-2, -4, 0)
+          .grain(2, true)
+          .colorChrome(2, 2)
+          .build());
+
   private static final String ROESCH = "Ritchie Roesch (Fuji X Weekly)";
 
   /** Kodak Gold 200, Fuji X Weekly (X-Trans V), as published. */
@@ -599,10 +620,13 @@ public final class FujiRecipe {
           .exposure("+1/3 to +1 EV")
           .build();
 
-  /** The published recipes Grain develops, in the order they are listed (ids in Recipe). */
+  /**
+   * The published recipes Grain develops, in the order the film list shows them (Reggie's two
+   * first). Ids are assigned in Recipe and never change.
+   */
   public static final FujiRecipe[] PUBLISHED = {
-    REGGIES_PORTRA, KODAK_GOLD_200, KODACHROME_64, PACIFIC_BLUES, VIBRANT_ARIZONA, CINESTILL_800T,
-    KODAK_TRI_X_400
+    REGGIES_PORTRA, REGGIES_SUPERIA, KODAK_GOLD_200, KODACHROME_64, PACIFIC_BLUES, VIBRANT_ARIZONA,
+    CINESTILL_800T, KODAK_TRI_X_400
   };
 
   /** Fujifilm's LUT download page, credited for the plain film simulations. */

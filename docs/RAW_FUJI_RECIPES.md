@@ -1,19 +1,22 @@
-# Fujifilm recipes from RAW (v0.3.1, engine `grain-raw-2`)
+# Fujifilm recipes from RAW (v0.3.2, engine `grain-raw-2`)
 
 Grain's Fujifilm recipes are developed from the phone's sensor RAW. They are not filters on the
-phone's finished JPEG. v0.3.0 has seven published recipes (Reggie's Portra plus six from Fuji X
-Weekly) and every film simulation in the imported pack on its own. v0.3.1 adds the **Development**
-setting: Reggie's Portra develops like Grain's first version (v0.2.0) again, every other film stays
-on Clean (see [Development](#development-first-version-and-clean-v031)).
+phone's finished JPEG. v0.3.2 has eight published recipes (Reggie's Portra and Reggie's Superia,
+plus six from Fuji X Weekly) and every film simulation in the imported pack on its own. v0.3.1 added
+the **Development** setting: Reggie's Portra develops like Grain's first version (v0.2.0) again,
+every other film stays on Clean (see [Development](#development-first-version-and-clean-v031)).
+v0.3.2 adds **Reggie's Superia**, which starts on First version like his Portra.
 
-## Published recipes (v0.3.0)
+## Published recipes (v0.3.0, Reggie's Superia v0.3.2)
 
 Each recipe's default is its published settings (`FujiRecipe.PUBLISHED`); tuning and *Reset this
-look* work as for every film. Recipes are listed before the plain film simulations.
+look* work as for every film. Recipes are listed before the plain film simulations, in
+`FujiRecipe.PUBLISHED` order (Reggie's two first); ids never change.
 
 | Recipe (id) | Film simulation | White balance | DR | Highlight / Shadow | Color | Grain | CCE / FX Blue | Sharpness / NR / Clarity | Typical EV |
 |---|---|---|---|---|---|---|---|---|---|
 | Reggie's Portra (4)¹ | Classic Chrome | Auto, R+2 B−4 | DR-Auto | −1 / −1 | +2 | Weak, Small | Strong / Weak | −2 / −4 / 0 | — |
+| Reggie's Superia (23)¹ | Classic Neg. | Auto, R+1 B−3 | DR-Auto | −2 / −1 | +1 | Strong, Large | Strong / Strong | −2 / −4 / 0 | — |
 | Kodak Gold 200 (17) | Classic Chrome | Daylight, R+4 B−5 | DR400 | −1.5 / +0.5 | +3 | Strong, Small | Weak / Off | −2 / −4 / −2 | +2/3 to +1 |
 | Kodachrome 64 (18) | Classic Chrome | Daylight, R+2 B−5 | DR200 | 0 / +0.5 | +2 | Weak, Small | Strong / Off | +1 / −4 / +3 | 0 to +2/3 |
 | Pacific Blues (19) | Classic Neg. | 5800K, R+1 B−3 | DR400 | −2 / +3 | +4 | Strong, Large | Strong / Weak | −2 / −4 / −3 | +2/3 to +1 |
@@ -21,8 +24,13 @@ look* work as for every film. Recipes are listed before the plain film simulatio
 | CineStill 800T (21) | Eterna | Fluorescent 3, R−6 B−4 | DR400 | 0 / +2 | +4 | Strong, Large | Strong / Weak | −3 / −4 / −5 | −1/3 to +2/3 |
 | Kodak Tri-X 400 (22) | Acros | Daylight, R+9 B−9 | DR200 | 0 / +3 | n/a | Strong, Large | (Strong / Off, not applied) | +1 / −4 / +4 | +1/3 to +1 |
 
-¹ Developed as *First version* by default (v0.3.1); all other recipes develop as *Clean*.
+¹ Developed as *First version* by default (Reggie's Portra since v0.3.1, Reggie's Superia from the
+start); all other recipes develop as *Clean*.
 
+Reggie's Portra and Reggie's Superia are by Reggie Ballesteros; Fuji X Weekly published Superia on
+2026-03-12 for X-Trans V (also usable on X-Trans IV, where blue renders a little less deeply) with
+ISO Auto up to 6400. At his request neither has a typical exposure. Superia is his Classic Negative
+take: moodier, grainier and more contrasty than his Portra, made for skin tones in directional light.
 Gold 200, Kodachrome 64, Pacific Blues, Vibrant Arizona and CineStill 800T are by Ritchie Roesch;
 Tri-X 400 is Anders Lindborg's recipe in Ritchie Roesch's X100V version (published for ISO
 1600–12800). Sources are linked in `FujiRecipe` and in each photo's receipt. The typical exposure
@@ -33,8 +41,8 @@ exposure control does).
 
 Every RAW film can be tuned in the film sheet (`FujiRecipe.Tuning`, `FujiRecipe.with`,
 `TuningControl`, saved per film by `RecipeTuning` as `tune.<film key>`). The default is the film's
-own: Fujifilm's standard settings for a simulation on its own, the published settings for
-Reggie's Portra. *Reset this look* returns to it. Ranges follow Fujifilm's menus:
+own: Fujifilm's standard settings for a simulation on its own, the published settings for a
+recipe. *Reset this look* returns to it. Ranges follow Fujifilm's menus:
 
 | Setting | Values |
 |---|---|
@@ -49,7 +57,7 @@ Reggie's Portra. *Reset this look* returns to it. Ranges follow Fujifilm's menus
 | Clarity | −5…+5 |
 | Grain | Off, Weak/Strong × Small/Large |
 | Color Chrome Effect, FX Blue | Off, Weak, Strong (not shown for black and white) |
-| Development (Grain extra, v0.3.1) | Clean, First version (Reggie's Portra starts on First version) |
+| Development (Grain extra, v0.3.1) | Clean, First version (Reggie's Portra and Superia start on First version) |
 | Halation, Bloom (Grain extras) | Off, 1–10 |
 
 A setting that another one overrides stays visible but muted, with the reason (Highlight and
@@ -83,8 +91,8 @@ the viewfinder.
 
 Grain's own choice of how to develop the RAW, not a Fujifilm setting (it is the first row of the
 Grain extras; saved per film as `development`; settings saved before v0.3.1 keep the film's
-default). **Reggie's Portra starts on First version, every other film on Clean**; *Reset this look*
-returns to that default.
+default). **Reggie's Portra and Reggie's Superia start on First version, every other film on
+Clean**; *Reset this look* returns to that default.
 
 | | First version (Grain v0.2.0) | Clean (v0.2.1 and later) |
 |---|---|---|
@@ -302,10 +310,16 @@ Local JUnit tests (`RawEngineTest`) check:
   synthetic frame with this phone's matrices, from the v0.2.0 engine) and differs on Clean, that
   First version uses no sharpening and the full grain at the defaults while every High ISO NR and
   Sharpness position still changes the picture (NR cleaner, Sharpness crisper at each step), and
-  that Reggie starts on First version, every other film on Clean, through tuning and `with()`.
+  that Reggie starts on First version, every other film on Clean, through tuning and `with()`;
+- (v0.3.2) that Reggie's Superia carries every published setting and receipt row (no typical
+  exposure), is listed right after Reggie's Portra, starts on First version (Reggie's two recipes on
+  First version, every other film on Clean, unique keys), and develops with no sharpening and the
+  full Strong / Large grain (heavier than Portra's Weak / Small) and deeper FX Blue.
 
 On the phone test DNG (ISO 2742, indoor), Reggie's Portra on First version develops bit-identically
-to the v0.2.0 engine; on Clean, it and the other films develop bit-identically to v0.3.0.
+to the v0.2.0 engine; on Clean, it and the other films develop bit-identically to v0.3.0. Adding
+Reggie's Superia (v0.3.2) changed no engine code: Reggie's Portra and Pacific Blues develop
+bit-identically to v0.3.1 on that DNG.
 
 ## First phone test (v0.2.0 → v0.2.1)
 
@@ -336,9 +350,11 @@ must be re-measured with the receipt's `timingMs`.
   more detail than Kodak Gold 200 (DR400).
 - (v0.3.1) Reggie's Portra should look like the v0.2.0 photos again (grain and texture); compare a
   shot with *Development: Clean*.
+- (v0.3.2) Reggie's Superia on skin in directional light, the light it was made for; at high ISO,
+  First version is very grainy (Strong / Large grain on top of sensor noise), so compare *Clean*.
 
 Desktop harness: `tools/DevelopRaw.java` develops a raw Bayer dump with any `.cube` file. No Android
-is needed. `-Drecipe=<key>` picks a published recipe (e.g. `kodak-gold-200`, `vibrant-arizona`) or
+is needed. `-Drecipe=<key>` picks a published recipe (e.g. `kodak-gold-200`, `vibrant-arizona`, `reggies-superia`) or
 `sim-<LUT name>`; `-Dwb`, `-Dkelvin`, `-Ddr`, `-Dfilter`, `-DshiftR/-DshiftB`, `-Dhl/-Dsh`,
 `-Dhalation`, `-Dbloom`, `-Dclarity`, `-Ddevelopment=CLEAN|FIRST_VERSION`, `-Dsharpness` and
 `-DhighIsoNr` override single settings; `-Dgrain=true`, `-Dseed`, `-Dthreads` and `-Dev` set the

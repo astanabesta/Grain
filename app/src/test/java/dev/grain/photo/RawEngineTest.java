@@ -174,6 +174,65 @@ public class RawEngineTest {
     assertEquals(-4, r.wbShiftBlue);
   }
 
+  /**
+   * Reggie's Superia (v0.3.2) carries the settings Fuji X Weekly published on 2026-03-12, starts on
+   * First version like his Portra, and is listed right after it.
+   */
+  @Test
+  public void reggiesSuperiaIsThePublishedRecipe() throws Exception {
+    FujiRecipe r = FujiRecipe.REGGIES_SUPERIA;
+    assertEquals("reggies-superia", r.key);
+    assertEquals("Reggie Ballesteros", r.author);
+    assertEquals("CLASSIC-Neg.", r.filmSimulation);
+    assertEquals(FujiRecipe.DynamicRange.AUTO, r.dynamicRange);
+    assertEquals(2, r.grainRoughness);
+    assertTrue(r.grainLarge);
+    assertEquals(2, r.colorChrome);
+    assertEquals(2, r.colorChromeBlue);
+    assertEquals(FujiRecipe.WhiteBalance.AUTO, r.wbMode);
+    assertEquals(1, r.wbShiftRed);
+    assertEquals(-3, r.wbShiftBlue);
+    assertEquals(-2, r.highlight, 0);
+    assertEquals(-1, r.shadow, 0);
+    assertEquals(1, r.color);
+    assertEquals(-2, r.sharpness);
+    assertEquals(-4, r.noiseReduction);
+    assertEquals(0, r.clarity);
+    assertEquals(0, r.halation);
+    assertEquals(0, r.bloom);
+    assertEquals(0, r.monoFilter);
+    assertTrue("no typical exposure, at Reggie's request", r.exposureNote.isEmpty());
+    assertEquals(FujiRecipe.Development.FIRST_VERSION, r.development);
+    assertTrue(r.sameSettings(r.with(r.tuning())));
+    Map<String, String> shown = new java.util.HashMap<>();
+    for (String[] row : r.settings()) shown.put(row[0], row[1]);
+    assertEquals("Classic Neg.", shown.get("Film simulation"));
+    assertEquals("DR-Auto", shown.get("Dynamic range"));
+    assertEquals("Auto; R +1, B −3", shown.get("White balance"));
+    assertEquals("−2", shown.get("Highlight"));
+    assertEquals("−1", shown.get("Shadow"));
+    assertEquals("+1", shown.get("Color"));
+    assertEquals("Strong / Large", shown.get("Grain"));
+    assertEquals("Strong", shown.get("Color Chrome Effect"));
+    assertEquals("Strong", shown.get("Color Chrome FX Blue"));
+    assertEquals("First version (as Grain v0.2.0)", shown.get("Development (Grain)"));
+    assertFalse(shown.containsKey("Exposure compensation (typical, not applied)"));
+    assertSame("listed right after Reggie's Portra", r, FujiRecipe.PUBLISHED[1]);
+
+    java.util.List<Map<String, Object>> st = new java.util.ArrayList<>();
+    int[] superia = developGolden(r, true, st);
+    Map<String, Object> s = st.get(0);
+    assertTrue(String.valueOf(s.get("development")).startsWith("First version"));
+    assertEquals(0.0, ((Number) s.get("sharpenAmount")).doubleValue(), 0);
+    double amp = ((Number) s.get("grainAmplitude")).doubleValue();
+    assertEquals("full Strong / Large grain", ((Number) s.get("grainAmplitudeRecipe")).doubleValue(), amp, 1e-6);
+    int[] portra = developGolden(FujiRecipe.REGGIES_PORTRA, true, st);
+    assertTrue("Strong / Large is heavier than Weak / Small", amp > 1.5 * ((Number) st.get(0).get("grainAmplitude")).doubleValue());
+    assertTrue(((Number) s.get("colorChromeBlueDepth")).doubleValue() > ((Number) st.get(0).get("colorChromeBlueDepth")).doubleValue());
+    assertNotEquals(fnv(portra), fnv(superia));
+    for (int p : superia) assertEquals("opaque", 0xff, p >>> 24);
+  }
+
   @Test
   public void lutEntryPatternTakesFLog2NotFLog2C() {
     java.util.regex.Pattern p = CubeLut.FUJI_FLOG2_33;
@@ -972,7 +1031,9 @@ public class RawEngineTest {
           c.set(t, p);
           assertEquals(r.key + " " + c.name + " position " + p, p, c.at(r.with(t).tuning()));
         }
-      if (r != FujiRecipe.REGGIES_PORTRA) assertFalse(r.key + " typical EV", r.exposureNote.isEmpty());
+      if (r.author.equals("Reggie Ballesteros"))
+        assertTrue(r.key + ": no typical EV, at Reggie's request", r.exposureNote.isEmpty());
+      else assertFalse(r.key + " typical EV", r.exposureNote.isEmpty());
     }
     // Reggie's receipt text is unchanged by the new white-balance model
     assertEquals("Auto; R +2, B −4", FujiRecipe.REGGIES_PORTRA.settings()[2][1]);
@@ -1158,13 +1219,23 @@ public class RawEngineTest {
     }
   }
 
-  /** Reggie's Portra starts on the First version, every other film on Clean; tuning keeps it. */
+  /**
+   * Reggie's Portra and Reggie's Superia start on the First version, every other film on Clean;
+   * tuning keeps it.
+   */
   @Test
   public void developmentDefaultsAndTuning() {
     FujiRecipe reggie = FujiRecipe.REGGIES_PORTRA;
     assertEquals(FujiRecipe.Development.FIRST_VERSION, reggie.development);
     for (FujiRecipe r : FujiRecipe.PUBLISHED)
-      if (r != reggie) assertEquals(r.key, FujiRecipe.Development.CLEAN, r.development);
+      assertEquals(
+          r.key,
+          r == reggie || r == FujiRecipe.REGGIES_SUPERIA
+              ? FujiRecipe.Development.FIRST_VERSION
+              : FujiRecipe.Development.CLEAN,
+          r.development);
+    java.util.Set<String> keys = new java.util.HashSet<>();
+    for (FujiRecipe r : FujiRecipe.PUBLISHED) assertTrue("unique key " + r.key, keys.add(r.key));
     assertEquals(FujiRecipe.Development.CLEAN, FujiRecipe.standard("PROVIA", "Provia").development);
     String shown = null;
     for (String[] row : reggie.settings()) if (row[0].equals("Development (Grain)")) shown = row[1];
