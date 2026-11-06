@@ -73,13 +73,17 @@ public final class GrainCamera {
     public final RawFrame frame;
     public final byte[] phoneJpeg;
     public final File dng;
+    /** The JPEG orientation requested for the capture (the phone JPEG is tagged or turned by it). */
     public final int orientationDegrees;
+    /** Clockwise turn that makes the sensor image upright for the scene (includes device rotation). */
+    public final int uprightDegrees;
 
-    RawCapture(RawFrame frame, byte[] phoneJpeg, File dng, int orientationDegrees) {
+    RawCapture(RawFrame frame, byte[] phoneJpeg, File dng, int orientationDegrees, int uprightDegrees) {
       this.frame = frame;
       this.phoneJpeg = phoneJpeg;
       this.dng = dng;
       this.orientationDegrees = orientationDegrees;
+      this.uprightDegrees = uprightDegrees;
     }
   }
 
@@ -123,6 +127,8 @@ public final class GrainCamera {
   private int pendingRotation;
   private String rawUnavailable = "not probed";
   private volatile File dngDirectory;
+  /** Face exposure: the camera's face detector runs for RAW films so development can meter faces. */
+  private volatile boolean faceDetection = true;
 
   public GrainCamera(Activity activity, TextureView texture, Listener listener) {
     this.activity = activity;
@@ -511,6 +517,7 @@ public final class GrainCamera {
     } else if (safeMode)
       warnings.add(
           "Compatibility mode: custom tone/edge/noise requests omitted after a capture failure.");
+    if (recipe.raw) applyFaceDetection(b, applied);
     if (still) {
       set(b, CaptureRequest.JPEG_QUALITY, (byte) 97);
       set(b, CaptureRequest.JPEG_ORIENTATION, jpegOrientation());
@@ -573,9 +580,43 @@ public final class GrainCamera {
     else warnings.add("Lens shading map not available; vignetting is not corrected in RAW development");
     set(b, CaptureRequest.JPEG_QUALITY, (byte) 95);
     set(b, CaptureRequest.JPEG_ORIENTATION, jpegOrientation());
+    applyFaceDetection(b, applied);
     applied.put("warnings", new JSONArray(warnings));
     applied.put("compatibilityMode", safeMode);
     return applied;
+  }
+
+  /**
+   * Face exposure: asks the camera's face detector to report faces (simple mode is enough: the
+   * rectangles and confidences). Off in compatibility mode or when the setting is off.
+   */
+  private void applyFaceDetection(CaptureRequest.Builder b, JSONObject applied) throws Exception {
+    if (!faceDetection) {
+      applied.put("faceDetectMode", "off (setting)");
+      return;
+    }
+    if (safeMode) {
+      applied.put("faceDetectMode", "off (compatibility mode)");
+      return;
+    }
+    int[] modes = chars.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_FACE_DETECT_MODES);
+    int mode =
+        contains(modes, CaptureRequest.STATISTICS_FACE_DETECT_MODE_SIMPLE)
+            ? CaptureRequest.STATISTICS_FACE_DETECT_MODE_SIMPLE
+            : contains(modes, CaptureRequest.STATISTICS_FACE_DETECT_MODE_FULL)
+                ? CaptureRequest.STATISTICS_FACE_DETECT_MODE_FULL
+                : CaptureRequest.STATISTICS_FACE_DETECT_MODE_OFF;
+    if (mode == CaptureRequest.STATISTICS_FACE_DETECT_MODE_OFF
+        || !requestKeys.contains(CaptureRequest.STATISTICS_FACE_DETECT_MODE)) {
+      applied.put("faceDetectMode", "unavailable (faces are searched in the phone JPEG)");
+      return;
+    }
+    if (set(b, CaptureRequest.STATISTICS_FACE_DETECT_MODE, mode)) applied.put("faceDetectMode", mode);
+  }
+
+  /** Face exposure on or off; call {@link #update} afterwards so the preview follows. */
+  public void setFaceDetection(boolean on) {
+    faceDetection = on;
   }
 
   private <T> boolean set(CaptureRequest.Builder b, CaptureRequest.Key<T> key, T value) {
@@ -727,7 +768,8 @@ public final class GrainCamera {
             .put("raw", true)
             .put("sourceFormat", "Camera2 RAW_SENSOR developed on device; phone ISP JPEG kept as reference")
             .put("rawSize", frame.width + "x" + frame.height);
-        RawCapture capture = new RawCapture(frame, bytes, dng, orientation);
+        RawCapture capture =
+            new RawCapture(frame, bytes, dng, orientation, (orientation + extraRotation()) % 360);
         clearPending();
         main.post(() -> listener.capturedRaw(capture, snap, receipt));
         return;

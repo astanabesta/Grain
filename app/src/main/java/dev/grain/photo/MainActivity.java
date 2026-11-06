@@ -72,6 +72,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
   private float ev = 0;
   private boolean grid,
       keepFull = true,
+      faceExposure = true,
       larger,
       front,
       busy,
@@ -110,6 +111,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
       @Override public void handleOnBackPressed() { navigateBack(); }
     });
     camera = new GrainCamera(this, texture, this);
+    camera.setFaceDetection(faceExposure);
     orientationListener =
         new OrientationEventListener(this) {
           int last = -1;
@@ -1253,6 +1255,18 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     restart.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
     body.addView(restart, new LinearLayout.LayoutParams(-1, dp(43)));
     sectionLabel(body, "FUJIFILM RECIPES (RAW)");
+    preferenceToggle(
+        body,
+        "Face exposure",
+        "Like Fujifilm’s face detection: a face sets the exposure, so a backlit face comes out bright"
+            + " and the background may blow out. Start at 0 EV.",
+        faceExposure,
+        v -> {
+          faceExposure = v;
+          savePrefs();
+          camera.setFaceDetection(v);
+          camera.update(snapshot());
+        });
     preferenceInfo(
         body,
         "Fujifilm LUTs",
@@ -1301,6 +1315,8 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
               grid = false;
               keepFull = true;
               larger = false;
+              faceExposure = true;
+              camera.setFaceDetection(true);
               savePrefs();
               layoutFrame();
               updateLabels();
@@ -1518,6 +1534,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     FujiRecipe film = settings.fuji != null ? settings.fuji : r.fuji;
     boolean tuned = !film.sameSettings(r.fuji);
     String filmName = r.name + (tuned ? " (tuned)" : "");
+    boolean meterFaces = faceExposure;
     status.setText("Developing " + filmName + " from RAW…");
     files.execute(
         () -> {
@@ -1532,7 +1549,8 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
                     tuned,
                     lut,
                     settings.ev,
-                    capture.frame.exposureNs ^ System.nanoTime());
+                    capture.frame.exposureNs ^ System.nanoTime(),
+                    meterFaces);
             long ms = (System.nanoTime() - t) / 1_000_000;
             receipt.put("development", out.stats.put("totalMs", ms));
             PhotoStore.Photo photo =
@@ -2014,6 +2032,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     grid = preferences.getBoolean("grid", false);
     keepFull = preferences.getBoolean("keepFull", true);
     larger = preferences.getBoolean("larger", false);
+    faceExposure = preferences.getBoolean("faceExposure", true);
     timerSeconds = preferences.getInt("timer", 0);
     if (timerSeconds != 3 && timerSeconds != 5) timerSeconds = 0;
   }
@@ -2027,6 +2046,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
             .putBoolean("grid", grid)
             .putBoolean("keepFull", keepFull)
             .putBoolean("larger", larger)
+            .putBoolean("faceExposure", faceExposure)
             .putBoolean("keepRawFiles", keepRawFiles)
             .putInt("timer", timerSeconds);
     for (int i = 0; i < strengths.length; i++) edit.putInt("strength" + i, strengths[i]);

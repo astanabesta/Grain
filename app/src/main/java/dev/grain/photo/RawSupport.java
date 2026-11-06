@@ -8,6 +8,7 @@ import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.DngCreator;
 import android.hardware.camera2.params.BlackLevelPattern;
 import android.hardware.camera2.params.ColorSpaceTransform;
+import android.hardware.camera2.params.Face;
 import android.hardware.camera2.params.LensShadingMap;
 import android.hardware.camera2.params.MandatoryStreamCombination;
 import android.hardware.camera2.params.StreamConfigurationMap;
@@ -16,6 +17,7 @@ import android.util.Pair;
 import android.util.Rational;
 import android.util.Size;
 import androidx.exifinterface.media.ExifInterface;
+import dev.grain.photo.develop.Faces;
 import dev.grain.photo.develop.RawFrame;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -23,6 +25,7 @@ import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.ShortBuffer;
+import java.util.Arrays;
 import java.util.List;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -127,6 +130,13 @@ final class RawSupport {
         f.shadingHeight = h;
       }
     }
+    try {
+      faces(f, chars, result);
+    } catch (RuntimeException e) { // face metadata must never cost the photo
+      f.faces = null;
+      f.faceScores = null;
+      f.faceSource = "";
+    }
     Rational[] neutral = result.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT);
     if (neutral != null && neutral.length == 3)
       f.neutral =
@@ -172,6 +182,44 @@ final class RawSupport {
     return f;
   }
 
+  /**
+   * Faces the camera's detector reported for this frame (active-array rectangles), mapped to RAW
+   * pixels for face exposure. Nothing is set when there are none.
+   */
+  static void faces(RawFrame f, CameraCharacteristics chars, CaptureResult result) {
+    Face[] faces = result.get(CaptureResult.STATISTICS_FACES);
+    Rect active = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+    if (faces == null || faces.length == 0 || active == null) return;
+    Rect pre = chars.get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE);
+    Size pixels = chars.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE);
+    int w = f.width, h = f.height, offsetX = 0, offsetY = 0;
+    boolean scaled = false;
+    if (pixels != null && pixels.getWidth() == w && pixels.getHeight() == h) {
+      offsetX = active.left;
+      offsetY = active.top;
+    } else if (pre != null && pre.width() == w && pre.height() == h) {
+      offsetX = active.left - pre.left;
+      offsetY = active.top - pre.top;
+    } else if (active.width() != w || active.height() != h) scaled = true;
+    int[] rects = new int[4 * faces.length], scores = new int[faces.length];
+    int n = 0;
+    for (Face face : faces) {
+      if (face == null || face.getBounds() == null) continue;
+      Rect r = face.getBounds();
+      int[] mapped =
+          Faces.activeToRaw(
+              r.left, r.top, r.right, r.bottom, active.width(), active.height(), offsetX, offsetY,
+              scaled, w, h);
+      if (mapped == null) continue;
+      System.arraycopy(mapped, 0, rects, 4 * n, 4);
+      scores[n++] = face.getScore();
+    }
+    if (n == 0) return;
+    f.faces = Arrays.copyOf(rects, 4 * n);
+    f.faceScores = Arrays.copyOf(scores, n);
+    f.faceSource = "camera face detection";
+  }
+
   /** Summary of the frame's calibration for the photo receipt. */
   static JSONObject describe(RawFrame f, CaptureResult result) {
     JSONObject o = new JSONObject();
@@ -192,6 +240,9 @@ final class RawSupport {
               : f.shadingColumns + "x" + f.shadingRows + " over " + f.shadingWidth + "x" + f.shadingHeight
                   + "+" + f.shadingLeft + "+" + f.shadingTop);
       o.put("iso", f.iso).put("exposureNs", f.exposureNs);
+      Integer faceMode = result.get(CaptureResult.STATISTICS_FACE_DETECT_MODE);
+      if (faceMode != null) o.put("faceDetectMode", faceMode);
+      o.put("cameraFaces", f.faces == null ? 0 : f.faces.length / 4);
       Integer boost = result.get(CaptureResult.CONTROL_POST_RAW_SENSITIVITY_BOOST);
       if (boost != null) o.put("postRawSensitivityBoost", boost);
       Pair<Double, Double>[] noise = result.get(CaptureResult.SENSOR_NOISE_PROFILE);

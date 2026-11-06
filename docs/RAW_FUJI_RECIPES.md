@@ -1,4 +1,4 @@
-# Fujifilm recipes from RAW (v0.3.3, engine `grain-raw-3`)
+# Fujifilm recipes from RAW (v0.3.4, engine `grain-raw-4`)
 
 Grain's Fujifilm recipes are developed from the phone's sensor RAW. They are not filters on the
 phone's finished JPEG. v0.3.2 has eight published recipes (Reggie's Portra and Reggie's Superia,
@@ -7,7 +7,8 @@ the **Development** setting: Reggie's Portra develops like Grain's first version
 every other film stays on Clean (see [Development](#development-first-version-and-clean-v031)).
 v0.3.2 adds **Reggie's Superia**, which starts on First version like his Portra. v0.3.3 rebuilds
 **Color Chrome FX Blue** from Fujifilm's own camera JPEGs, for every film and both developments
-(see [FX Blue](#color-chrome-fx-blue-v033)).
+(see [FX Blue](#color-chrome-fx-blue-v033)). v0.3.4 adds **Face exposure**: like Fujifilm's face
+detection, a face sets the exposure (see [Face exposure](#face-exposure-v034)).
 
 ## Published recipes (v0.3.0, Reggie's Superia v0.3.2)
 
@@ -163,6 +164,63 @@ step deeper (Fuji X Weekly). With FX Blue Off every film develops bit-identicall
 phone test DNG (indoor), Classic Neg. is bit-identical, Reggie's Superia changes 0.9 % of the pixels
 and Reggie's Portra 1.1 %, all of them blue.
 
+## Face exposure (v0.3.4)
+
+Fujifilm's manuals: "Intelligent Face Detection sets focus and exposure for human faces anywhere in
+the frame … If there is more than one face in the frame, the camera will select the face closest to
+the center." Grain's scene metering (a centre-weighted log-average placed at 0.148, fitted on
+Fujifilm JPEGs) does not know where the subject is. With a window or a bright wall behind someone,
+the average is pulled up and the face comes out 2–3 stops too dark. The first backlit test photo
+(Reggie's Portra, +0.9 EV) shows it:
+- the meter took the picture down 1.16 EV, so the net development gain was −0.26 EV;
+- the skin rendered 4.8 EV darker than the wall behind it (the phone camera's HDR photo: 0.9 EV).
+
+**Face exposure** (Settings → Fujifilm recipes, on by default) meters the face instead.
+
+**Finding the face**
+- The camera's own face detector (`STATISTICS_FACE_DETECT_MODE`, requested for RAW films in the
+  preview and the RAW capture) reports rectangles and confidences for the RAW frame. They are
+  mapped from active-array coordinates to RAW pixels (`develop/Faces`).
+- If it reports no usable face, Grain looks for frontal faces in the phone's reference JPEG of the
+  same exposure (`android.media.FaceDetector`, quarter size, turned upright).
+- The metered face: confidence ≥ 50 (Camera2's recommendation), at least 2.5 % of the frame's
+  short side, and closest to the centre, as on a Fujifilm.
+
+**Metering it**
+- Level: the 65th percentile of the scene-linear luminance in the face's inner box (20–80 % of its
+  width, 15–75 % of its height). That measures skin rather than hair, beard, eyes or background.
+- Target: that level is placed at `FACE_KEY` = 0.148 × 2^0.5, half a stop above the scene key.
+  This is Grain's choice: Fujifilm publishes no face target. It renders medium skin about as bright
+  as phone cameras do, and keeps brown skin close to natural.
+- Limits: the correction relative to the scene metering is limited to +3 / −1.5 EV. The user's EV
+  is added on top, so with face exposure 0 EV is the place to start.
+
+**The rest of the development is unchanged**
+- DR-Auto still picks DR200 when more than 1 % of the unclipped picture would render white.
+- A bright background may blow out. That is the Fujifilm behaviour: the face, not the window, sets
+  the exposure. There is no local tone mapping; the phone camera's multi-frame HDR is what keeps
+  both the face and the window.
+- Without a usable face, or with Face exposure off, every photo develops exactly as in v0.3.3
+  (checked bit for bit on the golden frames).
+
+**Noise.** Lifting a backlit face by 2–3 EV in development brings up the sensor noise of the
+capture's ISO. The capture exposure is still the phone's AE, which may weight faces itself once
+face detection is on. If receipts show backlit faces captured far too dark, the next step is
+capture-side face AE (`CONTROL_AE_REGIONS` on the face).
+
+**Receipts**
+- `requested.faceDetectMode`; `rawFrame.faceDetectMode` and `rawFrame.cameraFaces`.
+- In `development`:
+  - `faceExposure`: *Off*, *On: no face found*, *On: no usable face* or *On: face metered*;
+  - `faceSource`, `faceRect` (RAW pixels) and `faceScore`;
+  - `faceMeter`, `faceKey` and `faceExposureEv` (`faceExposureWanted` when limited);
+  - `faceSearch`, when the phone JPEG was searched.
+
+Synthetic check: a backlit portrait with the test photo's skin colour, the face 2.6 EV under the
+walls, developed as Reggie's Portra.
+- As shot (+0.9 EV, no face exposure): skin Y 0.022, matching the real photo's 0.023.
+- With face exposure at 0 EV: correction +2.77 EV, skin Y 0.20, near the phone camera's 0.27.
+
 ## White balance (v0.3.0)
 
 **Auto** develops with the phone's as-shot white, exactly as before (bit-identical). A **fixed** mode
@@ -270,7 +328,8 @@ the simulations differ; photos are always developed from RAW.
 1. **Capture** (`GrainCamera`, `RawSupport`): Camera2 `RAW_SENSOR` and the phone's JPEG come from the
    same exposure, paired by sensor timestamp. AE runs normally, with headroom for DR-Auto
    (−1/3 EV; DR200 and DR-P Weak −1, DR400 and DR-P Strong −2). Auto-WB films request auto white
-   balance; fixed-WB films the nearest Camera2 preset. The lens-shading map is requested. The capture records black and
+   balance; fixed-WB films the nearest Camera2 preset. The lens-shading map is requested, and with
+   Face exposure on, the camera's face detector (v0.3.4). The capture records black and
    white levels (dynamic if reported), the as-shot neutral, colour/forward/calibration matrices,
    illuminants, ISO, exposure and the noise profile. The DNG is written with `DngCreator`.
 2. **Sensor to scene** (`develop/RawDeveloper`, `ColorMath`):
@@ -281,7 +340,8 @@ the simulations differ; photos are always developed from RAW.
      Bradford adaptation, interpolated between the two illuminants by CCT;
    - linear Rec.2020 / D65, which is how F-Gamut is treated here.
 3. **Exposure**: a centre-weighted log-average is mapped to the key measured on public Fujifilm
-   JPEGs (0.148). The user's EV is applied here.
+   JPEGs (0.148). With a face, face exposure moves it so the face sits half a stop above that key
+   (v0.3.4, see [Face exposure](#face-exposure-v034)). The user's EV is applied here.
 4. **Tone** (`develop/ToneModel`):
    - F-Log2 encoding (data sheet v1.1), plus stills offsets fitted on public RAF/JPEG pairs: a short
      highlight shoulder, a small shadow lift, and Highlight/Shadow/DR modifiers;
@@ -407,6 +467,10 @@ must be re-measured with the receipt's `timingMs`.
 - (v0.3.3) A blue sky with Reggie's Superia (FX Blue Strong), and the same sky with FX Blue Off:
   the sky should be clearly deeper, like with a polarizer. The DNG and receipt also show whether
   the phone's white balance or a bright sky exposure makes the sky paler than on a Fujifilm.
+- (v0.3.4) A backlit portrait (window behind) at 0 EV with Face exposure on, and the same shot with
+  it off. The face should come out bright and the window may blow out. The receipt shows whether
+  the camera's face detector found the face (`faceSource`), the EV applied (`faceExposureEv`) and
+  the capture ISO, i.e. how much noise the lift brings up.
 
 Desktop harness: `tools/DevelopRaw.java` develops a raw Bayer dump with any `.cube` file. No Android
 is needed. `-Drecipe=<key>` picks a published recipe (e.g. `kodak-gold-200`, `vibrant-arizona`, `reggies-superia`) or
@@ -414,3 +478,5 @@ is needed. `-Drecipe=<key>` picks a published recipe (e.g. `kodak-gold-200`, `vi
 `-Dhalation`, `-Dbloom`, `-Dclarity`, `-Ddevelopment=CLEAN|FIRST_VERSION`, `-Dsharpness` and
 `-DhighIsoNr` override single settings; `-Dgrain=true`, `-Dseed`, `-Dthreads` and `-Dev` set the
 development options (`-Dnr` / `-Dsharpen` scale Clean's luma NR and sharpening, for tests).
+`-Dface=left,top,right,bottom` (RAW pixels, e.g. a receipt's `faceRect`; several separated by `;`)
+replays face exposure, and `-DfaceExposure=false` ignores the faces.
