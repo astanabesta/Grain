@@ -110,8 +110,10 @@ public final class MainActivity extends ComponentActivity
   private String ratio = "3:4";
   private double zoom = 1;
   private float ev = 0;
-  /** The AF area mode index; see AF_AREAS. */
-  private int afArea;
+  /** The AF area mode, a {@link GrainCamera} AF_* constant; see AF_AREA_NAMES. */
+  private int afArea = GrainCamera.AF_SINGLE;
+  /** The AF area modes this phone can really do, in menu order. See {@link #ready}. */
+  private final List<Integer> afAreas = new ArrayList<>();
   private boolean grid,
       keepFull = true,
       faceExposure = true,
@@ -1420,6 +1422,25 @@ public final class MainActivity extends ComponentActivity
   @Override
   public void ready(JSONObject caps, int w, int h) {
     capabilities = caps;
+    // The AF area modes are not all available on every phone. MULTI is a grid, so it is only real
+    // when the HAL accepts a full 3x3 set of AF regions (CONTROL_MAX_REGIONS_AF); on this Redmi that
+    // number is 1, and the honest menu leaves MULTI out rather than offering a control that quietly
+    // does the same thing as CENTER. FACE needs the HAL to run face detection at all.
+    afAreas.clear();
+    afAreas.add(GrainCamera.AF_SINGLE);
+    org.json.JSONObject focus = caps.optJSONObject("focus");
+    if (focus != null) {
+      if (focus.optInt("maxRegionsAf", 1) >= 9) afAreas.add(GrainCamera.AF_MULTI);
+      afAreas.add(GrainCamera.AF_ZONE);
+      afAreas.add(GrainCamera.AF_CENTER);
+      org.json.JSONArray faceModes = focus.optJSONArray("faceDetectModes");
+      if (faceModes != null) {
+        boolean detects = false;
+        for (int i = 0; i < faceModes.length(); i++) if (faceModes.optInt(i) > 0) detects = true;
+        if (detects) afAreas.add(GrainCamera.AF_FACE);
+      }
+    }
+    if (!afAreas.contains(afArea)) afArea = afAreas.get(0);
     sourceWidth = w;
     sourceHeight = h;
     ready = true;
@@ -2046,7 +2067,7 @@ public final class MainActivity extends ComponentActivity
     larger = preferences.getBoolean("larger", false);
     faceExposure = preferences.getBoolean("faceExposure", true);
     faceLandmarks = preferences.getBoolean("faceLandmarks", false);
-    afArea = Math.max(0, Math.min(AF_AREAS.length - 1, preferences.getInt("afArea", 0)));
+    afArea = Math.max(0, Math.min(4, preferences.getInt("afArea", GrainCamera.AF_SINGLE)));
     afLock = preferences.getBoolean("afLock", false);
     timerSeconds = preferences.getInt("timer", 0);
     if (timerSeconds != 3 && timerSeconds != 5) timerSeconds = 0;
@@ -3266,8 +3287,8 @@ public final class MainActivity extends ComponentActivity
   // ───────────────────────────── MENU ─────────────────────────────
 
   private static final String[] MENU_TABS = {"I.Q.", "AF", "SHOOT", "SET UP"};
-  /** The AF area modes, in menu order; the index is the GrainCamera AF_* constant. */
-  private static final String[] AF_AREAS = {"SINGLE", "MULTI", "ZONE", "CENTER", "FACE"};
+  /** The AF area modes by name, matching the GrainCamera AF_* constants. */
+  private static final String[] AF_AREA_NAMES = {"SINGLE", "MULTI", "ZONE", "CENTER", "FACE"};
   private static final String[] MENU_TITLES = {"IMAGE QUALITY", "AF / FACE", "SHOOTING", "SET UP"};
 
   private static final class Item {
@@ -3329,9 +3350,11 @@ public final class MainActivity extends ComponentActivity
         items.add(
             new Item(
                 "AF AREA",
-                () -> AF_AREAS[afArea],
+                () -> AF_AREA_NAMES[Math.max(0, afAreas.indexOf(afArea))],
                 d -> {
-                  afArea = (afArea + (d < 0 ? AF_AREAS.length - 1 : 1)) % AF_AREAS.length;
+                  int next = afAreas.indexOf(afArea);
+                  next = (next + (d < 0 ? afAreas.size() - 1 : 1)) % afAreas.size();
+                  afArea = afAreas.get(next);
                   camera.setAfArea(afArea);
                   camera.update(snapshot());
                   savePrefs();
