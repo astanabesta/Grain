@@ -174,6 +174,7 @@ public final class GrainCamera {
   private volatile File dngDirectory;
   /** Face exposure: the camera's face detector runs for RAW films so development can meter faces. */
   private volatile boolean faceDetection = true;
+  private volatile boolean faceLandmarks;
   /** AE-L: the preview's auto exposure holds its values; stills keep them (plus the film's headroom). */
   private volatile boolean aeLock;
   /** Until then stills keep the lens where a focus request put it (half-pressed shutter, tap). */
@@ -440,6 +441,7 @@ public final class GrainCamera {
               session = s;
               try {
                 repeat();
+                probeFaceLandmarks();
                 main.post(
                     () -> {
                       if (!closed && token == generation) {
@@ -757,12 +759,20 @@ public final class GrainCamera {
       return;
     }
     int[] modes = chars.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_FACE_DETECT_MODES);
+    // Eye AF and the focus probe need the landmarks, and only FULL provides them; SIMPLE is the
+    // faster default for face exposure.
     int mode =
-        contains(modes, CaptureRequest.STATISTICS_FACE_DETECT_MODE_SIMPLE)
-            ? CaptureRequest.STATISTICS_FACE_DETECT_MODE_SIMPLE
-            : contains(modes, CaptureRequest.STATISTICS_FACE_DETECT_MODE_FULL)
+        faceLandmarks
+            ? (contains(modes, CaptureRequest.STATISTICS_FACE_DETECT_MODE_FULL)
                 ? CaptureRequest.STATISTICS_FACE_DETECT_MODE_FULL
-                : CaptureRequest.STATISTICS_FACE_DETECT_MODE_OFF;
+                : contains(modes, CaptureRequest.STATISTICS_FACE_DETECT_MODE_SIMPLE)
+                    ? CaptureRequest.STATISTICS_FACE_DETECT_MODE_SIMPLE
+                    : CaptureRequest.STATISTICS_FACE_DETECT_MODE_OFF)
+            : (contains(modes, CaptureRequest.STATISTICS_FACE_DETECT_MODE_SIMPLE)
+                ? CaptureRequest.STATISTICS_FACE_DETECT_MODE_SIMPLE
+                : contains(modes, CaptureRequest.STATISTICS_FACE_DETECT_MODE_FULL)
+                    ? CaptureRequest.STATISTICS_FACE_DETECT_MODE_FULL
+                    : CaptureRequest.STATISTICS_FACE_DETECT_MODE_OFF);
     if (mode == CaptureRequest.STATISTICS_FACE_DETECT_MODE_OFF
         || !requestKeys.contains(CaptureRequest.STATISTICS_FACE_DETECT_MODE)) {
       applied.put("faceDetectMode", "unavailable (faces are searched in the phone JPEG)");
@@ -774,6 +784,15 @@ public final class GrainCamera {
   /** Face exposure on or off; call {@link #update} afterwards so the preview follows. */
   public void setFaceDetection(boolean on) {
     faceDetection = on;
+  }
+
+  /**
+   * FULL face detection (face ids and eye / mouth landmarks) instead of SIMPLE. Off by default:
+   * SIMPLE is faster and face exposure does not need the landmarks. Needed for the focus probe and
+   * for eye AF; the receipt reports which mode was used and whether landmarks arrived.
+   */
+  public void setFaceLandmarks(boolean on) {
+    faceLandmarks = on;
   }
 
   private <T> boolean set(CaptureRequest.Builder b, CaptureRequest.Key<T> key, T value) {
@@ -1094,6 +1113,61 @@ public final class GrainCamera {
     return (sensorRotation + (front ? degrees : -degrees) + 360) % 360;
   }
 
+  /**
+   * Live part of the focus probe (v0.5.0 plan, step 0): one capture with FULL face detection, to
+   * see whether this HAL accepts FULL and returns {@code STATISTICS_FACES} at all. With no face in
+   * the frame it reports the empty result; whether the optional eye / mouth / id fields are actually
+   * filled needs a face in frame, and that is reported per photo instead (see RawSupport.faces).
+   * The outcome lands in {@code capabilities.focus.live}, shown in the Camera diagnostics panel.
+   * A rejected probe must never disturb the preview.
+   */
+  private void probeFaceLandmarks() {
+    if (session == null || inFlight || device == null || chars == null) return;
+    int[] modes = chars.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_FACE_DETECT_MODES);
+    if (modes == null || !contains(modes, CaptureRequest.STATISTICS_FACE_DETECT_MODE_FULL)) return;
+    if (!requestKeys.contains(CaptureRequest.STATISTICS_FACE_DETECT_MODE)) return;
+    try {
+      CaptureRequest.Builder b = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+      b.addTarget(previewSurface);
+      set(b, CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF);
+      set(b, CaptureRequest.STATISTICS_FACE_DETECT_MODE, CaptureRequest.STATISTICS_FACE_DETECT_MODE_FULL);
+      session.capture(
+          b.build(),
+          new CameraCaptureSession.CaptureCallback() {
+            @Override
+            public void onCaptureCompleted(
+                CameraCaptureSession s, CaptureRequest request, TotalCaptureResult result) {
+              try {
+                Face[] faces = result.get(CaptureResult.STATISTICS_FACES);
+                JSONObject o = new JSONObject();
+                if (faces == null) {
+                  o.put("faces", "key absent from the result");
+                } else {
+                  o.put("faces", faces.length);
+                  int eyes = 0, ids = 0, mouths = 0;
+                  for (Face f : faces) {
+                    if (f == null) continue;
+                    if (f.getLeftEyePosition() != null && f.getRightEyePosition() != null) eyes++;
+                    if (f.getId() != Face.ID_UNSUPPORTED) ids++;
+                    if (f.getMouthPosition() != null) mouths++;
+                  }
+                  o.put("eyeLandmarks", eyes).put("ids", ids).put("mouthLandmarks", mouths);
+                  if (faces.length == 0) o.put("note", "no face in frame at probe time");
+                }
+                JSONObject focus = capabilities.optJSONObject("focus");
+                if (focus == null) focus = new JSONObject();
+                focus.put("live", o);
+                capabilities.put("focus", focus);
+              } catch (Exception ignored) {
+                // Keep whatever the diagnostics panel already shows.
+              }
+            }
+          },
+          handler);
+    } catch (Exception ignored) {
+    }
+  }
+
   private void buildCapabilities(StreamConfigurationMap streams) throws Exception {
     JSONArray outputs = new JSONArray();
     for (Size s : streams.getOutputSizes(ImageFormat.JPEG))
@@ -1133,6 +1207,36 @@ public final class GrainCamera {
             chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES),
             CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR);
     capabilities.put("manualSensor", manualSensor);
+    // Focus probe (v0.5.0 plan, step 0): what this HAL exposes for the AF area modes, eye AF and
+    // manual focus. Static facts here; the live part (whether FULL face detection actually fills
+    // the optional eye/mouth/id fields) is probeFaceLandmarks(), and the receipt reports landmark
+    // presence per photo.
+    JSONObject focus = new JSONObject();
+    focus.put("afModes", ints(chars.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)));
+    put(focus, "maxRegionsAf", chars.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF));
+    put(focus, "maxRegionsAe", chars.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AE));
+    focus.put(
+        "faceDetectModes",
+        ints(chars.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_FACE_DETECT_MODES)));
+    put(focus, "maxFaces", chars.get(CameraCharacteristics.STATISTICS_INFO_MAX_FACE_COUNT));
+    put(focus, "minFocusDistance", chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE));
+    JSONArray focusKeys = new JSONArray();
+    for (CaptureRequest.Key<?> k :
+        new CaptureRequest.Key<?>[] {
+          CaptureRequest.CONTROL_AF_REGIONS,
+          CaptureRequest.CONTROL_AE_REGIONS,
+          CaptureRequest.LENS_FOCUS_DISTANCE,
+          CaptureRequest.STATISTICS_FACE_DETECT_MODE,
+          CaptureRequest.CONTROL_AF_TRIGGER})
+      if (requestKeys.contains(k)) focusKeys.put(k.getName());
+    focus.put("requestKeys", focusKeys);
+    JSONArray faceResultKeys = new JSONArray();
+    for (CaptureResult.Key<?> k :
+        new CaptureResult.Key<?>[] {CaptureResult.STATISTICS_FACES})
+      if (chars.getAvailableCaptureResultKeys().contains(k)) faceResultKeys.put(k.getName());
+    focus.put("resultKeys", faceResultKeys);
+    focus.put("manualSensor", manualSensor);
+    capabilities.put("focus", focus);
     Range<Long> times = chars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
     if (times != null)
       capabilities.put(

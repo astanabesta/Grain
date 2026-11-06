@@ -35,6 +35,13 @@ public final class RawFrame {
   public int[] faces, faceScores;
   /** Where {@link #faces} came from, for the receipt ("" when none). */
   public String faceSource = "";
+  /**
+   * How many of the camera's detected faces carried the optional landmark fields (v0.5.0 focus
+   * probe): {@link #faceEyes} = both eye positions, {@link #faceIds} = a tracker id,
+   * {@link #faceMouths} = a mouth position. Zero when the faces came from the phone JPEG's
+   * FaceDetector instead of the camera's statistics.
+   */
+  public int faceEyes, faceIds, faceMouths;
 
   public RawFrame(short[] data, int width, int height, int rowStride) {
     if (width < 8 || height < 8 || (width & 1) != 0 || (height & 1) != 0)
