@@ -443,11 +443,11 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
   }
 
   /**
-   * Plain Fujifilm film simulations appear once their LUT is imported; the ISP looks and the
-   * published recipes always show (a recipe without its LUT explains how to get it).
+   * Plain Fujifilm film simulations appear once their LUT is imported; the ISP looks, the
+   * published recipes and Sony s709 always show (a film without its LUT explains how to get it).
    */
   private boolean visible(Recipe f) {
-    return !f.standard || (luts != null && luts.has(f.fuji.filmSimulation));
+    return !f.standard || f.fuji.sony() || (luts != null && luts.has(f.fuji.filmSimulation));
   }
 
   private void buildFilmRow() {
@@ -493,7 +493,10 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
       if (ready && !camera.rawAvailable())
         message("RAW isn’t available here: " + camera.rawUnavailableReason());
       else if (!luts.has(r.fuji.filmSimulation))
-        message("Import Fujifilm’s LUT pack to use " + r.name + " (Tune → Import)");
+        message(
+            r.fuji.sony()
+                ? "Import Sony’s free s709 LUT to use " + r.name + " (Tune → Import)"
+                : "Import Fujifilm’s LUT pack to use " + r.name + " (Tune → Import)");
       else if (!r.fuji.exposureNote.isEmpty())
         message(
             r.name + " · the recipe is usually shot at " + r.fuji.exposureNote
@@ -769,7 +772,8 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
       if (lutPreview) {
         if (cachedPreview == null) previewThroughLut(art, f.fuji.filmSimulation, artwork);
         art.setContentDescription(
-            "Reference picture through Fujifilm’s " + f.fuji.filmLabel + " LUT; approximate");
+            "Reference picture through " + (f.fuji.sony() ? "Sony’s " : "Fujifilm’s ") + f.fuji.filmLabel
+                + " LUT; approximate");
       } else {
         float[][] artGrades = {
           {1.03f, 1, .93f}, {.92f, 1.02f, 1.06f}, {1.1f, 1.01f, .84f}, {.74f, .8f, .88f},
@@ -806,7 +810,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
       tile.addView(title, new LinearLayout.LayoutParams(-1, dp(29)));
       TextView iso =
           text(
-              f.standard ? "FILM SIMULATION" : f.raw ? "RAW · RECIPE" : "ISP LOOK",
+              f.standard ? f.fuji.sony() ? "SONY LOOK" : "FILM SIMULATION" : f.raw ? "RAW · RECIPE" : "ISP LOOK",
               8,
               f.raw ? ORANGE : MUTED);
       iso.setTypeface(Typeface.MONOSPACE);
@@ -840,7 +844,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
             }));
     TextView artNote =
         text(
-            "Fujifilm tiles: a reference picture through each official LUT (approximate). Your"
+            "Film tiles: a reference picture through each official LUT (approximate). Your"
                 + " photos are developed from RAW.",
             8,
             MUTED);
@@ -865,7 +869,9 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
                 updateLabels();
                 message(
                     (wasTuned ? "Back to " : "Already at ")
-                        + (current.standard ? "Fujifilm’s standard settings" : "the published recipe"));
+                        + (current.fuji.sony()
+                            ? "plain s709"
+                            : current.standard ? "Fujifilm’s standard settings" : "the published recipe"));
                 return;
               }
               strengths[recipe] = 80;
@@ -936,13 +942,16 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     if (!r.raw) return;
     boolean hasLut = luts.has(r.fuji.filmSimulation);
     boolean hasRaw = !ready || camera.rawAvailable();
+    boolean sony = r.fuji.sony();
     TextView state =
         text(
             !hasRaw
                 ? "RAW unavailable: " + camera.rawUnavailableReason()
                 : hasLut
-                    ? "Fujifilm " + r.fuji.filmLabel + " LUT ready · " + luts.summary()
-                    : "Needs Fujifilm’s free official LUT pack (" + r.fuji.filmLabel + " inside)",
+                    ? (sony ? "Sony " : "Fujifilm ") + r.fuji.filmLabel + " LUT ready · " + luts.summary()
+                    : sony
+                        ? "Needs Sony’s free official s709 LUT (s709Cubes.zip, about 0.5 MB)"
+                        : "Needs Fujifilm’s free official LUT pack (" + r.fuji.filmLabel + " inside)",
             10,
             hasLut && hasRaw ? INK : ORANGE);
     state.setGravity(Gravity.START);
@@ -951,7 +960,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     actions.setPadding(0, dp(8), 0, dp(8));
     TextView importButton =
         button(
-            hasLut ? "Re-import pack" : "Import LUT pack",
+            hasLut ? "Re-import" : sony ? "Import s709 zip" : "Import LUT pack",
             10,
             PAPER,
             () -> pickLuts(() -> fillRecipePanel(panel, r, dialog)));
@@ -959,7 +968,10 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     actions.addView(importButton, new LinearLayout.LayoutParams(0, dp(36), 1));
     View gap = new View(this);
     actions.addView(gap, size(8, 1));
-    TextView get = button("Download from Fujifilm ↗", 10, INK, this::openLutDownload);
+    TextView get =
+        sony
+            ? button("Download from Sony ↗", 10, INK, this::openSonyDownload)
+            : button("Download from Fujifilm ↗", 10, INK, this::openLutDownload);
     get.setBackground(bg(PAPER, 25, LINE, 1));
     actions.addView(get, new LinearLayout.LayoutParams(0, dp(36), 1));
     panel.addView(actions);
@@ -981,7 +993,9 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
           badge.setText(
               isTuned
                   ? "TUNED · ORANGE = CHANGED"
-                  : r.standard ? "DEFAULT · FUJIFILM STANDARD" : "DEFAULT · PUBLISHED RECIPE");
+                  : sony
+                      ? "DEFAULT · SONY S709"
+                      : r.standard ? "DEFAULT · FUJIFILM STANDARD" : "DEFAULT · PUBLISHED RECIPE");
           badge.setTextColor(isTuned ? ORANGE : MUTED);
         };
     showBadge.run();
@@ -997,10 +1011,21 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
           // the viewfinder follows a fixed white balance with the nearest Camera2 preset
           if (r.id == recipe && camera != null) camera.update(snapshot());
         };
-    fixedSetting(panel, "Film simulation", r.fuji.filmLabel);
+    if (sony) fixedSetting(panel, "Look", "Sony s709");
+    else fixedSetting(panel, "Film simulation", r.fuji.filmLabel);
     for (TuningControl setting : TuningControl.fujifilm(r.fuji))
       rows.add(stepper(panel, setting, work, defaults, changed));
-    TextView extrasTitle = text("GRAIN EXTRAS · NOT FUJIFILM SETTINGS", 9, MUTED);
+    if (sony) {
+      TextView sonyNote =
+          paragraph(
+              "s709 is a cinema look with no stills settings of its own. The settings above are"
+                  + " Grain’s, in Fujifilm’s menu units, applied around Sony’s LUT; all at 0 / Off is"
+                  + " plain s709. Fujifilm-only settings (Dynamic range, Color Chrome Effect, FX"
+                  + " Blue) aren’t offered.");
+      sonyNote.setPadding(0, dp(6), 0, 0);
+      panel.addView(sonyNote);
+    }
+    TextView extrasTitle = text(sony ? "GRAIN EXTRAS" : "GRAIN EXTRAS · NOT FUJIFILM SETTINGS", 9, MUTED);
     extrasTitle.setTypeface(Typeface.MONOSPACE);
     extrasTitle.setGravity(Gravity.START);
     extrasTitle.setPadding(0, dp(14), 0, dp(4));
@@ -1022,10 +1047,14 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     extrasNote.setPadding(0, dp(6), 0, 0);
     panel.addView(extrasNote);
     String creditText =
-        r.standard
-            ? "Default: Fujifilm " + r.fuji.filmLabel + " at standard settings (every setting"
-                + " 0 / Off, Auto white balance). LUT: Fujifilm’s official F-Log2 pack."
-            : "Default: the recipe by " + r.fuji.author + " as published — " + r.fuji.source;
+        sony
+            ? "Default: Sony s709 at standard settings (every setting 0 / Off, Auto white"
+                + " balance). LUT: Sony’s official s709, S-Log3 / S-Gamut3.Cine to Rec.709 — "
+                + r.fuji.source
+            : r.standard
+                ? "Default: Fujifilm " + r.fuji.filmLabel + " at standard settings (every setting"
+                    + " 0 / Off, Auto white balance). LUT: Fujifilm’s official F-Log2 pack."
+                : "Default: the recipe by " + r.fuji.author + " as published — " + r.fuji.source;
     if (!r.fuji.exposureNote.isEmpty())
       creditText +=
           "\nTypical exposure compensation: " + r.fuji.exposureNote
@@ -1039,14 +1068,28 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     panel.addView(credit);
     TextView note =
         paragraph(
-            "Tuning changes the developed photo; the viewfinder is the phone’s preview, with the"
-                + " nearest white-balance preset when the film uses a fixed white balance. Each"
-                + " photo is developed from the sensor RAW with Fujifilm’s LUT plus Grain’s stills"
-                + " tone model. Fixed white balances use Fujifilm’s preset white points measured"
-                + " from Fujifilm RAW files. Dynamic range and D-Range Priority, WB shift,"
-                + " Clarity, Grain, Color Chrome, FX Blue, the Acros filters and the extras are"
-                + " Grain’s approximations.");
+            sony
+                ? "Tuning changes the developed photo; the viewfinder is the phone’s preview. Each"
+                    + " photo is developed from the sensor RAW into Sony’s S-Log3 / S-Gamut3.Cine"
+                    + " (Sony’s published formulas, converted exactly for every pixel), then through"
+                    + " Sony’s s709 LUT. Grain’s choices: the average is metered to Sony’s 18 % grey,"
+                    + " and when the phone’s RAW clips below s709’s white the highlight shoulder is"
+                    + " stretched so clipped areas still reach white. The settings and extras are"
+                    + " Grain’s approximations. s709 is lower in contrast and darker than"
+                    + " Fujifilm’s stills looks, as Sony designed it."
+                : "Tuning changes the developed photo; the viewfinder is the phone’s preview, with the"
+                    + " nearest white-balance preset when the film uses a fixed white balance. Each"
+                    + " photo is developed from the sensor RAW with Fujifilm’s LUT plus Grain’s stills"
+                    + " tone model. Fixed white balances use Fujifilm’s preset white points measured"
+                    + " from Fujifilm RAW files. Dynamic range and D-Range Priority, WB shift,"
+                    + " Clarity, Grain, Color Chrome, FX Blue, the Acros filters and the extras are"
+                    + " Grain’s approximations.");
     panel.addView(note);
+  }
+
+  /** Gallery: the LUT a photo was developed with ("SONY-S709" reads as Sony s709). */
+  private static String lutLabel(String lut) {
+    return FujiRecipe.sonyLut(lut) ? "Sony s709 LUT" : lut + " LUT";
   }
 
   private void fixedSetting(LinearLayout panel, String name, String value) {
@@ -1156,6 +1199,33 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
         .show();
   }
 
+  private void openSonyDownload() {
+    new AlertDialog.Builder(this)
+        .setTitle("Sony’s official s709 LUT")
+        .setMessage(
+            "Download Sony’s free s709 LUT (s709Cubes.zip, about 0.5 MB) from Sony’s S-Log grading"
+                + " guide. Then come back, tap Import s709 zip and choose the downloaded zip. Grain"
+                + " uses its S-Log3 / S-Gamut3.Cine version and stores it only inside the app.")
+        .setPositiveButton("Download zip", (d, w) -> openUrl(LutLibrary.SONY_ZIP))
+        .setNeutralButton("Sony page", (d, w) -> openUrl(LutLibrary.SONY_PAGE))
+        .setNegativeButton("Cancel", null)
+        .show();
+  }
+
+  /** Settings: where to get each official LUT. */
+  private void chooseLutDownload() {
+    new AlertDialog.Builder(this)
+        .setTitle("Official LUTs")
+        .setItems(
+            new String[] {"Fujifilm film simulations (GFX ETERNA 55 pack)", "Sony s709 (cinema look)"},
+            (d, which) -> {
+              if (which == 0) openLutDownload();
+              else openSonyDownload();
+            })
+        .setNegativeButton("Cancel", null)
+        .show();
+  }
+
   private void openUrl(String url) {
     try {
       startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
@@ -1165,24 +1235,36 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
   }
 
   private void importLuts(Uri uri) {
-    message("Importing Fujifilm LUTs…");
+    message("Importing LUTs…");
     files.execute(
         () -> {
           try {
             LutLibrary.ImportResult result = luts.importFrom(getContentResolver(), uri, getCacheDir());
             boolean chrome = luts.has("CLASSIC-CHROME");
-            int films = 0;
-            for (String sim : result.imported) if (!FujiRecipe.isTechnical(sim)) films++;
-            int filmCount = films, technical = result.imported.size() - films;
+            boolean sonyAdded = result.imported.contains(FujiRecipe.SONY_S709_LUT);
+            int films = 0, videos = 0;
+            for (String sim : result.imported)
+              if (FujiRecipe.isTechnical(sim)) videos++;
+              else if (!FujiRecipe.sonyLut(sim)) films++;
+            int filmCount = films, technical = videos;
             runOnUiThread(
                 () -> {
                   lutPreviews.clear();
                   buildFilmRow();
                   updateLabels();
+                  String fuji =
+                      filmCount == 0
+                          ? ""
+                          : filmCount + " film simulation" + (filmCount == 1 ? "" : "s") + " added to your films"
+                              + (technical > 0 ? " (+" + technical + " video LUT" + (technical == 1 ? "" : "s") + ", not used for photos)" : "")
+                              + (chrome ? "" : " · this pack has no Classic Chrome; use GFX ETERNA 55");
                   message(
-                      filmCount + " film simulation" + (filmCount == 1 ? "" : "s") + " added to your films"
-                          + (technical > 0 ? " (+" + technical + " video LUT" + (technical == 1 ? "" : "s") + ", not used for photos)" : "")
-                          + (chrome ? "" : " · this pack has no Classic Chrome; use GFX ETERNA 55"));
+                      sonyAdded
+                          ? (fuji.isEmpty() ? "" : fuji + " · ") + "Sony s709 added to your films"
+                          : !fuji.isEmpty()
+                              ? fuji
+                              : technical + " video LUT" + (technical == 1 ? "" : "s")
+                                  + " imported; they aren’t used for photos");
                   Runnable after = afterLutImport;
                   afterLutImport = null;
                   if (after != null) after.run();
@@ -1269,13 +1351,14 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
         });
     preferenceInfo(
         body,
-        "Fujifilm LUTs",
-        "Official free pack, imported from your phone. Stays inside Grain.",
+        "Film LUTs",
+        "Official free LUTs (Fujifilm’s pack, Sony’s s709), imported from your phone. They stay"
+            + " inside Grain.",
         luts.summary());
-    TextView importLut = button("Import Fujifilm LUT pack ↗", 11, INK, () -> pickLuts(this::showSettings));
+    TextView importLut = button("Import a LUT zip ↗", 11, INK, () -> pickLuts(this::showSettings));
     importLut.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
     body.addView(importLut, new LinearLayout.LayoutParams(-1, dp(43)));
-    TextView getLut = button("Where to download it ↗", 11, MUTED, this::openLutDownload);
+    TextView getLut = button("Where to download them ↗", 11, MUTED, this::chooseLutDownload);
     getLut.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
     body.addView(getLut, new LinearLayout.LayoutParams(-1, dp(40)));
     preferenceToggle(
@@ -1339,9 +1422,9 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     note.addView(
         paragraph(
             "A real camera. ISP looks are experimental and your phone may override them. The"
-                + " Fujifilm recipe is developed from this phone’s RAW with Fujifilm’s own LUT;"
-                + " the stills tone model is fitted on public Fujifilm samples and still needs"
-                + " testing on your phone. Every photo keeps a receipt."));
+                + " Fujifilm recipes are developed from this phone’s RAW with Fujifilm’s own LUTs,"
+                + " Sony s709 with Sony’s; the stills tone model is fitted on public Fujifilm"
+                + " samples and still needs testing on your phone. Every photo keeps a receipt."));
     TextView signature = text("grain. / Made for the feeling of it.", 11, MUTED);
     signature.setTypeface(Typeface.SERIF);
     LinearLayout.LayoutParams sig = new LinearLayout.LayoutParams(-1, dp(56));
@@ -1384,7 +1467,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
     captureNow();
   }
 
-  /** Fujifilm recipes need RAW on this camera and the imported LUT; explain instead of failing. */
+  /** RAW films need RAW on this camera and the imported LUT; explain instead of failing. */
   private boolean rawRecipeReady() {
     Recipe r = Recipe.ALL[recipe];
     if (!r.raw) return true;
@@ -1400,14 +1483,19 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
       return false;
     }
     if (!luts.has(r.fuji.filmSimulation)) {
+      boolean sony = r.fuji.sony();
       new AlertDialog.Builder(this)
           .setTitle("One-time setup")
           .setMessage(
-              r.name + " uses Fujifilm’s official " + r.fuji.filmLabel + " LUT. Download Fujifilm’s"
-                  + " free LUT pack (GFX ETERNA 55, about 46 MB), then import the zip here. It stays"
-                  + " inside Grain.")
+              sony
+                  ? r.name + " uses Sony’s official s709 LUT. Download Sony’s free s709Cubes.zip"
+                      + " (about 0.5 MB), then import the zip here. It stays inside Grain."
+                  : r.name + " uses Fujifilm’s official " + r.fuji.filmLabel + " LUT. Download Fujifilm’s"
+                      + " free LUT pack (GFX ETERNA 55, about 46 MB), then import the zip here. It stays"
+                      + " inside Grain.")
           .setPositiveButton("Import zip", (d, w) -> pickLuts(null))
-          .setNeutralButton("Download", (d, w) -> openUrl(LutLibrary.RECOMMENDED_PACK))
+          .setNeutralButton(
+              "Download", (d, w) -> openUrl(sony ? LutLibrary.SONY_ZIP : LutLibrary.RECOMMENDED_PACK))
           .setNegativeButton("Cancel", null)
           .show();
       return false;
@@ -1870,7 +1958,7 @@ public final class MainActivity extends ComponentActivity implements GrainCamera
                 Locale.US,
                 photo.raw() ? "%.1f× DIGITAL CROP · DEVELOPED FROM RAW · %s" : "%.1f× DIGITAL CROP · JPEG%s",
                 photo.metadata.optDouble("digitalZoom", 1),
-                photo.raw() && r != null ? r.optString("filmSimulationLut", "") + " LUT" : "")));
+                photo.raw() && r != null ? lutLabel(r.optString("filmSimulationLut", "")) : "")));
     TextView save =
         button("Save to device gallery ↓", 13, PAPER, () -> export(photo, false, false));
     save.setBackground(bg(INK, 8, 0, 0));

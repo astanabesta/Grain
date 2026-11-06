@@ -1,4 +1,4 @@
-# Fujifilm recipes from RAW (v0.3.4, engine `grain-raw-4`)
+# Fujifilm recipes from RAW (v0.3.5, engine `grain-raw-5`)
 
 Grain's Fujifilm recipes are developed from the phone's sensor RAW. They are not filters on the
 phone's finished JPEG. v0.3.2 has eight published recipes (Reggie's Portra and Reggie's Superia,
@@ -8,7 +8,9 @@ every other film stays on Clean (see [Development](#development-first-version-an
 v0.3.2 adds **Reggie's Superia**, which starts on First version like his Portra. v0.3.3 rebuilds
 **Color Chrome FX Blue** from Fujifilm's own camera JPEGs, for every film and both developments
 (see [FX Blue](#color-chrome-fx-blue-v033)). v0.3.4 adds **Face exposure**: like Fujifilm's face
-detection, a face sets the exposure (see [Face exposure](#face-exposure-v034)).
+detection, a face sets the exposure (see [Face exposure](#face-exposure-v034)). v0.3.5 adds
+**Sony s709**, Sony's official cinema look, developed from the same RAW through Sony's S-Log3 /
+S-Gamut3.Cine (see [Sony s709](#sony-s709-v035)).
 
 ## Published recipes (v0.3.0, Reggie's Superia v0.3.2)
 
@@ -220,6 +222,67 @@ Synthetic check: a backlit portrait with the test photo's skin colour, the face 
 walls, developed as Reggie's Portra.
 - As shot (+0.9 EV, no face exposure): skin Y 0.022, matching the real photo's 0.023.
 - With face exposure at 0 EV: correction +2.77 EV, skin Y 0.20, near the phone camera's 0.27.
+
+## Sony s709 (v0.3.5)
+
+s709 is Sony's own look for its cinema cameras. Sony's LUT library: "Developed alongside VENICE and
+also applicable to FX9, s709 renders imagery in subtle colours, with smooth colour gradation and a
+softer low contrast tone curve. s709 is close to the film colour characteristics." Sony publishes it
+free as a 3-D LUT from S-Log3 to Rec.709 in its S-Log grading guide
+(https://support.d-imaging.sony.co.jp/support/ilc/movie/en/grading/02.html, `s709Cubes.zip`, about
+0.5 MB). Like the Fujifilm LUTs, the user downloads it and imports it on the phone; Grain never
+bundles or uploads it. It is a cinema look, not one of Sony's stills Creative Looks.
+
+**Pipeline**
+- The RAW development is the same as for the Fujifilm films up to scene-linear BT.2020 (D65): black
+  and white levels, lens shading, white balance, demosaic, the DNG colour matrices, metering.
+- For every pixel, the F-Log2 code is decoded to linear exactly, the colour is converted to
+  S-Gamut3.Cine and encoded with S-Log3, and the result is looked up in Sony's 33-point table
+  (`SL3SG3Ctos709.cube`, trilinear).
+  - S-Log3 is Sony's formula from its *Technical Summary for S-Gamut3.Cine/S-Log3*: 18 % grey at
+    code 420 of 1023, black at 95.
+  - The S-Gamut3.Cine matrix is built from Sony's published primaries. It equals Sony's published
+    matrix to 1e-9.
+- Sony's table is stored exactly as published. The conversion runs per sample (`CubeLut.Input`,
+  `SLog3`); it is not folded into a new table.
+  - Folding s709 into an F-Log2 table was tested on 400 000 colours: the maximum error was 59, 49
+    and 42 code values (of 255) at 33, 49 and 65 points, on saturated colours.
+  - The exact per-sample conversion is within 2×10⁻⁵ of an S-Log3 code (unit test).
+- `SL3SG3tos709.cube` (S-Gamut3) is accepted too. When a zip has both, Grain uses S-Gamut3.Cine.
+
+**What is Sony's and what is Grain's**
+- Sony's: the s709 LUT, the S-Log3 curve, the S-Gamut3.Cine primaries, and 18 % grey as the
+  exposure reference.
+- Grain's choices, not Sony measurements:
+  - Exposure: the scene's log-average is placed at `SONY_KEY` = 0.18, Sony's 18 % grey, instead of
+    the 0.148 fitted on Fujifilm JPEGs. Face exposure keeps the face half a stop above that.
+  - Highlights: s709 reaches white about 5.75 EV above 18 % grey; the phone's RAW usually clips
+    2–3.5 EV above it. Clipped areas would stay light grey (s709 renders +3 EV at 0.85). So the same
+    shoulder rule as the Fujifilm films stretches the tone above +1 EV, until the RAW clip point
+    reaches s709's white.
+  - Capture: RAW is taken 1/3 EV under, like DR-Auto, for highlight room.
+- Not applied to s709: Grain's fitted Fujifilm stills offsets, Dynamic range, D-Range Priority,
+  Color Chrome Effect and FX Blue. They are Fujifilm settings and are fixed off for it.
+- Grain's controls in Fujifilm's menu units, around Sony's LUT: white balance and WB shift,
+  Highlight, Shadow, Color, Sharpness, High ISO NR, Clarity, Grain, and the extras (Development,
+  Halation, Bloom). At their standard 0 / Off / Auto the photo is plain s709 on the developed RAW.
+
+**How s709 renders grey** (Sony's table, neutral, output code 0–1):
+
+| EV from 18 % grey | −4 | −3 | −2 | −1 | 0 | +1 | +2 | +3 | +4 | +5 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| s709 | .075 | .116 | .186 | .298 | .437 | .578 | .719 | .846 | .930 | .972 |
+
+18 % grey lands at about 111 of 255. Grain's Fujifilm films render their key at about 131 of 255, so
+s709 photos look darker and flatter. That is Sony's design for video, meant for grading: the
+exposure control or Highlight / Shadow adjust it.
+
+**Not validated** against a Sony camera. Sony's pipeline on its own sensors is not reproduced here,
+only Sony's published look on this phone's RAW. Very saturated greens outside S-Gamut3.Cine reach the
+table at its edge, as they would in a Sony grade.
+
+**Receipts:** `lut` (Sony s709 …), `lutModel` Sony, `lutInput` S-Log3 / S-Gamut3.Cine, `meterKey`
+0.18, `dynamicRange` *Not used*, and `toneModel` (shoulder and tuning only).
 
 ## White balance (v0.3.0)
 

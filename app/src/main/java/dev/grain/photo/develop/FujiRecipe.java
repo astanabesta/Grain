@@ -5,6 +5,11 @@ package dev.grain.photo.develop;
  * applies the film simulation with Fujifilm's official F-Log2 LUT; the other settings are modelled
  * (see {@link RawDeveloper} and docs/RAW_FUJI_RECIPES.md for what is measured and what is
  * approximate).
+ *
+ * <p>The same type carries Sony's s709 look ({@link #SONY_S709}, v0.3.5): Sony's official LUT on
+ * S-Log3 / S-Gamut3.Cine. Fujifilm-only settings (Dynamic range, Color Chrome Effect, FX Blue) are
+ * fixed off for it; white balance, tone, colour, sharpness, noise reduction, clarity, grain and the
+ * Grain extras work as for any film.
  */
 public final class FujiRecipe {
   /** Dynamic Range and D-Range Priority, in the cameras' menu order. Never reorder (saved by name). */
@@ -215,7 +220,9 @@ public final class FujiRecipe {
     this.source = source;
     this.filmSimulation = filmSimulation;
     this.filmLabel = filmLabel;
-    this.dynamicRange = dynamicRange == null ? DynamicRange.AUTO : dynamicRange;
+    boolean sony = sonyLut(filmSimulation);
+    // Sony s709 has no Fujifilm dynamic range or Color Chrome settings: fixed, whatever is tuned
+    this.dynamicRange = sony ? DynamicRange.DR100 : dynamicRange == null ? DynamicRange.AUTO : dynamicRange;
     this.highlight = highlight;
     this.shadow = shadow;
     this.color = color;
@@ -224,8 +231,8 @@ public final class FujiRecipe {
     this.clarity = clarity;
     this.grainRoughness = grainRoughness;
     this.grainLarge = grainLarge;
-    this.colorChrome = colorChrome;
-    this.colorChromeBlue = colorChromeBlue;
+    this.colorChrome = sony ? 0 : colorChrome;
+    this.colorChromeBlue = sony ? 0 : colorChromeBlue;
     this.wbMode = wbMode == null ? WhiteBalance.AUTO : wbMode;
     this.kelvin = kelvin(kelvin);
     this.whiteBalance = this.wbMode == WhiteBalance.KELVIN ? this.kelvin + "K" : this.wbMode.label;
@@ -655,9 +662,56 @@ public final class FujiRecipe {
 
   /** True for the packs' technical F-Log2 to Rec.709 transforms, which are not film simulations. */
   public static boolean isTechnical(String lutName) {
+    if (sonyLut(lutName)) return false; // Sony's s709 is a look, not a technical conversion
     String n = lutName.toUpperCase(java.util.Locale.ROOT);
     return n.endsWith("709") || n.startsWith("FLOG2") || n.startsWith("F-LOG");
   }
+
+  /** LUT names Grain gives Sony's looks, so they never collide with Fujifilm's film names. */
+  public static final String SONY_PREFIX = "SONY-";
+
+  /** Sony's s709, imported from SL3SG3Ctos709.cube (S-Log3 / S-Gamut3.Cine to Rec.709). */
+  public static final String SONY_S709_LUT = "SONY-S709";
+
+  /** Sony's official download page for the s709 LUT (S-Log grading guide). */
+  public static final String SONY_S709_PAGE =
+      "https://support.d-imaging.sony.co.jp/support/ilc/movie/en/grading/02.html";
+
+  public static boolean sonyLut(String lutName) {
+    return lutName != null && lutName.toUpperCase(java.util.Locale.ROOT).startsWith(SONY_PREFIX);
+  }
+
+  /** Sony's look on S-Log3 rather than a Fujifilm film simulation. */
+  public boolean sony() {
+    return sonyLut(filmSimulation);
+  }
+
+  /**
+   * Sony's s709 at standard settings: Sony's official look for its cinema cameras ("developed
+   * alongside VENICE"), every adjustable setting 0 / Off, Auto white balance, Clean development.
+   */
+  public static final FujiRecipe SONY_S709 =
+      new FujiRecipe(
+          "sony-s709",
+          "Sony s709",
+          "Sony",
+          SONY_S709_PAGE,
+          SONY_S709_LUT,
+          "s709",
+          DynamicRange.DR100,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          false,
+          0,
+          0,
+          "Auto",
+          0,
+          0);
 
   /**
    * A film simulation on its own, at standard settings: DR-Auto, Auto white balance, every tone,
@@ -703,11 +757,14 @@ public final class FujiRecipe {
 
   /** Human-readable settings, in the order Fujifilm cameras list them. */
   public String[][] settings() {
-    boolean mono = monochrome(), drp = dynamicRange.priority();
+    boolean mono = monochrome(), drp = dynamicRange.priority(), sony = sony();
     String notForMono = " (not applied to black and white)";
     java.util.List<String[]> rows = new java.util.ArrayList<>();
-    rows.add(new String[] {"Film simulation", filmLabel + (monoFilter > 0 ? MONO_FILTERS[monoFilter] : "")});
-    rows.add(new String[] {"Dynamic range", dynamicRange.label});
+    if (sony) rows.add(new String[] {"Look", "Sony " + filmLabel + " (S-Log3 / S-Gamut3.Cine)"});
+    else {
+      rows.add(new String[] {"Film simulation", filmLabel + (monoFilter > 0 ? MONO_FILTERS[monoFilter] : "")});
+      rows.add(new String[] {"Dynamic range", dynamicRange.label});
+    }
     rows.add(new String[] {"White balance", whiteBalance + "; R " + signed(wbShiftRed) + ", B " + signed(wbShiftBlue)});
     rows.add(new String[] {"Highlight", drp ? "set by D-Range Priority" : signed(highlight)});
     rows.add(new String[] {"Shadow", drp ? "set by D-Range Priority" : signed(shadow)});
@@ -716,8 +773,10 @@ public final class FujiRecipe {
     rows.add(new String[] {"High ISO NR", signed(noiseReduction)});
     rows.add(new String[] {"Clarity", signed(clarity)});
     rows.add(new String[] {"Grain", grainRoughness == 0 ? "Off" : level(grainRoughness) + " / " + (grainLarge ? "Large" : "Small")});
-    rows.add(new String[] {"Color Chrome Effect", level(colorChrome) + (mono && colorChrome > 0 ? notForMono : "")});
-    rows.add(new String[] {"Color Chrome FX Blue", level(colorChromeBlue) + (mono && colorChromeBlue > 0 ? notForMono : "")});
+    if (!sony) {
+      rows.add(new String[] {"Color Chrome Effect", level(colorChrome) + (mono && colorChrome > 0 ? notForMono : "")});
+      rows.add(new String[] {"Color Chrome FX Blue", level(colorChromeBlue) + (mono && colorChromeBlue > 0 ? notForMono : "")});
+    }
     rows.add(new String[] {"Halation (Grain extra)", halation == 0 ? "Off" : String.valueOf(halation)});
     rows.add(new String[] {"Bloom (Grain extra)", bloom == 0 ? "Off" : String.valueOf(bloom)});
     rows.add(new String[] {"Development (Grain)",
