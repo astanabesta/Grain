@@ -114,6 +114,12 @@ public final class MainActivity extends ComponentActivity
   private int afArea = GrainCamera.AF_SINGLE;
   /** The AF area modes this phone can really do, in menu order. See {@link #ready}. */
   private final List<Integer> afAreas = new ArrayList<>();
+  /** Manual focus: the lens is driven from a distance instead of by the autofocus. */
+  private boolean mfOn;
+  /** The manual-focus step; 0 is infinity, {@link #MF_STEPS} is the lens' closest focus. */
+  private int mfStep = MF_STEPS / 2;
+  /** Peaking: the preview's edges are drawn back over it, so focus is visible. */
+  private boolean peaking;
   private boolean grid,
       keepFull = true,
       faceExposure = true,
@@ -159,6 +165,8 @@ public final class MainActivity extends ComponentActivity
     camera.setFaceLandmarks(faceLandmarks);
     camera.setAfArea(afArea);
     camera.setAfLock(afLock);
+    camera.setManualFocus(mfOn);
+    camera.setFocusFraction(mfStep / (float) MF_STEPS);
     sound = new MediaActionSound();
     sound.load(MediaActionSound.SHUTTER_CLICK);
     sound.load(MediaActionSound.FOCUS_COMPLETE);
@@ -1676,6 +1684,7 @@ public final class MainActivity extends ComponentActivity
     readBattery();
     main.removeCallbacks(histogramTask);
     main.postDelayed(histogramTask, 500);
+    if (peaking) startPeaking();
     updateThumb();
   }
 
@@ -1683,6 +1692,7 @@ public final class MainActivity extends ComponentActivity
   protected void onPause() {
     if (orientationListener != null) orientationListener.disable();
     main.removeCallbacks(histogramTask);
+    main.removeCallbacks(peakingTask);
     if (halfPressed) releaseHalf();
     neutralHeld = false;
     dismissCameraTool();
@@ -2069,6 +2079,9 @@ public final class MainActivity extends ComponentActivity
     faceLandmarks = preferences.getBoolean("faceLandmarks", false);
     afArea = Math.max(0, Math.min(4, preferences.getInt("afArea", GrainCamera.AF_SINGLE)));
     afLock = preferences.getBoolean("afLock", false);
+    mfOn = preferences.getBoolean("mfOn", false);
+    mfStep = Math.max(0, Math.min(MF_STEPS, preferences.getInt("mfStep", MF_STEPS / 2)));
+    peaking = preferences.getBoolean("peaking", false);
     timerSeconds = preferences.getInt("timer", 0);
     if (timerSeconds != 3 && timerSeconds != 5) timerSeconds = 0;
     drive = preferences.getInt("drive", timerSeconds == 3 ? 1 : timerSeconds == 5 ? 2 : 0);
@@ -2097,6 +2110,9 @@ public final class MainActivity extends ComponentActivity
             .putBoolean("faceLandmarks", faceLandmarks)
             .putInt("afArea", afArea)
             .putBoolean("afLock", afLock)
+            .putBoolean("mfOn", mfOn)
+            .putInt("mfStep", mfStep)
+            .putBoolean("peaking", peaking)
             .putBoolean("keepRawFiles", keepRawFiles)
             .putInt("timer", timerSeconds)
             .putInt("drive", drive)
@@ -2361,6 +2377,8 @@ public final class MainActivity extends ComponentActivity
   // ───────────────────────────── the camera back ─────────────────────────────
 
   private final int[] histogramBins = new int[64];
+  private Bitmap peakBitmap;
+  private int[] peakPixels, peakLuma, peakOut;
 
   private static String shutterText(long ns, boolean dial) {
     if (ns <= 0) return "";
@@ -2583,6 +2601,69 @@ public final class MainActivity extends ComponentActivity
             histogramBins[Math.min(63, luma >> 2)]++;
           }
           back.state.histogram = histogramBins;
+          back.refresh();
+        }
+      };
+
+  private void startPeaking() {
+    main.removeCallbacks(peakingTask);
+    main.post(peakingTask);
+  }
+
+  private void stopPeaking() {
+    main.removeCallbacks(peakingTask);
+    if (back != null && back.state.peak != null) {
+      back.state.peak = null;
+      back.refresh();
+    }
+  }
+
+  /**
+   * Peaking (v0.5.0 plan): a small read-back of the preview, turned into an edge map and drawn back
+   * over the picture, so you can see what is sharp. It is the manual-focus aid: with the autofocus
+   * off there is nothing else telling you where the lens actually is. Mid-tones only — pure white and
+   * pure black carry no focus information, and highlighting them would just glow.
+   */
+  private final Runnable peakingTask =
+      new Runnable() {
+        @Override
+        public void run() {
+          if (!resumed) return;
+          main.postDelayed(this, 140);
+          if (!peaking || !ready || !powerOn || back == null || !texture.isAvailable()
+              || !("camera".equals(mode)) || dispMode == 1) {
+            if (back != null && back.state.peak != null) {
+              back.state.peak = null;
+              back.refresh();
+            }
+            return;
+          }
+          if (peakBitmap == null) {
+            peakBitmap = Bitmap.createBitmap(PEAK_W, PEAK_H, Bitmap.Config.ARGB_8888);
+            peakPixels = new int[PEAK_W * PEAK_H];
+            peakLuma = new int[PEAK_W * PEAK_H];
+            peakOut = new int[PEAK_W * PEAK_H];
+          }
+          Bitmap b = texture.getBitmap(peakBitmap);
+          if (b == null) return;
+          b.getPixels(peakPixels, 0, PEAK_W, 0, 0, PEAK_W, PEAK_H);
+          for (int i = 0; i < peakPixels.length; i++) {
+            int c = peakPixels[i];
+            peakLuma[i] = (((c >> 16) & 255) * 54 + ((c >> 8) & 255) * 183 + (c & 255) * 19) >> 8;
+          }
+          for (int y = 0; y < PEAK_H; y++) {
+            int yU = Math.min(PEAK_H - 1, y + 1) * PEAK_W, yD = Math.max(0, y - 1) * PEAK_W;
+            for (int x = 0; x < PEAK_W; x++) {
+              int i = y * PEAK_W + x;
+              int dx = peakLuma[i + Math.min(PEAK_W - 1, x + 1)] - peakLuma[i + Math.max(0, x - 1)];
+              int dy = peakLuma[yU + x] - peakLuma[yD + x];
+              int l = peakLuma[i];
+              int mag = l > 24 && l < 232 ? Math.min(255, Math.abs(dx) + Math.abs(dy)) : 0;
+              peakOut[i] = (mag << 24) | 0xFFFFFF;
+            }
+          }
+          peakBitmap.setPixels(peakOut, 0, PEAK_W, 0, 0, PEAK_W, PEAK_H);
+          back.state.peak = peakBitmap;
           back.refresh();
         }
       };
@@ -3289,6 +3370,10 @@ public final class MainActivity extends ComponentActivity
   private static final String[] MENU_TABS = {"I.Q.", "AF", "SHOOT", "SET UP"};
   /** The AF area modes by name, matching the GrainCamera AF_* constants. */
   private static final String[] AF_AREA_NAMES = {"SINGLE", "MULTI", "ZONE", "CENTER", "FACE"};
+  /** Manual focus steps: one dial click moves the lens one step between infinity and its closest. */
+  private static final int MF_STEPS = 30;
+  /** The peaking read-back, kept small so measuring it does not cost the preview. */
+  private static final int PEAK_W = 160, PEAK_H = 120;
   private static final String[] MENU_TITLES = {"IMAGE QUALITY", "AF / FACE", "SHOOTING", "SET UP"};
 
   private static final class Item {
@@ -3371,6 +3456,41 @@ public final class MainActivity extends ComponentActivity
                   camera.update(snapshot());
                   savePrefs();
                   pushOsd();
+                },
+                false));
+        items.add(
+            new Item(
+                "FOCUS MODE",
+                () -> mfOn ? "MANUAL" : "AUTO",
+                d -> {
+                  mfOn = !mfOn;
+                  camera.setManualFocus(mfOn);
+                  camera.update(snapshot());
+                  savePrefs();
+                  pushOsd();
+                },
+                false));
+        items.add(
+            new Item(
+                "MF DISTANCE",
+                () -> mfOn ? (mfStep == 0 ? "INFINITY" : "STEP " + mfStep + " / " + MF_STEPS) : "AUTO",
+                d -> {
+                  if (!mfOn) return;
+                  mfStep = Math.max(0, Math.min(MF_STEPS, mfStep + (d < 0 ? -1 : 1)));
+                  camera.setFocusFraction(mfStep / (float) MF_STEPS);
+                  camera.update(snapshot());
+                  savePrefs();
+                },
+                false));
+        items.add(
+            new Item(
+                "PEAKING",
+                () -> onOff(peaking),
+                d -> {
+                  peaking = !peaking;
+                  savePrefs();
+                  if (peaking) startPeaking();
+                  else stopPeaking();
                 },
                 false));
         items.add(new Item("FOCUS POINT", () -> afX == .5f && afY == .5f ? "CENTRE" : "MOVED · RESET", d -> {
