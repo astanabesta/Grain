@@ -113,6 +113,7 @@ public final class MainActivity extends ComponentActivity
   private boolean grid,
       keepFull = true,
       faceExposure = true,
+      faceLandmarks = false,
       larger,
       front,
       busy,
@@ -150,6 +151,7 @@ public final class MainActivity extends ComponentActivity
     });
     camera = new GrainCamera(this, texture, this);
     camera.setFaceDetection(faceExposure);
+    camera.setFaceLandmarks(faceLandmarks);
     sound = new MediaActionSound();
     sound.load(MediaActionSound.SHUTTER_CLICK);
     sound.load(MediaActionSound.FOCUS_COMPLETE);
@@ -1171,6 +1173,19 @@ public final class MainActivity extends ComponentActivity
           camera.setFaceDetection(v);
           camera.update(snapshot());
         });
+    preferenceToggle(
+        body,
+        "Face landmarks (eye AF)",
+        "FULL face detection instead of SIMPLE: the camera reports each face’s id and its eye and"
+            + " mouth positions. Slower than SIMPLE. This is the focus probe and the switch eye AF will"
+            + " use; the receipt reports whether the landmarks actually arrived.",
+        faceLandmarks,
+        v -> {
+          faceLandmarks = v;
+          savePrefs();
+          camera.setFaceLandmarks(v);
+          camera.update(snapshot());
+        });
     preferenceInfo(
         body,
         "Film LUTs",
@@ -2025,6 +2040,7 @@ public final class MainActivity extends ComponentActivity
     keepFull = preferences.getBoolean("keepFull", true);
     larger = preferences.getBoolean("larger", false);
     faceExposure = preferences.getBoolean("faceExposure", true);
+    faceLandmarks = preferences.getBoolean("faceLandmarks", false);
     timerSeconds = preferences.getInt("timer", 0);
     if (timerSeconds != 3 && timerSeconds != 5) timerSeconds = 0;
     drive = preferences.getInt("drive", timerSeconds == 3 ? 1 : timerSeconds == 5 ? 2 : 0);
@@ -2050,6 +2066,7 @@ public final class MainActivity extends ComponentActivity
             .putBoolean("keepFull", keepFull)
             .putBoolean("larger", larger)
             .putBoolean("faceExposure", faceExposure)
+            .putBoolean("faceLandmarks", faceLandmarks)
             .putBoolean("keepRawFiles", keepRawFiles)
             .putInt("timer", timerSeconds)
             .putInt("drive", drive)

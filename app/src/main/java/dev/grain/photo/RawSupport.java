@@ -205,6 +205,9 @@ final class RawSupport {
     int n = 0;
     for (Face face : faces) {
       if (face == null || face.getBounds() == null) continue;
+      if (face.getLeftEyePosition() != null && face.getRightEyePosition() != null) f.faceEyes++;
+      if (face.getId() != Face.ID_UNSUPPORTED) f.faceIds++;
+      if (face.getMouthPosition() != null) f.faceMouths++;
       Rect r = face.getBounds();
       int[] mapped =
           Faces.activeToRaw(
@@ -243,6 +246,11 @@ final class RawSupport {
       Integer faceMode = result.get(CaptureResult.STATISTICS_FACE_DETECT_MODE);
       if (faceMode != null) o.put("faceDetectMode", faceMode);
       o.put("cameraFaces", f.faces == null ? 0 : f.faces.length / 4);
+      if (f.faceSource.startsWith("camera")) {
+        o.put("faceEyes", f.faceEyes).put("faceIds", f.faceIds).put("faceMouths", f.faceMouths);
+        if (f.faceEyes == 0 && f.faces != null && f.faces.length > 0)
+          o.put("faceLandmarks", "none: this HAL fills only the face rectangle");
+      }
       Integer boost = result.get(CaptureResult.CONTROL_POST_RAW_SENSITIVITY_BOOST);
       if (boost != null) o.put("postRawSensitivityBoost", boost);
       Pair<Double, Double>[] noise = result.get(CaptureResult.SENSOR_NOISE_PROFILE);
