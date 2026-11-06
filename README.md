@@ -8,6 +8,16 @@ https://github.com/user-attachments/assets/bb908564-cf9f-4cb9-adfe-f0d0ab7410e6
 
 **A separate, native Android recipe camera for your Redmi Note 13 Pro Plus.**
 
+**v0.4.0 — the Fujifilm camera back:** the screen is now the back of a Fujifilm camera: a milled top
+plate, a viewfinder window with a glass glare, a film dial, a shutter-speed dial, a command dial, a
+five-way lever, a memo holder, a power switch and a knurled shutter button, with the preview sitting
+inside the body where the film window would be. Turn the phone sideways and the whole back re-lays
+out for landscape; **EYE** switches to the EVF view. New controls: **AE-L** (lever up), a live
+**histogram** and **level**, **sounds**, a **memo holder** (tap to write a note, long-press for the
+phone's neutral view), **film-sim bracketing** (FS BKT: the current film plus the next two RAW films,
+three frames per press) and **manual shutter / ISO** from the shutter and ISO dials. The Q menu, the
+full menu and playback are the same as before. See [the camera back](docs/RAW_FUJI_RECIPES.md#the-fujifilm-camera-back-v040).
+
 **v0.3.5 — Sony s709:** Sony's own cinema look ("developed alongside VENICE … subtle colours, smooth colour gradation and a softer low contrast tone curve") as a new film. Download Sony's free `s709Cubes.zip` from Sony's S-Log grading guide and import it like the Fujifilm pack (*Tune → Import s709 zip*); Grain never bundles it. Each photo is developed from the RAW into Sony's S-Log3 / S-Gamut3.Cine with Sony's published formulas, converted exactly for every pixel, then through Sony's table. Grain's own choices: the meter places the scene at Sony's 18 % grey, and the highlight shoulder is stretched where the phone's RAW clips, so clipped areas still reach white. Fujifilm-only settings (Dynamic range, Color Chrome, FX Blue) are not offered for it; white balance, tone, Color, sharpening, noise reduction, Clarity, Grain and the extras work. The Fujifilm films develop exactly as in v0.3.4. See [Sony s709](docs/RAW_FUJI_RECIPES.md#sony-s709-v035).
 
 **v0.3.4 — Face exposure:** Fujifilm's Intelligent Face Detection "sets focus and exposure for human faces", and now a detected face sets the exposure of Grain's Fujifilm-recipe photos too. Before, Grain metered the whole frame, so a window or bright wall behind someone made the face 2–3 stops too dark. Faces come from the camera's face detector or, if it finds none, from the phone's reference JPEG. The face closest to the centre is placed half a stop above the scene key, within +3 / −1.5 EV, and the user's EV is added on top. Backlit faces come out bright and the background may blow out, as on a Fujifilm. It is on by default (Settings → Fujifilm recipes → Face exposure); off, or without a face, photos develop exactly as in v0.3.3. The EXIF Software tag now carries the real version. See [Face exposure](docs/RAW_FUJI_RECIPES.md#face-exposure-v034).
