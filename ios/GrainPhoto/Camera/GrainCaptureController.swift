@@ -176,6 +176,8 @@ public final class GrainCaptureController: NSObject, ObservableObject {
     private var hiddenVolumeView: MPVolumeView?
     private var lastVolumeFireAt: TimeInterval = 0
     private var frameCounter: Int = 0
+    // Private flag owned by sessionQueue so zoom updates never mutate videoZoomFactor mid-RAW capture
+    private var bayerCaptureInFlight: Bool = false
 
     public override init() {
         super.init()
@@ -392,9 +394,11 @@ public final class GrainCaptureController: NSObject, ObservableObject {
             guard (try? dev.lockForConfiguration()) != nil else { return }
             defer { dev.unlockForConfiguration() }
 
-            // Zoom
-            let maxZ = min(5.0, dev.activeFormat.videoMaxZoomFactor)
-            dev.videoZoomFactor = max(1.0, min(maxZ, zoom))
+            // Zoom (do not mutate videoZoomFactor while a Bayer RAW capture is in flight: AVFoundation invariant)
+            if !self.bayerCaptureInFlight {
+                let maxZ = min(5.0, dev.activeFormat.videoMaxZoomFactor)
+                dev.videoZoomFactor = max(1.0, min(maxZ, zoom))
+            }
 
             // Torch
             if dev.hasTorch {
@@ -564,6 +568,7 @@ public final class GrainCaptureController: NSObject, ObservableObject {
         let ev = effectiveEv
         let keepRaw = keepRawDng
         let flash = flashSetting
+        let reqZoom = Float(max(1.0, min(5.0, zoomFactor)))
 
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
@@ -578,13 +583,34 @@ public final class GrainCaptureController: NSObject, ObservableObject {
             let rawTypes = self.photoOutput.availableRawPhotoPixelFormatTypes
             let bayerRaw = rawTypes.first(where: { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) })
             let settings: AVCapturePhotoSettings
+            var restoreZoomAfterRaw: CGFloat? = nil
+
             if primaryFilm.isRawPipeline, let rawFormat = bayerRaw {
+                // AVFoundation Bayer RAW rules (iPhone XR / XS through iPhone 16):
+                // 1. videoZoomFactor & videoScaleAndCropFactor MUST both be 1.0 during Bayer RAW capture.
+                // 2. photoQualityPrioritization MUST be .speed (single-exposure sensor readout, no ISP fusion).
+                self.bayerCaptureInFlight = true
+                if let dev = self.videoDevice, dev.videoZoomFactor != 1.0,
+                   (try? dev.lockForConfiguration()) != nil {
+                    restoreZoomAfterRaw = dev.videoZoomFactor
+                    dev.videoZoomFactor = 1.0
+                    dev.unlockForConfiguration()
+                }
+                if let conn = self.photoOutput.connection(with: .video), conn.videoScaleAndCropFactor != 1.0 {
+                    conn.videoScaleAndCropFactor = 1.0
+                }
                 settings = AVCapturePhotoSettings(
                     rawPixelFormatType: rawFormat,
                     processedFormat: [AVVideoCodecKey: AVVideoCodecType.jpeg]
                 )
+                settings.photoQualityPrioritization = .speed
+                settings.isHighResolutionPhotoEnabled = true
             } else {
                 settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
+                settings.isHighResolutionPhotoEnabled = true
+                if #available(iOS 16.0, *) {
+                    settings.photoQualityPrioritization = .quality
+                }
             }
 
             if self.photoOutput.supportedFlashModes.contains(.on) && flash == .on {
@@ -605,7 +631,19 @@ public final class GrainCaptureController: NSObject, ObservableObject {
             ]
 
             let uid = settings.uniqueID
+            let capturedRestoreZoom = restoreZoomAfterRaw
             let handler = PhotoCaptureHandler(uid: uid) { [weak self] rawData, processedData in
+                if let self = self {
+                    self.sessionQueue.async {
+                        self.bayerCaptureInFlight = false
+                        if let prevZ = capturedRestoreZoom, let dev = self.videoDevice,
+                           (try? dev.lockForConfiguration()) != nil {
+                            let maxZ = min(5.0, dev.activeFormat.videoMaxZoomFactor)
+                            dev.videoZoomFactor = max(1.0, min(maxZ, prevZ))
+                            dev.unlockForConfiguration()
+                        }
+                    }
+                }
                 DispatchQueue.global(qos: .userInitiated).async {
                     for (idx, pair) in allFilmsToDevelop.enumerated() {
                         if let out = GrainDeveloper.develop(
@@ -615,7 +653,8 @@ public final class GrainCaptureController: NSObject, ObservableObject {
                             tuning: pair.1,
                             aspectRatio: ratio,
                             userEv: ev,
-                            captureMeta: meta
+                            captureMeta: meta,
+                            digitalZoom: reqZoom
                         ) {
                             PhotoStore.shared.saveCapture(
                                 jpegData: out.jpegData,

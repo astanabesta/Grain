@@ -8,6 +8,13 @@ one was a separate APK install on the device.
 
 ---
 
+## v0.7.9 — Hardware Bayer RAW Capture Hardening for iPhone XR / XS & All iPhones
+
+- **Enforces AVFoundation Bayer RAW capture invariants on all iPhones (`iPhone XR`–`iPhone 16`)** —
+  sets `photoQualityPrioritization = .speed` for single-exposure sensor Bayer RAW `.dng` captures and
+  locks `videoZoomFactor = 1.0` during RAW readout while applying digital zoom crop cleanly in
+  `GrainDeveloper`, preventing `AVCapturePhotoOutput` Objective-C exceptions on non-ProRAW iPhones.
+
 ## v0.7.8 — Smooth Gallery Photo Zoom on Command Slider (`1×–8×`)
 
 - **Command slider zooms playback photos (`1.0× – 8.0×`)** — in `PLAY` mode (Android & iOS), sliding

@@ -77,7 +77,7 @@ Every exposure saves a machine-readable **JSON receipt** documenting what was re
 ### iPhone / iOS (`Grain-iOS-v*.ipa` · Free Sideload)
 1. Download **`Grain-iOS-v*.ipa`** from the [**latest release**](https://github.com/astanabesta/Grain/releases/latest).
 2. Sideload onto any iPhone (**iOS 16.0+**) using **[Sideloadly](https://sideloadly.io/)**, **[AltStore](https://altstore.io/)**, or **[SideStore](https://sidestore.io/)** with a regular free Apple ID (trust your Apple ID developer profile once under `Settings → General → VPN & Device Management`).
-3. **Pro & standard iPhones supported:** Uses hardware **Bayer RAW DNG** on Pro iPhones and a **scene-linear Display-P3/sRGB F-Log2 fallback** on non-Pro iPhones — all 28 films work immediately out of the box and can also load official `.zip` / `.cube` LUT packs in `MENU → I.Q.`.
+3. **True hardware Bayer RAW on all iPhones (iPhone XR / XS through iPhone 16):** Captures pure single-exposure **12MP Bayer RAW (`.dng`)** via `AVCapturePhotoOutput` (`isBayerRAWPixelFormat`) on every iOS 16+ iPhone rear wide camera (including standard non-Pro models like **iPhone XR, 11, 12, 13, 14, 15, 16**, plus Pro models), with an automatic scene-linear Display-P3/sRGB F-Log2 fallback if a lens/mode doesn't expose RAW — all 28 films work out of the box and can load official `.zip` / `.cube` LUT packs in `MENU → I.Q.`.
 
 ### Updating an Existing Install
 
@@ -301,6 +301,7 @@ tools/                          SDK-free syntax/math verifier & desktop RAW CLI 
 
 | Version | Highlights |
 | --- | --- |
+| **v0.7.9** | **iOS Bayer RAW capture hardening** (`photoQualityPrioritization = .speed` + `videoZoomFactor = 1.0` sensor crop) ensuring rock-solid 12MP `.dng` capture on **iPhone XR / XS & all iOS 16+ iPhones** |
 | **v0.7.8** | **Smooth `1×–8×` gallery photo zoom** on the rear Command slider (with drag-to-pan, pinch & double-tap) while the Focus Lever browses frames |
 | **v0.7.7** | **Native iOS `.ipa` release** (`ios/` Swift + `AVFoundation` Bayer RAW & all-iPhone scene-linear engine) published alongside Android `.apk` |
 | **v0.7.6** | Enlarged **360° analog Focus Lever** (`74×74`, `2.6×` thumb cap) with 60/120Hz VSync AF gliding, zero-lag reversal, damped spring return & menu hold-repeat |

@@ -145,11 +145,12 @@ public enum GrainDeveloper {
         aspectRatio: String,
         userEv: Float,
         captureMeta: [String: Any],
+        digitalZoom: Float = 1.0,
         maxDimension: Int = 3200
     ) -> DevelopedOutput? {
         let startTime = CFAbsoluteTimeGetCurrent()
 
-        // Stage 1 & 2: Decode either hardware Bayer RAW DNG (Pro iPhones) or scene-linearized image (all iPhones)
+        // Stage 1 & 2: Decode hardware Bayer RAW DNG (all 1x rear iPhones incl. iPhone XR+) or scene-linear fallback
         var usedTrueRaw = false
         var linearBuffer: (width: Int, height: Int, rgb: [Float])?
 
@@ -164,8 +165,8 @@ public enum GrainDeveloper {
         }
         guard var buf = linearBuffer else { return nil }
 
-        // Crop to selected framing ratio (3:4, 1:1, 9:16) in upright orientation
-        buf = cropBuffer(buf, ratioString: aspectRatio)
+        // Crop to selected framing ratio (3:4, 1:1, 9:16) + digital zoom when captured in unzoomed 1.0x Bayer RAW
+        buf = cropBuffer(buf, ratioString: aspectRatio, zoom: usedTrueRaw ? digitalZoom : 1.0)
         let width = buf.width
         let height = buf.height
         let count = width * height
@@ -449,7 +450,11 @@ public enum GrainDeveloper {
         return 0.51 + hi * 0.26
     }
 
-    private static func cropBuffer(_ src: (width: Int, height: Int, rgb: [Float]), ratioString: String) -> (width: Int, height: Int, rgb: [Float]) {
+    private static func cropBuffer(
+        _ src: (width: Int, height: Int, rgb: [Float]),
+        ratioString: String,
+        zoom: Float = 1.0
+    ) -> (width: Int, height: Int, rgb: [Float]) {
         let portrait = src.height >= src.width
         let targetAspect: Double // width / height
         switch ratioString {
@@ -458,12 +463,15 @@ public enum GrainDeveloper {
         default: targetAspect = portrait ? (3.0 / 4.0) : (4.0 / 3.0)
         }
 
+        let z = Double(max(1.0, min(5.0, zoom)))
         let sw = Double(src.width), sh = Double(src.height)
         var cw = sw, ch = sw / targetAspect
         if ch > sh {
             ch = sh
             cw = sh * targetAspect
         }
+        cw /= z
+        ch /= z
         let outW = max(2, Int(cw.rounded()) & ~1)
         let outH = max(2, Int(ch.rounded()) & ~1)
         if outW == src.width && outH == src.height { return src }

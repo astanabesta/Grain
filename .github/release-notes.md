@@ -1,12 +1,11 @@
-## Grain Photo vVERSION — Smooth Gallery Photo Zoom on Command Slider (`1×–8×` + Pan & Pinch)
+## Grain Photo vVERSION — True 12MP Bayer RAW (`.dng`) Hardening on iPhone XR & All iOS 16+ iPhones
 
 - **Android (`Grain-vVERSION.apk`):** Install directly inside Grain (**MENU → SET UP → APP UPDATE**) or download **`Grain-vVERSION.apk`** below.
-- **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** Download **`Grain-iOS-vVERSION.ipa`** below and install onto any iPhone (iOS 16+) using **[Sideloadly](https://sideloadly.io/)**, **[AltStore](https://altstore.io/)**, or **[SideStore](https://sidestore.io/)**.
+- **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** Download **`Grain-iOS-vVERSION.ipa`** below and install onto any iPhone (iOS 16+, including **iPhone XR / XS** and newer) using **[Sideloadly](https://sideloadly.io/)**, **[AltStore](https://altstore.io/)**, or **[SideStore](https://sidestore.io/)**.
 
-### What's new in v0.7.8
+### What's new in v0.7.9
 
-#### 1. Command Zoom Slider Zooms Photos in Gallery Playback (`1.0× – 8.0×`)
-- When viewing photos in **`PLAY`** mode on both Android and iOS:
-  - **Rear `COMMAND` Zoom Slider** now smoothly zooms in & out on the active photo (`1.0×` up to `8.0×`) continuously with subtle haptic detents (and decodes high-resolution `3200px` bitmaps so film grain, halation, and critical focus stay tack-sharp when magnified).
-  - **Drag-to-pan, pinch & double-tap:** While zoomed in, drag one finger on the photo to pan smoothly across any corner of the frame, pinch with two fingers, or double-tap to toggle `1.0× ↔ 2.5×`.
-  - **Focus Lever (Joystick)** continues switching cleanly between photos (`◀ ▶ BROWSE` with hold-to-repeat), automatically resetting zoom to `1.0×` on each new frame.
+#### 1. Rock-Solid 12MP Hardware Bayer RAW (`.dng`) on iPhone XR / XS & All iOS 16+ iPhones
+- Enforces Apple's `AVCapturePhotoOutput` single-exposure Bayer RAW invariants (`photoQualityPrioritization = .speed` and `videoZoomFactor = 1.0` during RAW readout, with exact digital zoom cropping inside `GrainDeveloper` and automatic preview zoom restoration after capture).
+- Ensures every rear 1× wide iPhone camera supporting iOS 16+ (**iPhone XR, XS, 11, 12, 13, 14, 15, 16**, both standard and Pro) shoots pure 12-bit/14-bit sensor **Bayer RAW (`.dng`)** cleanly even when zoomed in.
+- Includes all `v0.7.8` improvements (**smooth `1.0× – 8.0×` gallery photo zoom** on the rear `COMMAND` slider with drag-to-pan, pinch & double-tap).
