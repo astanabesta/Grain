@@ -56,7 +56,7 @@ public final class MainActivity extends ComponentActivity
   /** What the camera's screen shows: camera, q (quick menu), menu or play. */
   private String mode = "camera";
   private int drive, dispMode, viewMode, finish, uiRotation, deviceRotation, afFeedback, isoSetting,
-      flashMode, onboardingStep;
+      flashMode, onboardingStep, onboardingStock = 1;
   private long shutterNs;
   private boolean evf, powerOn = true, aeLock, isoDial, evCustom, sounds = true, showHistogram = true,
       showLevel = true, autoRotate = true, halfPressed, halfClosedOverlay, neutralHeld;
@@ -163,7 +163,9 @@ public final class MainActivity extends ComponentActivity
   private int sourceWidth = 3060, sourceHeight = 4080;
   private int countdownToken;
   private boolean counting;
-  private PhotoStore.Photo pendingDelete;
+  private boolean gallerySelectMode;
+  private final java.util.Set<String> gallerySelectedIds = new java.util.LinkedHashSet<>();
+  private final List<PhotoStore.Photo> pendingDelete = new ArrayList<>();
   private LinearLayout snackbar;
   private Runnable purgeTask;
   private String page = "camera";
@@ -751,7 +753,8 @@ public final class MainActivity extends ComponentActivity
               f.standard ? f.fuji.sony() ? "SONY LOOK" : "FILM SIMULATION" : f.raw ? "RAW · RECIPE" : "ISP LOOK",
               8,
               f.raw ? ORANGE : MUTED);
-      iso.setTypeface(Typeface.MONOSPACE);
+      iso.setTypeface(Typeface.SANS_SERIF, Typeface.BOLD);
+      iso.setLetterSpacing(.04f);
       iso.setGravity(Gravity.START);
       iso.setPadding(dp(3), 0, 0, 0);
       tile.addView(iso);
@@ -918,11 +921,12 @@ public final class MainActivity extends ComponentActivity
     LinearLayout head = row();
     head.setPadding(0, dp(4), 0, dp(2));
     TextView heading = text("SETTINGS", 9, MUTED);
-    heading.setTypeface(Typeface.MONOSPACE);
+    heading.setTypeface(Typeface.SANS_SERIF, Typeface.BOLD);
+    heading.setLetterSpacing(.05f);
     heading.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
     head.addView(heading, new LinearLayout.LayoutParams(0, dp(24), 1));
     TextView badge = text("", 9, MUTED);
-    badge.setTypeface(Typeface.MONOSPACE);
+    badge.setTypeface(Typeface.SANS_SERIF, Typeface.BOLD);
     head.addView(badge, new LinearLayout.LayoutParams(-2, dp(24)));
     panel.addView(head);
     Runnable showBadge =
@@ -964,7 +968,8 @@ public final class MainActivity extends ComponentActivity
       panel.addView(sonyNote);
     }
     TextView extrasTitle = text(sony ? "GRAIN EXTRAS" : "GRAIN EXTRAS · NOT FUJIFILM SETTINGS", 9, MUTED);
-    extrasTitle.setTypeface(Typeface.MONOSPACE);
+    extrasTitle.setTypeface(Typeface.SANS_SERIF, Typeface.BOLD);
+    extrasTitle.setLetterSpacing(.04f);
     extrasTitle.setGravity(Gravity.START);
     extrasTitle.setPadding(0, dp(14), 0, dp(4));
     panel.addView(extrasTitle, new LinearLayout.LayoutParams(-1, -2));
@@ -1935,8 +1940,7 @@ public final class MainActivity extends ComponentActivity
     if (code == 7) {
       boolean granted = result.length > 0 && result[0] == PackageManager.PERMISSION_GRANTED;
       if ("onboarding".equals(page)) {
-        showOnboarding(onboardingStep);
-        if (granted) message("Camera permission granted.");
+        showOnboarding(granted && onboardingStep == 2 ? 3 : onboardingStep);
         return;
       }
       if (granted) openCamera();
@@ -2052,6 +2056,10 @@ public final class MainActivity extends ComponentActivity
       if (onboardingStep > 0) showOnboarding(onboardingStep - 1);
       else if (preferences.getBoolean("onboardingDone", false)) closeOnboarding();
       else finish();
+    } else if ("photos".equals(page) && gallerySelectMode) {
+      gallerySelectMode = false;
+      gallerySelectedIds.clear();
+      showGallery();
     } else if ("detail".equals(page)) showGallery();
     else if (!"camera".equals(page)) closePanel();
     else finish();
@@ -2116,7 +2124,22 @@ public final class MainActivity extends ComponentActivity
     panel.addView(panelScroll, new LinearLayout.LayoutParams(-1, 0, 1));
   }
 
+  private void setDarkSystemBars(boolean dark) {
+    if (Build.VERSION.SDK_INT >= 30) {
+      WindowInsetsController c = getWindow().getInsetsController();
+      if (c != null) {
+        int mask =
+            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+        c.setSystemBarsAppearance(dark ? 0 : mask, mask);
+      }
+    }
+  }
+
   private void closePanel() {
+    gallerySelectMode = false;
+    gallerySelectedIds.clear();
+    setDarkSystemBars(false);
     if (panel != null) {
       root.removeView(panel);
       panel = null;
@@ -2131,32 +2154,13 @@ public final class MainActivity extends ComponentActivity
     if (resumed && texture != null && texture.isAvailable()) openCamera();
   }
 
-  private View onboardingCard(String badge, String title, String detail) {
-    LinearLayout card = column();
-    card.setBackground(bg(0xffece9de, 10, LINE, 1));
-    card.setPadding(dp(14), dp(12), dp(14), dp(12));
-    TextView tag = text(badge, 9, ORANGE);
-    tag.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-    tag.setLetterSpacing(.12f);
-    card.addView(tag, new LinearLayout.LayoutParams(-1, -2));
-    TextView head = text(title, 15, INK);
-    head.setTypeface(Typeface.SERIF, Typeface.BOLD);
-    LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(-1, -2);
-    hlp.topMargin = dp(4);
-    card.addView(head, hlp);
-    TextView sub = paragraph(detail);
-    LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-1, -2);
-    slp.topMargin = dp(3);
-    card.addView(sub, slp);
-    return card;
-  }
-
   /**
-   * Tactile rangefinder top-plate / film banner rendered natively on Canvas for the onboarding
-   * header so the real Android screen has the same craft and full-height visual balance as the
-   * design prototype.
+   * Literal, unmistakable photographic hardware illustrations rendered natively on {@link Canvas}
+   * for each onboarding step (zero monospace/terminal fonts):
+   * 0 = 35mm film canister & sprocketed strip, 1 = circular engraved shutter speed dial,
+   * 2 = rangefinder camera + privacy lock badge, 3 = full two-tone rangefinder camera body.
    */
-  private View onboardingBanner(int step) {
+  private View onboardingSculpture(int step, boolean permGranted) {
     return new View(this) {
       final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
       final Paint t = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -2165,390 +2169,544 @@ public final class MainActivity extends ComponentActivity
       protected void onDraw(Canvas c) {
         float w = getWidth(), h = getHeight();
         if (w <= 0 || h <= 0) return;
-        float r = dp(12);
-        // Dark anodized frame
+        float cx = w * .5f, cy = h * .5f;
         p.setShader(null);
-        p.setStyle(Paint.Style.FILL);
-        p.setColor(0xff1b1d19);
-        c.drawRoundRect(0, 0, w, h, r, r, p);
+        t.setAntiAlias(true);
+        t.setTypeface(Typeface.SANS_SERIF);
 
-        // Top metal plate according to current body finish (0 Silver, 1 Black, 2 Graphite)
-        int[] plateColors =
-            finish == 0
-                ? new int[] {0xfff0efe9, 0xffd5d4cc, 0xffbfbeb6}
-                : finish == 1
-                    ? new int[] {0xff3c3d3a, 0xff262724, 0xff191a18}
-                    : new int[] {0xff8f908c, 0xff70726d, 0xff5a5c57};
-        int plateInk = finish == 0 ? 0xff2c2e28 : 0xffeae6da;
-        float pad = dp(10), plateH = h * 0.64f;
-        p.setShader(
-            new LinearGradient(
-                0, pad, 0, pad + plateH, plateColors, new float[] {0f, .55f, 1f}, Shader.TileMode.CLAMP));
-        c.drawRoundRect(pad, pad, w - pad, pad + plateH, dp(8), dp(8), p);
-        p.setShader(null);
+        if (step == 0) {
+          // Step 1 ("Shoot like film."): Classic 35mm Film Canister + Perforated Film Strip
+          float totalW = dp(204);
+          float ox = cx - totalW * .5f;
+          float canL = ox, canW = dp(68), canH = dp(116);
+          float canT = cy - canH * .5f + dp(6);
 
-        // Eyepiece window
-        p.setColor(0xff1c1e1a);
-        c.drawRoundRect(pad + dp(10), pad + dp(10), pad + dp(70), pad + dp(40), dp(5), dp(5), p);
-        p.setColor(0xff2f3b2c);
-        c.drawRoundRect(pad + dp(17), pad + dp(15), pad + dp(63), pad + dp(35), dp(3), dp(3), p);
+          // Perforated 35mm film leader strip extending right
+          float stripL = canL + canW - dp(2);
+          float stripR = ox + totalW;
+          float stripT = canT + dp(24), stripB = stripT + dp(72);
+          p.setStyle(Paint.Style.FILL);
+          p.setColor(0xff2a201a);
+          c.drawRoundRect(stripL, stripT, stripR, stripB, dp(10), dp(10), p);
+          p.setStyle(Paint.Style.STROKE);
+          p.setStrokeWidth(dp(1.2f));
+          p.setColor(0xff4a3a2e);
+          c.drawRoundRect(stripL, stripT, stripR, stripB, dp(10), dp(10), p);
 
-        // Flash pill
-        p.setColor(ORANGE);
-        c.drawRoundRect(pad + dp(78), pad + dp(22), pad + dp(122), pad + dp(38), dp(4), dp(4), p);
-        t.setColor(0xffffffff);
-        t.setTypeface(Typeface.MONOSPACE);
-        t.setFakeBoldText(true);
-        t.setTextAlign(Paint.Align.CENTER);
-        t.setTextSize(dp(8));
-        c.drawText("⚡ AUTO", pad + dp(100), pad + dp(33), t);
+          // Sprocket holes (top & bottom rows)
+          p.setStyle(Paint.Style.FILL);
+          p.setColor(0xff111210);
+          for (float hx = stripL + dp(12); hx < stripR - dp(14); hx += dp(15)) {
+            c.drawRoundRect(hx, stripT + dp(5), hx + dp(6.5f), stripT + dp(9.5f), dp(1.5f), dp(1.5f), p);
+            c.drawRoundRect(hx, stripB - dp(9.5f), hx + dp(6.5f), stripB - dp(5), dp(1.5f), dp(1.5f), p);
+          }
 
-        // Two knurled drums (Shutter/ISO + Film/EV)
-        float d1L = w * 0.46f, d1R = w * 0.70f, d2L = w * 0.73f, d2R = w - pad - dp(10);
-        p.setColor(0xff1f211d);
-        c.drawRoundRect(d1L, pad + dp(8), d1R, pad + dp(32), dp(4), dp(4), p);
-        c.drawRoundRect(d2L, pad + dp(8), d2R, pad + dp(32), dp(4), dp(4), p);
+          // Two exposed analog frames inside strip
+          float f1L = stripL + dp(12), fW = dp(44), fT = stripT + dp(15), fB = stripB - dp(15);
+          float f2L = f1L + fW + dp(8);
+          for (int fi = 0; fi < 2; fi++) {
+            float fl = fi == 0 ? f1L : f2L;
+            p.setStyle(Paint.Style.FILL);
+            p.setColor(0xff191613);
+            c.drawRoundRect(fl, fT, fl + fW, fB, dp(3), dp(3), p);
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(dp(1));
+            p.setColor(0xff5c4938);
+            c.drawRoundRect(fl, fT, fl + fW, fB, dp(3), dp(3), p);
+          }
+          p.setStyle(Paint.Style.FILL);
+          p.setColor(0xa6e76736);
+          c.drawCircle(f1L + dp(14), fT + dp(13), dp(6.5f), p);
+          android.graphics.Path hill = new android.graphics.Path();
+          hill.moveTo(f1L + dp(2), fB - dp(2));
+          hill.lineTo(f1L + dp(16), fT + dp(22));
+          hill.lineTo(f1L + dp(28), fT + dp(31));
+          hill.lineTo(f1L + dp(36), fT + dp(24));
+          hill.lineTo(f1L + fW - dp(2), fB - dp(2));
+          hill.close();
+          p.setColor(0x75d9a566);
+          c.drawPath(hill, p);
 
-        t.setColor(0xffff9a6c);
-        t.setTextSize(dp(9.5f));
-        c.drawText(step == 1 ? "1/500" : step == 2 ? "SAFE" : "500", (d1L + d1R) * .5f, pad + dp(23.5f), t);
-        t.setColor(0xffffd670);
-        c.drawText(step == 3 ? CameraBack.FINISHES[finish] : "BKD", (d2L + d2R) * .5f, pad + dp(23.5f), t);
+          android.graphics.Path hill2 = new android.graphics.Path();
+          hill2.moveTo(f2L + dp(2), fB - dp(2));
+          hill2.lineTo(f2L + dp(16), fT + dp(18));
+          hill2.lineTo(f2L + dp(30), fT + dp(30));
+          hill2.lineTo(f2L + fW - dp(2), fB - dp(2));
+          hill2.close();
+          p.setColor(0x708ab599);
+          c.drawPath(hill2, p);
 
-        t.setColor(plateInk);
-        t.setTextSize(dp(6.5f));
-        c.drawText("SHUTTER · ISO", (d1L + d1R) * .5f, pad + dp(44), t);
-        c.drawText(step == 3 ? "BODY FINISH" : "BRIGHT KODAK", (d2L + d2R) * .5f, pad + dp(44), t);
+          // Velvet light-trap lip
+          p.setColor(0xff171815);
+          c.drawRoundRect(canL + canW - dp(4), canT + dp(14), canL + canW + dp(4), canT + canH - dp(10), dp(2), dp(2), p);
 
-        // Bottom caption strip inside dark chassis
-        t.setTextAlign(Paint.Align.LEFT);
-        t.setColor(0xfff4f1e8);
-        t.setTypeface(Typeface.SERIF);
-        t.setTextSize(dp(12));
-        c.drawText("grain.", pad + dp(6), h - dp(11), t);
+          // Top spool spindle
+          float spW = dp(22), spL = canL + (canW - spW) * .5f;
+          p.setColor(0xff2c2e29);
+          c.drawRoundRect(spL, canT - dp(16), spL + spW, canT, dp(3), dp(3), p);
+          p.setColor(0xffc8c6bc);
+          c.drawRoundRect(spL + dp(4), canT - dp(22), spL + spW - dp(4), canT - dp(15), dp(2), dp(2), p);
 
-        t.setTextAlign(Paint.Align.RIGHT);
-        t.setTypeface(Typeface.MONOSPACE);
-        t.setColor(0xffe5be73);
-        t.setTextSize(dp(8));
-        String rightTag =
-            step == 0
-                ? "RAW · 3D LUT · NO CLOUD"
-                : step == 1
-                    ? "P / S / ISO / M · FLASH · AF-C"
-                    : step == 2 ? "1 PERMISSION · 100% ON DEVICE" : "READY TO SHOOT";
-        c.drawText(rightTag, w - pad - dp(6), h - dp(11), t);
+          // Canister cylinder body + warm film stock band
+          p.setShader(
+              new LinearGradient(
+                  canL,
+                  0,
+                  canL + canW,
+                  0,
+                  new int[] {0xff2c2e29, 0xff3c3e38, 0xff1c1d1a},
+                  new float[] {0f, .44f, 1f},
+                  Shader.TileMode.CLAMP));
+          c.drawRoundRect(canL, canT, canL + canW, canT + canH, dp(6), dp(6), p);
+          p.setShader(null);
+          p.setColor(ORANGE);
+          c.drawRect(canL, canT + dp(26), canL + canW, canT + dp(76), p);
+          p.setColor(0xffe6b96e);
+          c.drawRect(canL, canT + dp(76), canL + canW, canT + dp(86), p);
+
+          // Rolled metal top & bottom caps
+          p.setShader(
+              new LinearGradient(
+                  canL - dp(3),
+                  0,
+                  canL + canW + dp(3),
+                  0,
+                  new int[] {0xff9e9d95, 0xffe5e3da, 0xff7c7b74},
+                  new float[] {0f, .45f, 1f},
+                  Shader.TileMode.CLAMP));
+          c.drawRoundRect(canL - dp(3), canT - dp(3), canL + canW + dp(3), canT + dp(5), dp(4), dp(4), p);
+          c.drawRoundRect(
+              canL - dp(3), canT + canH - dp(5), canL + canW + dp(3), canT + canH + dp(3), dp(4), dp(4), p);
+          p.setShader(null);
+        } else if (step == 1) {
+          // Step 2 ("Real manual controls."): Top-Down Mechanical Shutter Speed Dial
+          float rDial = Math.min(Math.min(w, h) * .42f, dp(82));
+          float dcy = cy + dp(4);
+
+          // Vermilion index marker at 12 o'clock
+          p.setStyle(Paint.Style.STROKE);
+          p.setStrokeCap(Paint.Cap.ROUND);
+          p.setStrokeWidth(dp(2.6f));
+          p.setColor(ORANGE);
+          c.drawLine(cx, dcy - rDial - dp(15), cx, dcy - rDial - dp(5), p);
+
+          // Knurled outer dial body
+          p.setStyle(Paint.Style.FILL);
+          p.setShader(
+              new android.graphics.RadialGradient(
+                  cx,
+                  dcy - rDial * .2f,
+                  rDial,
+                  new int[] {0xff2b2d28, 0xff171815},
+                  null,
+                  Shader.TileMode.CLAMP));
+          c.drawCircle(cx, dcy, rDial, p);
+          p.setShader(null);
+          p.setStyle(Paint.Style.STROKE);
+          p.setStrokeWidth(dp(1.6f));
+          p.setColor(0xff3a3c35);
+          c.drawCircle(cx, dcy, rDial, p);
+
+          // Perimeter knurling ticks
+          p.setStrokeWidth(dp(1.2f));
+          p.setColor(0xff3c3e37);
+          for (int i = 0; i < 48; i++) {
+            double rad = Math.toRadians(i * 7.5);
+            float x1 = cx + (float) Math.cos(rad) * (rDial - dp(5));
+            float y1 = dcy + (float) Math.sin(rad) * (rDial - dp(5));
+            float x2 = cx + (float) Math.cos(rad) * (rDial - dp(1.2f));
+            float y2 = dcy + (float) Math.sin(rad) * (rDial - dp(1.2f));
+            c.drawLine(x1, y1, x2, y2, p);
+          }
+
+          p.setColor(0xff282a25);
+          c.drawCircle(cx, dcy, rDial - dp(9), p);
+
+          // Rotating shutter speed markings in proportional sans-serif
+          String[] marks = {"A", "1000", "500", "250", "125", "60", "30", "15"};
+          float rotDeg = -45f * Math.max(0, Math.min(3, onboardingStock));
+          t.setTextAlign(Paint.Align.CENTER);
+          for (int i = 0; i < marks.length; i++) {
+            float ang = i * 45f + rotDeg;
+            c.save();
+            c.rotate(ang, cx, dcy);
+            boolean isAuto = i == 0;
+            t.setFakeBoldText(true);
+            t.setColor(isAuto ? ORANGE : 0xfff3f0e6);
+            t.setTextSize(dp(isAuto ? 13 : 10.5f));
+            c.drawText(marks[i], cx, dcy - rDial + dp(29), t);
+            c.restore();
+          }
+
+          // Center machined cap
+          p.setStyle(Paint.Style.FILL);
+          p.setColor(0xff121310);
+          c.drawCircle(cx, dcy, dp(22), p);
+          p.setStyle(Paint.Style.STROKE);
+          p.setStrokeWidth(dp(1.4f));
+          p.setColor(0xff363831);
+          c.drawCircle(cx, dcy, dp(22), p);
+          p.setStyle(Paint.Style.FILL);
+          p.setColor(0xff232520);
+          c.drawCircle(cx, dcy, dp(5.5f), p);
+        } else if (step == 2) {
+          // Step 3 ("Camera access, privately."): Rangefinder Camera + Privacy Lock Badge
+          float bw = dp(160), bh = dp(106);
+          float bl = cx - bw * .5f, bt = cy - bh * .5f;
+          int badgeColor = permGranted ? 0xff4ca96b : ORANGE;
+
+          // Shutter button + dial cap
+          p.setStyle(Paint.Style.FILL);
+          p.setColor(ORANGE);
+          c.drawRoundRect(bl + bw - dp(44), bt - dp(8), bl + bw - dp(20), bt, dp(3), dp(3), p);
+          p.setColor(0xff3a3c36);
+          c.drawRoundRect(bl + bw - dp(78), bt - dp(6), bl + bw - dp(52), bt, dp(2), dp(2), p);
+
+          // Camera body
+          p.setColor(0xff1b1c19);
+          c.drawRoundRect(bl, bt, bl + bw, bt + bh, dp(18), dp(18), p);
+          p.setStyle(Paint.Style.STROKE);
+          p.setStrokeWidth(dp(1.8f));
+          p.setColor(0xff373933);
+          c.drawRoundRect(bl, bt, bl + bw, bt + bh, dp(18), dp(18), p);
+
+          // Top plate seam + viewfinder window
+          p.setStrokeWidth(dp(1.3f));
+          p.setColor(0xff2c2e28);
+          c.drawLine(bl + dp(2), bt + dp(28), bl + bw - dp(2), bt + dp(28), p);
+          p.setStyle(Paint.Style.FILL);
+          p.setColor(0xff111210);
+          c.drawRoundRect(bl + dp(18), bt + dp(9), bl + dp(44), bt + dp(21), dp(3), dp(3), p);
+          p.setStyle(Paint.Style.STROKE);
+          p.setColor(0xff454740);
+          c.drawRoundRect(bl + dp(18), bt + dp(9), bl + dp(44), bt + dp(21), dp(3), dp(3), p);
+
+          // Central camera lens
+          float lcy = bt + dp(62);
+          p.setStyle(Paint.Style.FILL);
+          p.setColor(0xff121310);
+          c.drawCircle(cx, lcy, dp(32), p);
+          p.setStyle(Paint.Style.STROKE);
+          p.setStrokeWidth(dp(2));
+          p.setColor(0xff474a42);
+          c.drawCircle(cx, lcy, dp(32), p);
+          p.setStyle(Paint.Style.FILL);
+          p.setColor(0xff0c0d0b);
+          c.drawCircle(cx, lcy, dp(20), p);
+          p.setStyle(Paint.Style.STROKE);
+          p.setStrokeWidth(dp(1.4f));
+          p.setColor(0xff2f312b);
+          c.drawCircle(cx, lcy, dp(20), p);
+          p.setStyle(Paint.Style.FILL);
+          p.setColor(0x38f3f0e6);
+          c.drawCircle(cx - dp(7), lcy - dp(7), dp(4), p);
+
+          // Privacy Padlock / Granted Checkmark Badge on bottom-right corner
+          float bx = bl + bw - dp(14), by = bt + bh - dp(10);
+          p.setStyle(Paint.Style.FILL);
+          p.setColor(0xff111210);
+          c.drawCircle(bx, by, dp(25), p);
+          p.setColor((badgeColor & 0x00ffffff) | 0x28000000);
+          c.drawCircle(bx, by, dp(21), p);
+          p.setStyle(Paint.Style.STROKE);
+          p.setStrokeWidth(dp(1.8f));
+          p.setColor(badgeColor);
+          c.drawCircle(bx, by, dp(21), p);
+
+          if (permGranted) {
+            p.setStrokeCap(Paint.Cap.ROUND);
+            p.setStrokeWidth(dp(2.5f));
+            c.drawLine(bx - dp(8), by + dp(0.5f), bx - dp(2.5f), by + dp(6), p);
+            c.drawLine(bx - dp(2.5f), by + dp(6), bx + dp(9), by - dp(5.5f), p);
+          } else {
+            p.setStyle(Paint.Style.FILL);
+            c.drawRoundRect(bx - dp(7.5f), by - dp(1), bx + dp(7.5f), by + dp(10), dp(2.5f), dp(2.5f), p);
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(dp(2.1f));
+            c.drawArc(bx - dp(4.8f), by - dp(9.5f), bx + dp(4.8f), by + dp(1), 180, 180, false, p);
+          }
+        } else {
+          // Step 4 ("Choose your camera body."): Full Two-Tone Rangefinder Camera Body
+          int[] metal =
+              finish == 0
+                  ? new int[] {0xffefeee8, 0xffd2d1c8, 0xffb5b4ab}
+                  : finish == 1
+                      ? new int[] {0xff3a3b37, 0xff252623, 0xff191a17}
+                      : new int[] {0xff8a8c86, 0xff696b65, 0xff50524d};
+
+          float bw = Math.min(w - dp(24), dp(188)), bh = dp(114);
+          float bl = cx - bw * .5f, bt = cy - bh * .5f + dp(4);
+
+          // Top dial + vermilion shutter release
+          p.setStyle(Paint.Style.FILL);
+          p.setColor(metal[1]);
+          c.drawRoundRect(bl + bw - dp(74), bt - dp(9), bl + bw - dp(44), bt + dp(2), dp(2.5f), dp(2.5f), p);
+          p.setColor(ORANGE);
+          c.drawRoundRect(bl + bw - dp(30), bt - dp(12), bl + bw - dp(18), bt - dp(6), dp(2), dp(2), p);
+          p.setColor(metal[0]);
+          c.drawRoundRect(bl + bw - dp(34), bt - dp(7), bl + bw - dp(14), bt + dp(2), dp(2), dp(2), p);
+
+          // Metallic top plate & bottom baseplate chassis
+          p.setShader(
+              new LinearGradient(
+                  bl, bt, bl + bw, bt + bh, metal, new float[] {0f, .52f, 1f}, Shader.TileMode.CLAMP));
+          c.drawRoundRect(bl, bt, bl + bw, bt + bh, dp(18), dp(18), p);
+          p.setShader(null);
+
+          // Dark vulcanite leatherette middle grip wrap
+          p.setColor(0xff171815);
+          c.drawRect(bl, bt + dp(36), bl + bw, bt + bh - dp(14), p);
+
+          // Viewfinder & rangefinder windows in top plate
+          p.setColor(0xff161714);
+          c.drawRoundRect(bl + dp(18), bt + dp(11), bl + dp(50), bt + dp(26), dp(3.5f), dp(3.5f), p);
+          p.setColor(0xff2c362c);
+          c.drawRoundRect(bl + dp(23), bt + dp(14.5f), bl + dp(45), bt + dp(22.5f), dp(2), dp(2), p);
+          p.setColor(0xff262723);
+          c.drawRoundRect(bl + dp(60), bt + dp(14), bl + dp(74), bt + dp(23), dp(2), dp(2), p);
+
+          // Protruding multi-ring rangefinder lens
+          float lx = cx + dp(6), ly = bt + dp(66);
+          p.setColor(metal[1]);
+          c.drawCircle(lx, ly, dp(36), p);
+          p.setStyle(Paint.Style.STROKE);
+          p.setStrokeWidth(dp(2));
+          p.setColor(0xff111210);
+          c.drawCircle(lx, ly, dp(36), p);
+
+          p.setStyle(Paint.Style.FILL);
+          p.setColor(0xff141512);
+          c.drawCircle(lx, ly, dp(29), p);
+          p.setStyle(Paint.Style.STROKE);
+          p.setStrokeWidth(dp(1.5f));
+          p.setColor(0xff363831);
+          c.drawCircle(lx, ly, dp(29), p);
+
+          p.setStyle(Paint.Style.FILL);
+          p.setColor(0xff0b0c0a);
+          c.drawCircle(lx, ly, dp(18.5f), p);
+          p.setStyle(Paint.Style.STROKE);
+          p.setColor(0xff292b25);
+          c.drawCircle(lx, ly, dp(18.5f), p);
+
+          p.setStyle(Paint.Style.FILL);
+          p.setColor(0x52e76736);
+          c.drawCircle(lx - dp(7), ly - dp(7), dp(4.8f), p);
+        }
       }
     };
   }
 
   /**
-   * Four-step first-install introduction: (0) Welcome & philosophy, (1) What Grain offers & does,
-   * (2) Camera permission & privacy, (3) Body finish & Get Started.
+   * Minimalist, darkroom-toned 4-step introduction (Leica LUX / Halide inspired): generous dark
+   * breathing space, literal photographic hardware illustrations, clean sans-serif typography, and
+   * one primary CTA.
    */
   private void showOnboarding(int step) {
     stopMagnifier();
     onboardingStep = Math.max(0, Math.min(3, step));
     if (panel != null) root.removeView(panel);
     page = "onboarding";
+    setDarkSystemBars(true);
+    final int obBg = 0xff111210;
+    final int obSurface = 0xff1a1b18;
+    final int obLine = 0xff282a25;
+    final int obInk = 0xfff3f0e6;
+    final int obMuted = 0xff8e8c83;
+
     panel = column();
-    panel.setBackgroundColor(PAPER);
+    panel.setBackgroundColor(obBg);
     panel.setClickable(true);
-    panel.setPadding(0, safeTop, 0, safeBottom);
+    panel.setPadding(dp(28), safeTop + dp(12), dp(28), safeBottom + dp(24));
     root.addView(panel, new FrameLayout.LayoutParams(-1, -1));
 
-    // Top bar: brand + step counter + skip/close
+    boolean alreadyDone = preferences.getBoolean("onboardingDone", false);
+    boolean camGranted =
+        checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
+
+    // Minimal top bar: wordmark + quiet Skip/Close text
     LinearLayout top = row();
     top.setGravity(Gravity.CENTER_VERTICAL);
-    top.setPadding(dp(22), dp(14), dp(22), dp(10));
-    TextView brand = text("grain.", 26, INK);
-    brand.setTypeface(Typeface.SERIF, Typeface.BOLD);
+    android.text.SpannableString mark = new android.text.SpannableString("grain.");
+    mark.setSpan(
+        new android.text.style.ForegroundColorSpan(ORANGE),
+        5,
+        6,
+        android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+    TextView brand = text("", 20, obInk);
+    brand.setTypeface(Typeface.SANS_SERIF, Typeface.BOLD);
+    brand.setLetterSpacing(-.03f);
+    brand.setText(mark);
     top.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
-    TextView stepBadge = text("0" + (onboardingStep + 1) + " / 04", 10, MUTED);
-    stepBadge.setTypeface(Typeface.MONOSPACE);
-    stepBadge.setLetterSpacing(.12f);
-    LinearLayout.LayoutParams sblp = new LinearLayout.LayoutParams(-2, -2);
-    sblp.rightMargin = dp(12);
-    top.addView(stepBadge, sblp);
-    boolean alreadyDone = preferences.getBoolean("onboardingDone", false);
-    if (onboardingStep < 3) {
+
+    if (onboardingStep < 3 || alreadyDone) {
       TextView skip =
           button(
-              alreadyDone ? "CLOSE" : "SKIP",
-              9.5f,
-              MUTED,
+              alreadyDone ? "Close" : "Skip",
+              13.5f,
+              obMuted,
               () -> {
                 if (alreadyDone) closeOnboarding();
-                else showOnboarding(2);
+                else showOnboarding(camGranted ? 3 : 2);
               });
-      skip.setBackground(bg(0xffece9de, 16, LINE, 1));
-      skip.setPadding(dp(11), dp(5), dp(11), dp(5));
+      skip.setTypeface(Typeface.SANS_SERIF);
+      skip.setPadding(dp(8), dp(6), dp(2), dp(6));
+      skip.setMinHeight(0);
       top.addView(skip, new LinearLayout.LayoutParams(-2, -2));
     }
-    panel.addView(top, new LinearLayout.LayoutParams(-1, -2));
+    panel.addView(top, new LinearLayout.LayoutParams(-1, dp(38)));
 
-    // Progress dots
-    LinearLayout dots = row();
-    dots.setPadding(dp(22), 0, dp(22), dp(10));
-    for (int i = 0; i < 4; i++) {
-      View bar = new View(this);
-      bar.setBackground(bg(i <= onboardingStep ? ORANGE : 0xffdcd9ce, 3, 0, 0));
-      LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(0, dp(3), 1);
-      if (i < 3) blp.rightMargin = dp(6);
-      dots.addView(bar, blp);
-    }
-    panel.addView(dots, new LinearLayout.LayoutParams(-1, -2));
-    View divider = new View(this);
-    divider.setBackgroundColor(LINE);
-    panel.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
+    // Center stage (weight = 1): literal photographic illustration + clean sans-serif pills
+    LinearLayout stage = column();
+    stage.setGravity(Gravity.CENTER);
+    panel.addView(stage, new LinearLayout.LayoutParams(-1, 0, 1));
 
-    panelScroll = new ScrollView(this);
-    panelScroll.setVerticalScrollBarEnabled(false);
-    panelScroll.setFillViewport(true);
-    panel.addView(panelScroll, new LinearLayout.LayoutParams(-1, 0, 1));
-    LinearLayout body = column();
-    body.setPadding(dp(22), dp(16), dp(22), dp(16));
-    panelScroll.addView(body, new FrameLayout.LayoutParams(-1, -1));
+    stage.addView(
+        onboardingSculpture(onboardingStep, camGranted),
+        new LinearLayout.LayoutParams(-1, dp(onboardingStep == 3 ? 168 : 206)));
 
-    LinearLayout.LayoutParams bannerLp = new LinearLayout.LayoutParams(-1, dp(114));
-    bannerLp.bottomMargin = dp(14);
-    body.addView(onboardingBanner(onboardingStep), bannerLp);
-
-    String[] eyebrows = {
-      "WELCOME TO GRAIN",
-      "WHAT GRAIN OFFERS",
-      "PRIVACY & CAMERA ACCESS",
-      "READY FOR YOUR FIRST ROLL"
-    };
-    String[] headlines = {
-      "Not a filter.\nA real camera.",
-      "Every dial does\nreal sensor work.",
-      "One permission.\nPrivate on device.",
-      "Pick your body.\nStart shooting."
-    };
-    String[] leads = {
-      "Grain turns your phone into a tactile rangefinder back — developing photos directly from"
-          + " Camera2 ISP curves and sensor RAW with official film LUTs.",
-      "From instant everyday looks to darkroom-grade RAW recipes, manual shutter & ISO priority,"
-          + " flash, and focus tools — nothing is faked afterward.",
-      "Grain only asks for the camera so it can drive the sensor, lens, and flash. No account, no"
-          + " cloud uploads, no microphone, and no GPS tags.",
-      "Choose your camera finish below. Daylight 400 and all ISP stocks are ready right now; you"
-          + " can import official Fujifilm or Sony LUT packs anytime in MENU → I.Q."
-    };
-
-    TextView eye = text(eyebrows[onboardingStep], 9.5f, ORANGE);
-    eye.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-    eye.setLetterSpacing(.14f);
-    body.addView(eye, new LinearLayout.LayoutParams(-1, -2));
-
-    TextView title = text(headlines[onboardingStep], 30, INK);
-    title.setTypeface(Typeface.SERIF);
-    title.setLineSpacing(0, .98f);
-    LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(-1, -2);
-    tlp.topMargin = dp(8);
-    body.addView(title, tlp);
-
-    TextView lead = paragraph(leads[onboardingStep]);
-    LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(-1, -2);
-    llp.topMargin = dp(8);
-    llp.bottomMargin = dp(12);
-    body.addView(lead, llp);
-    body.addView(new View(this), new LinearLayout.LayoutParams(-1, 0, 1));
-
-    if (onboardingStep == 0) {
-      String[][] items = {
-        {
-          "01 · SENSOR RAW & ISP",
-          "True RAW development on device",
-          "Develops linear Bayer DNG data through color matrices, tone curves, grain, and official"
-              + " Fujifilm & Sony 3D LUTs."
-        },
-        {
-          "02 · TACTILE CAMERA BACK",
-          "Built for instinct, not menus",
-          "Dedicated Shutter/ISO dial, Exposure Comp drum, film memo holder, Q Quick Menu, and"
-              + " optical-style viewfinder mode."
-        },
-        {
-          "03 · ZERO HIDDEN AI",
-          "Every frame keeps a darkroom receipt",
-          "Records exact shutter time, ISO, white balance, dynamic-range headroom, focus plane,"
-              + " and LUT applied."
-        }
-      };
-      for (String[] it : items) {
-        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
-        clp.bottomMargin = dp(10);
-        body.addView(onboardingCard(it[0], it[1], it[2]), clp);
-      }
-    } else if (onboardingStep == 1) {
-      String[][] items = {
-        {
-          "FILMS & RECIPES",
-          "Daylight, Portra, Bright Kodak & more",
-          "4 instant ISP stocks plus published RAW recipes (Reggie’s Portra, Reggie’s Superia,"
-              + " Bright Kodak, Kodak Gold 200, Kodachrome 64, CineStill 800T, Tri-X 400, Sony s709)."
-        },
-        {
-          "EXPOSURE & FLASH",
-          "Live Shutter, ISO & 4-mode Flash",
-          "Shoot Program Auto (P), Shutter Priority (S), ISO Priority, or full Manual (M) with"
-              + " live preview brightness, plus Off / Auto / Fill / Torch flash."
-        },
-        {
-          "PRECISION FOCUS",
-          "AF-C Face Tracking, Peaking & Bracketing",
-          "Continuous subject tracking, hold-to-zoom 4×/8× Focus Check magnifier, manual focus"
-              + " peaking, and automated Focus Bracketing bursts."
-        }
-      };
-      for (String[] it : items) {
-        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
-        clp.bottomMargin = dp(10);
-        body.addView(onboardingCard(it[0], it[1], it[2]), clp);
-      }
-    } else if (onboardingStep == 2) {
-      boolean granted =
-          checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
-      LinearLayout permBox = column();
-      permBox.setBackground(bg(granted ? 0xffe4ecdc : 0xffece9de, 12, granted ? 0xff596b43 : LINE, 1));
-      permBox.setPadding(dp(16), dp(14), dp(16), dp(14));
-      TextView statusTag =
-          text(
-              granted ? "✓  CAMERA ACCESS GRANTED" : "REQUIRED · ANDROID CAMERA PERMISSION",
-              9.5f,
-              granted ? 0xff3f562c : ORANGE);
-      statusTag.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-      statusTag.setLetterSpacing(.12f);
-      permBox.addView(statusTag, new LinearLayout.LayoutParams(-1, -2));
-      TextView permHead =
-          text(
-              granted ? "Ready to open the shutter." : "Allow Grain to use your camera",
-              17,
-              INK);
-      permHead.setTypeface(Typeface.SERIF, Typeface.BOLD);
-      LinearLayout.LayoutParams phlp = new LinearLayout.LayoutParams(-1, -2);
-      phlp.topMargin = dp(6);
-      permBox.addView(permHead, phlp);
-      TextView permDesc =
-          paragraph(
-              "Used strictly for live framing, manual shutter/ISO/focus control, flash, and"
-                  + " saving photos to Pictures/Grain on this device.");
-      LinearLayout.LayoutParams pdlp = new LinearLayout.LayoutParams(-1, -2);
-      pdlp.topMargin = dp(4);
-      permBox.addView(permDesc, pdlp);
-      if (!granted) {
-        TextView grantBtn =
-            button(
-                "Allow Camera Access",
-                11.5f,
-                PAPER,
-                () -> {
-                  permissionAsked = true;
-                  requestPermissions(new String[] {Manifest.permission.CAMERA}, 7);
-                });
-        grantBtn.setBackground(bg(ORANGE, 8, 0, 0));
-        LinearLayout.LayoutParams gblp = new LinearLayout.LayoutParams(-1, dp(44));
-        gblp.topMargin = dp(12);
-        permBox.addView(grantBtn, gblp);
-      }
-      LinearLayout.LayoutParams pblp = new LinearLayout.LayoutParams(-1, -2);
-      pblp.bottomMargin = dp(10);
-      body.addView(permBox, pblp);
-
-      body.addView(
-          onboardingCard(
-              "PRIVACY PROMISE",
-              "Never uploaded. No telemetry.",
-              "• No microphone or contacts permission\n"
-                  + "• No GPS coordinates written into EXIF\n"
-                  + "• Photos stay in your device’s Pictures/Grain folder"));
-    } else {
-      TextView finishLabel = text("CAMERA BODY FINISH", 9.5f, MUTED);
-      finishLabel.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-      finishLabel.setLetterSpacing(.12f);
-      body.addView(finishLabel, new LinearLayout.LayoutParams(-1, -2));
-
-      LinearLayout finishRow = row();
-      LinearLayout.LayoutParams frlp = new LinearLayout.LayoutParams(-1, -2);
-      frlp.topMargin = dp(8);
-      frlp.bottomMargin = dp(14);
-      int[] swatchBg = {0xffe4e3dc, 0xff282926, 0xff6e706c};
-      int[] swatchInk = {0xff252820, 0xfff4f1e8, 0xfff4f1e8};
-      for (int i = 0; i < CameraBack.FINISHES.length; i++) {
+    if (onboardingStep == 1) {
+      String[] speeds = {"Auto", "1/1000", "1/500", "1/250"};
+      LinearLayout strip = row();
+      strip.setGravity(Gravity.CENTER);
+      strip.setBackground(bg(obSurface, 999, obLine, 1));
+      strip.setPadding(dp(3), dp(3), dp(3), dp(3));
+      LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-2, -2);
+      slp.topMargin = dp(12);
+      for (int i = 0; i < speeds.length; i++) {
         final int idx = i;
-        boolean selected = finish == idx;
-        TextView chip =
+        boolean sel = onboardingStock == idx;
+        TextView pill =
             button(
-                (selected ? "✓ " : "") + CameraBack.FINISHES[idx],
-                10.5f,
-                swatchInk[idx],
+                speeds[idx],
+                12,
+                sel ? obInk : obMuted,
+                () -> {
+                  onboardingStock = idx;
+                  showOnboarding(1);
+                });
+        pill.setTypeface(Typeface.SANS_SERIF, sel ? Typeface.BOLD : Typeface.NORMAL);
+        pill.setBackground(bg(sel ? 0xff2a2c27 : 0x00000000, 999, 0, 0));
+        pill.setPadding(dp(12), dp(6), dp(12), dp(6));
+        pill.setMinHeight(0);
+        strip.addView(pill, new LinearLayout.LayoutParams(-2, -2));
+      }
+      stage.addView(strip, slp);
+    } else if (onboardingStep == 3) {
+      LinearLayout seg = row();
+      seg.setGravity(Gravity.CENTER);
+      seg.setBackground(bg(obSurface, 999, obLine, 1));
+      seg.setPadding(dp(4), dp(4), dp(4), dp(4));
+      LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-2, -2);
+      slp.topMargin = dp(16);
+      String[] labels = {"Silver", "Black", "Graphite"};
+      for (int i = 0; i < labels.length; i++) {
+        final int idx = i;
+        boolean sel = finish == idx;
+        TextView opt =
+            button(
+                labels[idx],
+                12.5f,
+                sel ? obInk : obMuted,
                 () -> {
                   finish = idx;
                   if (back != null) back.setFinish(finish);
                   savePrefs();
                   showOnboarding(3);
                 });
-        chip.setBackground(bg(swatchBg[idx], 8, selected ? ORANGE : LINE, selected ? 2 : 1));
-        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0, dp(44), 1);
-        if (i < 2) clp.rightMargin = dp(8);
-        finishRow.addView(chip, clp);
+        opt.setTypeface(Typeface.SANS_SERIF, sel ? Typeface.BOLD : Typeface.NORMAL);
+        opt.setBackground(bg(sel ? 0xff2a2c27 : 0x00000000, 999, 0, 0));
+        opt.setPadding(dp(16), dp(8), dp(16), dp(8));
+        opt.setMinHeight(0);
+        seg.addView(opt, new LinearLayout.LayoutParams(-2, -2));
       }
-      body.addView(finishRow, frlp);
-
-      LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2);
-      rlp.bottomMargin = dp(10);
-      body.addView(
-          onboardingCard(
-              "LOADED ROLL · READY NOW",
-              "Daylight 400 + Bright Kodak & RAW",
-              "Tap [ISO] beneath the top-left dial anytime to switch it between Shutter Speed and"
-                  + " ISO, or tap ⚡ on the top plate for Flash."),
-          rlp);
-      body.addView(
-          onboardingCard(
-              "OPTIONAL · OFFICIAL 3D LUTS",
-              "Import Fujifilm or Sony LUT zips later",
-              "Open MENU → I.Q. → DOWNLOAD LUTS / IMPORT LUT ZIP whenever you want to develop RAW"
-                  + " recipes like Reggie’s Portra or Bright Kodak."));
+      stage.addView(seg, slp);
     }
 
-    // Bottom navigation footer
-    View bottomLine = new View(this);
-    bottomLine.setBackgroundColor(LINE);
-    panel.addView(bottomLine, new LinearLayout.LayoutParams(-1, dp(1)));
+    // Concise editorial copy block matching each icon 1-to-1
+    String[] titles = {
+      "Shoot like film.",
+      "Real manual controls.",
+      "Camera access, privately.",
+      "Choose your camera body."
+    };
+    String[] subtitles = {
+      "True sensor RAW and classic film stocks, without AI over-processing.",
+      "Dial in shutter speed, ISO, flash, and focus just like a rangefinder.",
+      "Used only to take photos. Nothing leaves your phone—no account, no cloud.",
+      "Pick Silver, Black, or Graphite. You can switch anytime in Menu."
+    };
 
-    LinearLayout footer = row();
-    footer.setGravity(Gravity.CENTER_VERTICAL);
-    footer.setPadding(dp(22), dp(12), dp(22), dp(16));
+    TextView title = text(titles[onboardingStep], 28.5f, obInk);
+    title.setTypeface(Typeface.SANS_SERIF, Typeface.BOLD);
+    title.setLetterSpacing(-.025f);
+    title.setLineSpacing(0, 1.08f);
+    panel.addView(title, new LinearLayout.LayoutParams(-1, -2));
+
+    TextView sub = text(subtitles[onboardingStep], 14.5f, obMuted);
+    sub.setTypeface(Typeface.SANS_SERIF);
+    sub.setGravity(Gravity.START);
+    sub.setSingleLine(false);
+    sub.setLineSpacing(0, 1.38f);
+    LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(-1, -2);
+    subLp.topMargin = dp(9);
+    subLp.bottomMargin = dp(26);
+    panel.addView(sub, subLp);
+
+    // 4 minimal progress dashes
+    LinearLayout dots = row();
+    dots.setGravity(Gravity.CENTER_VERTICAL);
+    LinearLayout.LayoutParams dotsLp = new LinearLayout.LayoutParams(-1, -2);
+    dotsLp.bottomMargin = dp(18);
+    for (int i = 0; i < 4; i++) {
+      boolean active = i == onboardingStep;
+      View dot = new View(this);
+      dot.setBackground(bg(active ? obInk : 0xff2c2e29, 4, 0, 0));
+      LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(dp(active ? 28 : 14), dp(3));
+      if (i < 3) dlp.rightMargin = dp(6);
+      dots.addView(dot, dlp);
+    }
+    panel.addView(dots, dotsLp);
+
+    // Bottom action row: circular back button + clean 50dp pill CTA
+    LinearLayout actions = row();
+    actions.setGravity(Gravity.CENTER_VERTICAL);
     if (onboardingStep > 0) {
-      TextView prev =
-          button("← Back", 11, INK, () -> showOnboarding(onboardingStep - 1));
-      prev.setBackground(bg(0xffece9de, 8, LINE, 1));
-      LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(dp(92), dp(46));
+      TextView prev = button("‹", 20, obInk, () -> showOnboarding(onboardingStep - 1));
+      prev.setTypeface(Typeface.SANS_SERIF);
+      prev.setGravity(Gravity.CENTER);
+      prev.setPadding(0, 0, 0, dp(2));
+      prev.setMinHeight(0);
+      prev.setBackground(bg(obSurface, 999, obLine, 1));
+      LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(dp(50), dp(50));
       plp.rightMargin = dp(10);
-      footer.addView(prev, plp);
+      actions.addView(prev, plp);
     }
+
     boolean isLast = onboardingStep == 3;
-    String nextText =
-        onboardingStep == 0
-            ? "What Grain Offers →"
-            : onboardingStep == 1
-                ? "Camera Permission →"
-                : onboardingStep == 2 ? "Continue →" : "Get Started · Open Camera ◉";
+    boolean askPermNow = onboardingStep == 2 && !camGranted;
+    String ctaLabel =
+        isLast ? "Open Camera" : askPermNow ? "Allow Camera" : "Continue";
     TextView next =
         button(
-            nextText,
-            11.5f,
-            PAPER,
+            ctaLabel,
+            15,
+            isLast ? 0xffffffff : obBg,
             () -> {
-              if (!isLast) showOnboarding(onboardingStep + 1);
-              else closeOnboarding();
+              if (askPermNow) {
+                permissionAsked = true;
+                requestPermissions(new String[] {Manifest.permission.CAMERA}, 7);
+              } else if (!isLast) {
+                showOnboarding(onboardingStep + 1);
+              } else {
+                closeOnboarding();
+              }
             });
-    next.setBackground(bg(isLast ? ORANGE : 0xff303c29, 8, 0, 0));
-    footer.addView(next, new LinearLayout.LayoutParams(0, dp(46), 1));
-    panel.addView(footer, new LinearLayout.LayoutParams(-1, -2));
+    next.setTypeface(Typeface.SANS_SERIF, Typeface.BOLD);
+    next.setGravity(Gravity.CENTER);
+    next.setBackground(bg(isLast ? ORANGE : obInk, 999, 0, 0));
+    actions.addView(next, new LinearLayout.LayoutParams(0, dp(50), 1));
+    panel.addView(actions, new LinearLayout.LayoutParams(-1, -2));
   }
 
   private void showGallery() {
@@ -2556,11 +2714,35 @@ public final class MainActivity extends ComponentActivity
       message("Still saving your moment…");
       return;
     }
-    openPanel("The moments you kept.", "NEWEST FIRST · PRIVATE ON THIS DEVICE");
+    java.util.List<PhotoStore.Photo> photos = store.list();
+    if (photos.isEmpty()) {
+      gallerySelectMode = false;
+      gallerySelectedIds.clear();
+    } else {
+      java.util.Set<String> validIds = new java.util.HashSet<>();
+      for (PhotoStore.Photo p : photos) validIds.add(p.id);
+      gallerySelectedIds.retainAll(validIds);
+    }
+
+    openPanel(
+        "The moments you kept.",
+        photos.isEmpty()
+            ? "NEWEST FIRST · PRIVATE ON THIS DEVICE"
+            : photos.size()
+                + (photos.size() == 1 ? " PHOTO" : " PHOTOS")
+                + " · PRIVATE ON THIS DEVICE");
+
+    // Grab the header row created by openPanel() so we can add Select / All / Done controls cleanly
+    LinearLayout head = (LinearLayout) panel.getChildAt(0);
+    LinearLayout titles = (LinearLayout) head.getChildAt(0);
+    TextView heading = (TextView) titles.getChildAt(0);
+    TextView sub = (TextView) titles.getChildAt(1);
+    View closeBtn = head.getChildAt(1);
+
     LinearLayout body = column();
     body.setPadding(dp(17), dp(12), dp(17), dp(20));
     panelScroll.addView(body);
-    java.util.List<PhotoStore.Photo> photos = store.list();
+
     if (photos.isEmpty()) {
       TextView art = iconButton("camera", 0xff82926f, 31, () -> {});
       art.setClickable(false);
@@ -2584,43 +2766,221 @@ public final class MainActivity extends ComponentActivity
       shootLp.topMargin = dp(12);
       shootLp.bottomMargin = dp(30);
       body.addView(shoot, shootLp);
-    } else {
-      for (int i = 0; i < photos.size(); i += 2) {
-        LinearLayout row = row();
-        row.setGravity(Gravity.TOP);
-        body.addView(row);
-        for (int j = i; j < Math.min(i + 2, photos.size()); j++) {
-          PhotoStore.Photo photo = photos.get(j);
-          LinearLayout card = column();
-          card.setPadding(dp(5), dp(5), dp(5), dp(7));
-          card.setBackground(bg(0xfffffcf4, 5, LINE, 1));
-          LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, -2, 1);
-          cp.setMargins(dp(4), dp(4), dp(4), dp(4));
-          row.addView(card, cp);
-          ImageView image = new ImageView(this);
-          image.setScaleType(ImageView.ScaleType.CENTER_CROP);
-          image.setContentDescription("Open captured photo");
-          card.addView(image, new LinearLayout.LayoutParams(-1, dp(180)));
-          loadImage(image, photo.image, 400);
-          JSONObject r = photo.metadata.optJSONObject("recipe");
-          card.addView(
-              text(
-                  (r == null ? "Photo" : r.optString("name"))
-                      + " · "
-                      + photo.metadata.optString("ratio"),
-                  10,
-                  MUTED),
-              new LinearLayout.LayoutParams(-1, dp(29)));
-          card.setOnClickListener(v -> showPhoto(photo));
-        }
-        if (i + 1 == photos.size())
-          row.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
-      }
+      body.addView(
+          paragraph(
+              "Stored privately. Export photos you want in the system gallery. Uninstalling Grain"
+                  + " deletes its private photos."));
+      return;
     }
+
+    // Header selection controls (inserted right before the ✕ button)
+    TextView selectBtn = button("Select", 11, INK, () -> {});
+    selectBtn.setBackground(bg(0xffebe8dd, 999, LINE, 1));
+    selectBtn.setPadding(dp(12), dp(6), dp(12), dp(6));
+    selectBtn.setMinHeight(0);
+    LinearLayout.LayoutParams selBtnLp = new LinearLayout.LayoutParams(-2, -2);
+    selBtnLp.gravity = Gravity.CENTER_VERTICAL;
+    selBtnLp.rightMargin = dp(8);
+    head.addView(selectBtn, 1, selBtnLp);
+
+    TextView selectAllBtn = button("All", 11, INK, () -> {});
+    selectAllBtn.setBackground(bg(0xffebe8dd, 999, LINE, 1));
+    selectAllBtn.setPadding(dp(12), dp(6), dp(12), dp(6));
+    selectAllBtn.setMinHeight(0);
+    LinearLayout.LayoutParams allBtnLp = new LinearLayout.LayoutParams(-2, -2);
+    allBtnLp.gravity = Gravity.CENTER_VERTICAL;
+    allBtnLp.rightMargin = dp(6);
+    head.addView(selectAllBtn, 2, allBtnLp);
+
+    TextView doneSelBtn = button("Done", 11, PAPER, () -> {});
+    doneSelBtn.setBackground(bg(INK, 999, 0, 0));
+    doneSelBtn.setPadding(dp(13), dp(6), dp(13), dp(6));
+    doneSelBtn.setMinHeight(0);
+    LinearLayout.LayoutParams doneBtnLp = new LinearLayout.LayoutParams(-2, -2);
+    doneBtnLp.gravity = Gravity.CENTER_VERTICAL;
+    doneBtnLp.rightMargin = dp(6);
+    head.addView(doneSelBtn, 3, doneBtnLp);
+
+    // Sticky bottom action bar for multi-select Save & Delete
+    LinearLayout actionWrap = column();
+    View barLine = new View(this);
+    barLine.setBackgroundColor(LINE);
+    actionWrap.addView(barLine, new LinearLayout.LayoutParams(-1, dp(1)));
+    LinearLayout actionRow = row();
+    actionRow.setPadding(dp(17), dp(10), dp(17), dp(14));
+    actionRow.setBackgroundColor(PAPER);
+
+    TextView batchSaveBtn = button("Save", 12, INK, () -> {});
+    batchSaveBtn.setBackground(bg(0xffebe8dd, 10, LINE, 1));
+    LinearLayout.LayoutParams saveLp = new LinearLayout.LayoutParams(0, dp(44), 1);
+    saveLp.rightMargin = dp(8);
+    actionRow.addView(batchSaveBtn, saveLp);
+
+    TextView batchDelBtn = button("Delete", 12, PAPER, () -> {});
+    batchDelBtn.setBackground(bg(ORANGE, 10, 0, 0));
+    actionRow.addView(batchDelBtn, new LinearLayout.LayoutParams(0, dp(44), 1));
+    actionWrap.addView(actionRow, new LinearLayout.LayoutParams(-1, -2));
+    panel.addView(actionWrap, new LinearLayout.LayoutParams(-1, -2));
+
+    final List<LinearLayout> cardViews = new ArrayList<>(photos.size());
+    final List<TextView> badgeViews = new ArrayList<>(photos.size());
+
+    final Runnable syncSelectionUi =
+        () -> {
+          int n = gallerySelectedIds.size();
+          int total = photos.size();
+          if (gallerySelectMode) {
+            heading.setText(n > 0 ? n + " selected" : "Select photos");
+            sub.setText(
+                total
+                    + (total == 1 ? " PHOTO" : " PHOTOS")
+                    + " · TAP TO TOGGLE");
+            selectBtn.setVisibility(View.GONE);
+            selectAllBtn.setVisibility(View.VISIBLE);
+            doneSelBtn.setVisibility(View.VISIBLE);
+            closeBtn.setVisibility(View.GONE);
+            selectAllBtn.setText(n == total ? "None" : "All");
+            actionWrap.setVisibility(View.VISIBLE);
+            batchSaveBtn.setEnabled(n > 0);
+            batchSaveBtn.setAlpha(n > 0 ? 1f : .42f);
+            batchSaveBtn.setText(n > 0 ? "Save (" + n + ")" : "Save");
+            batchDelBtn.setEnabled(n > 0);
+            batchDelBtn.setAlpha(n > 0 ? 1f : .42f);
+            batchDelBtn.setText(n > 0 ? "Delete (" + n + ")" : "Delete");
+          } else {
+            heading.setText("The moments you kept.");
+            sub.setText(
+                total
+                    + (total == 1 ? " PHOTO" : " PHOTOS")
+                    + " · PRIVATE ON THIS DEVICE");
+            selectBtn.setVisibility(View.VISIBLE);
+            selectAllBtn.setVisibility(View.GONE);
+            doneSelBtn.setVisibility(View.GONE);
+            closeBtn.setVisibility(View.VISIBLE);
+            actionWrap.setVisibility(View.GONE);
+          }
+          for (int k = 0; k < photos.size(); k++) {
+            boolean sel = gallerySelectMode && gallerySelectedIds.contains(photos.get(k).id);
+            LinearLayout c = cardViews.get(k);
+            TextView b = badgeViews.get(k);
+            c.setBackground(bg(0xfffffcf4, 6, sel ? ORANGE : LINE, sel ? 2 : 1));
+            if (gallerySelectMode) {
+              b.setVisibility(View.VISIBLE);
+              b.setText(sel ? "✓" : "");
+              b.setBackground(
+                  bg(sel ? ORANGE : 0x70111210, 999, 0xe6ffffff, sel ? 1 : 2));
+            } else {
+              b.setVisibility(View.GONE);
+            }
+          }
+        };
+
+    selectBtn.setOnClickListener(
+        v -> {
+          gallerySelectMode = true;
+          syncSelectionUi.run();
+        });
+    doneSelBtn.setOnClickListener(
+        v -> {
+          gallerySelectMode = false;
+          gallerySelectedIds.clear();
+          syncSelectionUi.run();
+        });
+    selectAllBtn.setOnClickListener(
+        v -> {
+          if (gallerySelectedIds.size() == photos.size()) {
+            gallerySelectedIds.clear();
+          } else {
+            for (PhotoStore.Photo p : photos) gallerySelectedIds.add(p.id);
+          }
+          syncSelectionUi.run();
+        });
+    batchDelBtn.setOnClickListener(
+        v -> {
+          List<PhotoStore.Photo> chosen = new ArrayList<>();
+          for (PhotoStore.Photo p : photos) {
+            if (gallerySelectedIds.contains(p.id)) chosen.add(p);
+          }
+          if (!chosen.isEmpty()) deleteBatch(chosen);
+        });
+    batchSaveBtn.setOnClickListener(
+        v -> {
+          List<PhotoStore.Photo> chosen = new ArrayList<>();
+          for (PhotoStore.Photo p : photos) {
+            if (gallerySelectedIds.contains(p.id)) chosen.add(p);
+          }
+          if (!chosen.isEmpty()) exportBatch(chosen);
+        });
+
+    for (int i = 0; i < photos.size(); i += 2) {
+      LinearLayout row = row();
+      row.setGravity(Gravity.TOP);
+      body.addView(row);
+      for (int j = i; j < Math.min(i + 2, photos.size()); j++) {
+        PhotoStore.Photo photo = photos.get(j);
+        LinearLayout card = column();
+        card.setPadding(dp(5), dp(5), dp(5), dp(7));
+        card.setBackground(bg(0xfffffcf4, 6, LINE, 1));
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, -2, 1);
+        cp.setMargins(dp(4), dp(4), dp(4), dp(4));
+        row.addView(card, cp);
+
+        FrameLayout thumbBox = new FrameLayout(this);
+        ImageView image = new ImageView(this);
+        image.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        image.setContentDescription("Open captured photo");
+        thumbBox.addView(image, new FrameLayout.LayoutParams(-1, dp(180)));
+        loadImage(image, photo.image, 400);
+
+        TextView badge = text("", 11, 0xffffffff);
+        badge.setGravity(Gravity.CENTER);
+        badge.setTypeface(Typeface.SANS_SERIF, Typeface.BOLD);
+        badge.setVisibility(View.GONE);
+        FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(dp(23), dp(23), Gravity.TOP | Gravity.END);
+        blp.setMargins(dp(7), dp(7), dp(7), dp(7));
+        thumbBox.addView(badge, blp);
+        card.addView(thumbBox, new LinearLayout.LayoutParams(-1, dp(180)));
+
+        JSONObject r = photo.metadata.optJSONObject("recipe");
+        card.addView(
+            text(
+                (r == null ? "Photo" : r.optString("name"))
+                    + " · "
+                    + photo.metadata.optString("ratio"),
+                10,
+                MUTED),
+            new LinearLayout.LayoutParams(-1, dp(29)));
+
+        card.setOnClickListener(
+            v -> {
+              if (gallerySelectMode) {
+                if (!gallerySelectedIds.remove(photo.id)) gallerySelectedIds.add(photo.id);
+                syncSelectionUi.run();
+              } else {
+                showPhoto(photo);
+              }
+            });
+        card.setOnLongClickListener(
+            v -> {
+              v.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+              gallerySelectMode = true;
+              gallerySelectedIds.add(photo.id);
+              syncSelectionUi.run();
+              return true;
+            });
+
+        cardViews.add(card);
+        badgeViews.add(badge);
+      }
+      if (i + 1 == photos.size())
+        row.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
+    }
+
     body.addView(
         paragraph(
-            "Stored privately. Export photos you want in the system gallery. Uninstalling Grain"
-                + " deletes its private photos."));
+            "Tip: Long-press any photo (or tap Select) to choose multiple frames at once."
+                + " Stored privately — uninstalling Grain deletes its private photos."));
+    syncSelectionUi.run();
   }
 
   private void showPhoto(PhotoStore.Photo photo) {
@@ -2688,33 +3048,81 @@ public final class MainActivity extends ComponentActivity
   }
 
   private void delete(PhotoStore.Photo photo) {
+    deleteBatch(java.util.Collections.singletonList(photo));
+  }
+
+  private void deleteBatch(List<PhotoStore.Photo> targets) {
+    if (targets == null || targets.isEmpty()) return;
+    if (purgeTask != null) main.removeCallbacks(purgeTask);
+    pendingDelete.clear();
     store.purgeTrash();
-    if (!store.trash(photo)) {
-      message("Could not delete this photo");
+    for (PhotoStore.Photo p : targets) {
+      if (store.trash(p)) pendingDelete.add(p);
+    }
+    if (pendingDelete.isEmpty()) {
+      message("Could not delete selected photo(s)");
       return;
     }
-    pendingDelete = photo;
+    int count = pendingDelete.size();
+    gallerySelectMode = false;
+    gallerySelectedIds.clear();
     showGallery();
     updateThumb();
-    if (purgeTask != null) main.removeCallbacks(purgeTask);
     showSnackbar(
-        "Photo deleted.",
+        count == 1 ? "Photo deleted." : count + " photos deleted.",
         "Undo",
         () -> {
-          if (pendingDelete != null && store.restore(pendingDelete)) {
-            pendingDelete = null;
-            main.removeCallbacks(purgeTask);
-            showGallery();
-            updateThumb();
-            message("Photo restored.");
+          int restored = 0;
+          for (PhotoStore.Photo p : pendingDelete) {
+            if (store.restore(p)) restored++;
+          }
+          pendingDelete.clear();
+          if (purgeTask != null) main.removeCallbacks(purgeTask);
+          showGallery();
+          updateThumb();
+          if (restored > 0) {
+            message(restored == 1 ? "Photo restored." : restored + " photos restored.");
           }
         });
     purgeTask =
         () -> {
-          pendingDelete = null;
+          pendingDelete.clear();
           store.purgeTrash();
         };
     main.postDelayed(purgeTask, 7000);
+  }
+
+  private void exportBatch(List<PhotoStore.Photo> targets) {
+    if (targets == null || targets.isEmpty()) return;
+    int total = targets.size();
+    gallerySelectMode = false;
+    gallerySelectedIds.clear();
+    showGallery();
+    message(total == 1 ? "Saving photo…" : "Saving " + total + " photos…");
+    files.execute(
+        () -> {
+          int saved = 0;
+          for (PhotoStore.Photo p : targets) {
+            try {
+              store.export(p, false);
+              saved++;
+            } catch (Exception ignored) {
+            }
+          }
+          final int done = saved;
+          runOnUiThread(
+              () -> {
+                if (isDestroyed()) return;
+                if (done > 0) {
+                  message(
+                      done == 1
+                          ? "Saved to device gallery."
+                          : "Saved " + done + " photos to device gallery.");
+                } else {
+                  message("Could not export selected photos.");
+                }
+              });
+        });
   }
 
   private void export(PhotoStore.Photo photo, boolean full, boolean share) {
@@ -2765,7 +3173,7 @@ public final class MainActivity extends ComponentActivity
       text.setText(json.toString(2).replace("\\/", "/"));
     } catch (Exception ignored) {
     }
-    text.setTypeface(Typeface.MONOSPACE);
+    text.setTypeface(Typeface.SANS_SERIF);
     text.setGravity(Gravity.TOP | Gravity.START);
     text.setPadding(dp(16), dp(12), dp(16), dp(12));
     text.setTextIsSelectable(true);

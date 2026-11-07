@@ -1,27 +1,26 @@
-## Grain Photo vVERSION — working Shutter/ISO dials, Bright Kodak, Flash, first-install intro & Xiaomi HyperOS updater fix (device-test beta)
+## Grain Photo vVERSION — Gallery multi-select delete, minimalist darkroom onboarding & Xiaomi HyperOS updater (device-test beta)
 
-- **Updating from v0.6.0 on Xiaomi / Redmi / POCO (HyperOS / MIUI):** Download and install **Grain-vVERSION.apk** once below (installs directly over `v0.6.0` — your photos, LUTs, and settings stay intact). From **vVERSION** onward, future in-app updates work cleanly on HyperOS without triggering Xiaomi's silent-session `"Update cancelled"` block.
+- **On Grain v0.7.1:** Open Grain (or **MENU → SET UP → APP UPDATE**) to install **vVERSION** directly inside the app.
+- **On Grain v0.6.0 or older (Xiaomi / Redmi / POCO HyperOS):** Download and install **Grain-vVERSION.apk** once below — your photos, LUTs, and settings stay intact, and all future in-app updates work seamlessly.
 
-### What's new in v0.7.1
+### What's new in v0.7.2
 
-#### 1. Fixed: In-App Updater `"Update cancelled"` on Xiaomi HyperOS / MIUI
-- Xiaomi HyperOS / MIUI aborts `PackageInstaller` sessions that request Android 12+ `USER_ACTION_NOT_REQUIRED` (`INSTALL_FAILED_ABORTED: Permission denied`), which `v0.6.0` reported as `"Update cancelled."`.
-- **v0.7.1** adds a dedicated `FileProvider` system-installer path (`application/vnd.android.package-archive`) for Xiaomi/Redmi/POCO devices plus automatic fallback on any OEM-restricted session abort and foreground confirmation launching.
+#### 1. Gallery Multi-Select + Batch Delete & Save
+- Tap **Select** in the gallery header (or **long-press** any photo) to choose multiple frames together.
+- Toggle **All / None**, batch **Delete (N)** with a 7-second **Undo** snackbar that restores all selected photos at once, or batch **Save (N)** to export multiple frames to your device gallery in one tap.
 
-#### 2. Fixed: Shutter Speed & ISO Dial (`P` / `S` / `ISO` / `M`)
-- **Live viewfinder preview:** Turning the top-left **Shutter Speed** or **ISO** drum now drives live sensor exposure in real time (`P`, `S` Shutter Priority, `ISO` Priority, and `M` Manual) instead of leaving the viewfinder on auto exposure. Slow shutter speeds (`1/4s` – `1"`) cap preview frame time at `1/8s` with proportional preview ISO boost so viewfinder brightness matches your dial while staying smooth.
-- **Reliable manual still capture:** Disables Zero-Shutter-Lag (`CONTROL_ENABLE_ZSL = false`) and sets `SENSOR_FRAME_DURATION` on manual/priority stills so Android 10+ / Xiaomi / MediaTek HALs expose at your exact requested shutter time and ISO rather than returning a buffered auto-exposed ZSL frame.
-- **Closed-loop priority metering & easier `[ISO]` toggle:** Tracks ambient brightness changes during `S` and `ISO` priority modes, displays distinct `P` / `S` / `ISO` / `M` mode badges + dial toasts, and expands the `[ISO]` / `SHUTTER` tap target beneath the top-left drum so finger taps never miss.
-
-#### 3. New Film Recipe: **Bright Kodak** (`BKD`)
-- Added Ritchie Roesch’s published X-Trans IV **Bright Kodak** recipe right alongside *Kodak Gold 200* on the Film dial (**`BKD`**): Classic Chrome, `DR400`, Highlight `-2`, Shadow `-2`, Color `+4`, Sharpness `-2`, High ISO NR `-4`, Clarity `-3`, Strong Large grain, Color Chrome Off, FX Blue Off, Daylight WB (`R +3, B -7`), typical exposure `+1 to +1 2/3 EV`.
-
-#### 4. Hardware **Flash** (`⚡ Off · Auto · Fill On · Torch`)
-- Added a dedicated top-plate **`⚡`** Flash button (portrait & landscape), **MENU → SHOOT → FLASH**, and OSD flash indicator.
-- Runs full Camera2 `CONTROL_AE_PRECAPTURE_TRIGGER` metering before `AUTO` / `FILL ON` flash captures, supports `FLASH_MODE_SINGLE` with manual exposure, and provides continuous `TORCH` LED fill light.
-
-#### 5. First-Install Intro & Onboarding Guide
-- New full-screen 4-step welcome flow on first install covering what Grain is, what it offers, contextual camera-only permission + local privacy pledge, and live **Silver / Black / Graphite** camera body finish selection before opening the shutter.
+#### 2. Minimalist Darkroom Onboarding
+- Redesigned 4-step first-install welcome flow with clean proportional sans-serif typography, generous breathing space, and literal photographic hardware illustrations:
+  1. **Shoot like film** — 35mm film canister & perforated negative strip
+  2. **Real manual controls** — interactive circular shutter-speed dial
+  3. **Camera access, privately** — rangefinder camera with on-device privacy lock
+  4. **Choose your camera body** — live two-tone Silver, Black, or Graphite camera preview
 - Replayable anytime from **MENU → SET UP → INTRO GUIDE**.
+
+#### 3. Also Included from v0.7.0 – v0.7.1
+- **Xiaomi HyperOS / MIUI In-App Updater Fix:** `FileProvider` system-installer integration so HyperOS never aborts updates with `"Update cancelled"`.
+- **Shutter Speed & ISO Dial Fix:** Real-time viewfinder sensor exposure preview (`P`, `S`, `ISO`, `M`), `ZSL = false` manual capture accuracy, closed-loop priority metering, and enlarged `[ISO]` toggle tap zone.
+- **Bright Kodak (`BKD`):** Ritchie Roesch’s published X-Trans IV *Bright Kodak* film recipe on the Film dial.
+- **Hardware Flash (`⚡`):** `Off`, `Auto`, `Fill On`, and `Torch` on the top plate, menu, and OSD.
 
 Signed with the project's personal key (certificate SHA-256 `6e073ef6…`). `SHA256SUMS.txt` verifies the APK download.
