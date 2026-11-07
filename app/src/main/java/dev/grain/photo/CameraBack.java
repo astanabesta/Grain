@@ -59,6 +59,19 @@ final class CameraBack extends ViewGroup {
 
     /** Continuous horizontal motion on the rear command slider in design units (+ = right). */
     default void commandSlide(float deltaUnits) {}
+
+    /** True when the manual-focus scale should be shown under the screen. */
+    default boolean mfVisible() {
+      return false;
+    }
+
+    /** The manual focus the scale was dragged to, as a fraction of the lens travel (0..1). */
+    default void mfSlide(float fraction) {}
+
+    /** The closest focus distance the lens reports, in dioptres (0 when it reports none). */
+    default float minFocusDistance() {
+      return 0f;
+    }
   }
 
   static final int K_Q = 1, K_OK = 2, K_DISP = 3, K_PLAY = 4, K_DRIVE = 5, K_AEL = 6, K_LEVER = 7,
@@ -82,7 +95,7 @@ final class CameraBack extends ViewGroup {
     /** Held-to-magnify Focus Check patch around the focus point, or null when inactive. */
     Bitmap mag;
     double exposure;
-    float level = Float.NaN, afX = .5f, afY = .5f, faceL, faceT, faceR, faceB;
+    float level = Float.NaN, afX = .5f, afY = .5f, faceL, faceT, faceR, faceB, mfFraction;
     int[] histogram;
     long toastAt;
   }
@@ -102,6 +115,8 @@ final class CameraBack extends ViewGroup {
   final Command command;
   final Lever lever;
   final Shutter shutter;
+  /** The manual-focus scale that sits under the screen. */
+  final MfScale focusScale;
   private final Map<View, RectF> places = new HashMap<>();
   private final List<Engraving> engravings = new ArrayList<>();
   private Engraving shutterEngraving;
@@ -190,6 +205,8 @@ final class CameraBack extends ViewGroup {
     addView(disp);
     shutter = new Shutter(c);
     addView(shutter);
+    focusScale = new MfScale(c);
+    addView(focusScale);
     evfBack = new TextView(c);
     evfBack.setText("◀  SCREEN");
     evfBack.setGravity(Gravity.CENTER);
@@ -261,6 +278,8 @@ final class CameraBack extends ViewGroup {
 
   void refresh() {
     osd.invalidate();
+    focusScale.setVisibility(host.mfVisible() ? VISIBLE : GONE);
+    focusScale.invalidate();
   }
 
   void toast(String title, String sub) {
@@ -550,6 +569,7 @@ final class CameraBack extends ViewGroup {
     put(shutter, d(160, by + 60, 116, 116));
     put(lever, d(296, by + 58, 74, 74));
     put(ok, d(307, by + 144, 52, 52));
+    put(focusScale, d(30, 488 + extra, 340, 100));
     fit(screen, ratio, image);
     placeScreen(screen);
   }
@@ -604,6 +624,7 @@ final class CameraBack extends ViewGroup {
     put(shutter, d(700 + rx, 138, 118, 118));
     thumb.set(d(694 + rx, 296, 140, 86));
     grille.set(d(534 + rx, 334, 54, 22));
+    put(focusScale, d(40, 312, 330, 82));
     fit(screen, ratio, image);
     placeScreen(screen);
   }
@@ -620,6 +641,7 @@ final class CameraBack extends ViewGroup {
       }
       ox = 0;
       image.set(d(32, 8, 152, 102));
+      put(focusScale, d(32, 126, 420, 80));
     } else {
       if (w / 400f <= h / 860f) {
         u = w / 400f;
@@ -643,6 +665,7 @@ final class CameraBack extends ViewGroup {
         }
       }
       image.set(vf);
+      put(focusScale, d(16, 118, 368, 88));
     }
     put(osd, new RectF(0, 0, w, h));
     overlayRect.set(image);
@@ -1163,6 +1186,126 @@ final class CameraBack extends ViewGroup {
               new float[] {0, .22f, .78f, 1}, Shader.TileMode.CLAMP));
       c.drawRoundRect(0, 0, w, h, 5 * u, 5 * u, p);
       p.setShader(null);
+    }
+  }
+
+  /**
+   * The manual-focus scale that sits under the screen: the stops the lens can reach, engraved with
+   * the distance each one is, and a thumb that can be dragged to any of them. The lens focuses by
+   * dioptres, so the scale is stretched at the far end and crowded at the near end, exactly like
+   * the distance scale on a lens barrel.
+   */
+  final class MfScale extends View {
+    private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint t = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private int lastStep = -1;
+
+    MfScale(Context c) {
+      super(c);
+      t.setTypeface(Typeface.create("sans-serif-condensed", Typeface.BOLD));
+      setClickable(true);
+      setFocusable(true);
+      setContentDescription("Manual focus distance");
+    }
+
+    private float pad() {
+      return 16 * u;
+    }
+
+    /** The focus fraction the given x on the scale means. */
+    private float fractionAt(float x) {
+      float w = getWidth(), p = pad();
+      if (w <= 2 * p) return 0f;
+      return FocusScale.clampFraction((x - p) / (w - 2 * p));
+    }
+
+    private void apply(float x) {
+      host.mfSlide(fractionAt(x));
+      int step = Math.round(fractionAt(x) * FocusScale.STEPS);
+      if (step != lastStep) {
+        lastStep = step;
+        performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+      }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    @Override
+    public boolean onTouchEvent(MotionEvent e) {
+      switch (e.getActionMasked()) {
+        case MotionEvent.ACTION_DOWN:
+          getParent().requestDisallowInterceptTouchEvent(true);
+          apply(e.getX());
+          return true;
+        case MotionEvent.ACTION_MOVE:
+          apply(e.getX());
+          return true;
+        case MotionEvent.ACTION_UP:
+          apply(e.getX());
+          performClick();
+          return true;
+        case MotionEvent.ACTION_CANCEL:
+          return true;
+        default:
+          return super.onTouchEvent(e);
+      }
+    }
+
+    @Override
+    public boolean performClick() {
+      super.performClick();
+      return true;
+    }
+
+    @Override
+    protected void onDraw(Canvas c) {
+      float w = getWidth(), h = getHeight(), p = pad();
+      float minFocus = host.minFocusDistance();
+      float value = FocusScale.clampFraction(state.mfFraction);
+      float trackY = h * .58f;
+      p.setStyle(Paint.Style.FILL);
+      p.setShader(
+          new LinearGradient(
+              0, 0, 0, h, new int[] {0xff2b2c29, 0xff121311, 0xff050505}, null, Shader.TileMode.CLAMP));
+      c.drawRoundRect(0, 0, w, h, 7 * u, 7 * u, p);
+      p.setShader(null);
+      t.setFakeBoldText(true);
+      t.setTextSize(7 * u);
+      t.setColor(0xffb9b7ad);
+      t.setTextAlign(Paint.Align.LEFT);
+      c.drawText("MANUAL FOCUS", p, h * .2f, t);
+      t.setFakeBoldText(false);
+      p.setStrokeWidth(Math.max(1f, 2 * u));
+      p.setColor(0xff000000);
+      c.drawLine(p, trackY, w - p, trackY, p);
+      p.setStrokeWidth(Math.max(1f, 1 * u));
+      p.setColor(0xff4a4b46);
+      c.drawLine(p, trackY - 1 * u, w - p, trackY - 1 * u, p);
+      int stops = FocusScale.stopCount(minFocus);
+      t.setTextSize(6.2f * u);
+      for (int i = 0; i < stops; i++) {
+        float f = FocusScale.stopFraction(i, minFocus);
+        float x = p + f * (w - 2 * p);
+        p.setColor(0xff77786f);
+        p.setStrokeWidth(Math.max(1f, 1.2f * u));
+        c.drawLine(x, trackY - 7 * u, x, trackY - 2 * u, p);
+        t.setColor(0xff9b998f);
+        t.setTextAlign(
+            x < p + 8 * u ? Paint.Align.LEFT : x > w - p - 8 * u ? Paint.Align.RIGHT : Paint.Align.CENTER);
+        c.drawText(FocusScale.stopLabel(i, minFocus), x, trackY - 10 * u, t);
+      }
+      float x = p + value * (w - 2 * p);
+      p.setColor(ORANGE);
+      c.drawRoundRect(x - 1.6f * u, trackY - 11 * u, x + 1.6f * u, trackY + 11 * u, 1.6f * u, 1.6f * u, p);
+      t.setFakeBoldText(true);
+      t.setTextSize(8.6f * u);
+      t.setColor(ORANGE);
+      t.setTextAlign(Paint.Align.CENTER);
+      c.drawText(
+          FocusScale.label(value, minFocus),
+          Math.max(p + 16 * u, Math.min(w - p - 16 * u, x)),
+          h * .93f,
+          t);
+      t.setFakeBoldText(false);
     }
   }
 

@@ -58,7 +58,7 @@ Every exposure saves a machine-readable **JSON receipt** documenting what was re
 | **Films & Recipes** | **11 published Fujifilm recipes**, **12 official Fujifilm film simulations**, **Sony `s709`**, and **4 capture-time ISP looks** |
 | **Phone-Sensor Calibration** | Dedicated CMOS-to-emulsion calibration on **Kodak 800 v3 (`K800`)**, **Leica X (`LCX`)**, and **CineStill 800T (`800T`)**: RAF-matched Kelvin white points, soft highlight shoulders, open Portra / grounded Leica & Vision3 shadow toes, scene-linear remjet-free red-orange halation, perceptual `OKLab` colour & `Color Chrome` pigment density, skin protection, foliage hue calibration, and hue-preserving gamut compression |
 | **Exposure & Flash** | Closed-loop **P / S / ISO / M** exposure solver (`1/4000 s` – `1 s`, `ISO 50–12800`), EV `−2…+2` (plus `0.1 EV` fine command-dial mode), AE-L, face-weighted metering, and hardware flash (`⚡ OFF / ON / AUTO / TORCH`) |
-| **Focus & Loupe** | Single / Zone / Centre / Face AF, sticky **AF-C face tracking**, AF lock, **30-step manual focus**, real-time **focus peaking**, and **`4× / 8×` Focus Check magnifier loupe** |
+| **Focus & Loupe** | Single / Zone / Centre / Face AF, sticky **AF-C face tracking**, AF lock, **30-step manual focus** with a **scale under the screen engraved with the real distances the lens reports**, real-time **focus peaking**, and **`4× / 8×` Focus Check magnifier loupe** |
 | **Drive & Bracketing** | Single shot, `3 s` / `5 s` self-timer, **3-film simulation bracketing (`FS BKT`)**, **3 / 5 / 7-frame focus bracketing (`FOCUS BKT`)**, and **two Tripod 4-Shot High-Resolution Modes (`HI-RES 1 36MP` / `HI-RES 2 48MP`)** |
 | **Darkroom Gallery** | Private on-device film roll, **multi-select batch delete** (with 7-second Undo) & **batch export** to `Pictures/Grain`, share sheet, and full per-photo technical receipts |
 | **Updates & Privacy** | Zero accounts, analytics, telemetry, or cloud uploads; optional SHA-256-verified in-app updates from GitHub Releases (with Xiaomi HyperOS / MIUI system-installer support) |
@@ -194,7 +194,7 @@ Full mathematical derivations and calibration measurements are documented in **[
 - **Requirements:** Android 10+ (API 29+, targeting API 36). `◆` RAW films require Camera2 `RAW_SENSOR` support on the active rear lens.
 - **Automated suite:**
   - **1,278** SDK-free pure-Java crop, tone-curve, preview, focus, and exposure smoke tests (`tools/check-source.sh`).
-  - **94** JUnit & Robolectric tests covering F-Log2 / S-Log3 round-trips, DNG Planckian/Bradford colour math, noise measurement, bit-identical golden hashes, sensor-calibrated tone/colour/halation invariants, analog focus-lever physics, blackout viewfinder geometry, exposure planning, Hi-Res merge sizing, preview read-back safety, and OTA update verification.
+  - **105** JUnit & Robolectric tests covering F-Log2 / S-Log3 round-trips, DNG Planckian/Bradford colour math, noise measurement, bit-identical golden hashes, sensor-calibrated tone/colour/halation invariants, analog focus-lever physics, blackout viewfinder geometry, exposure planning, Hi-Res merge sizing, preview read-back safety, manual-focus scale geometry, and OTA update verification.
   - GitHub Actions runs `:app:testDebugUnitTest`, `:app:lintDebug`, and `:app:assembleRelease` before publishing every release.
 
 ---
@@ -245,6 +245,7 @@ app/src/main/java/dev/grain/photo/
   GrainCamera.java              Camera2 session, P/S/ISO/M control, AF-C, flash & bracketing
   ExposureMath.java             Closed-loop P / S / ISO / M exposure & preview-cap solver
   FocusMath.java                Manual focus steps, AF regions & focus-bracketing math
+  FocusScale.java               Dioptre-to-distance scale behind the manual-focus engraving
   AppUpdater.java               GitHub Releases checker, SHA-256 verifier & installer handoff
   Recipe.java                   Registry of ISP looks, simulations, recipes & capture headroom
   RecipeTuning.java             Persistent per-film tuning state
@@ -305,6 +306,7 @@ tools/                          SDK-free syntax/math verifier, iOS type-check & 
 
 | Version | Highlights |
 | --- | --- |
+| **v0.8.3** | **A real manual-focus scale under the screen** (`Android`) — the stops are engraved with the actual distances the lens reports (`∞` · `1 m` · `0.5 m` · `0.2 m` · `0.1 m` on the Redmi Note 13 Pro+), it drags with a thumb and works while the focus loupe is up. **MENU → SET UP → DIAGNOSTICS** now also dumps the camera's vendor super-resolution and remosaic paths, so we can find out whether the phone has a 108 MP mode of its own before building one |
 | **v0.8.2** | **The preview read-back can no longer crash Grain** — all three preview readers (histogram, focus loupe, peaking) now share one guarded read-back, so a frame that cannot be read is simply a frame with no overlay. Grain also now shows its own crash report on the next launch, with a **Copy** button |
 | **v0.8.1** | **Two Tripod High-Resolution Modes (`HI-RES 1 36MP` / `HI-RES 2 48MP`)** on Android & iOS — the existing `~36 MP` merge plus a new `~48 MP` (`~8000 × 6000`) merge from the same 4-frame sub-pixel registration — and a **fix for the focus-peaking crash** (preview read-back can no longer take the app down) |
 | **v0.8.0** | **Tripod 4-Shot `~36 MP` High-Resolution Mode (`HI-RES 4×` / `HI-RES 36MP`)** on Android & iOS: `4 s` tripod settle countdown, haptic/Taptic OIS sub-pixel micro-shift, 4-frame RAW super-resolution merge (~`6912 × 5184`), and strip-tiled low-RAM film development |

@@ -8,6 +8,26 @@ one was a separate APK install on the device.
 
 ---
 
+## v0.8.3 — A Real Manual-Focus Scale, and a Probe for the 108 MP Path (`Android`)
+
+Both changes are **Android only for now**; the iOS build follows later.
+
+- **A manual-focus scale under the screen** — Pick `MANUAL` in `MENU → FOCUS MODE` and a focus scale
+  appears directly under the display, in the band between the screen and the bottom deck. It shows
+  only while manual focus is selected. The stops are **real distances read from the lens itself**:
+  a lens focuses by dioptres and the distance is the reciprocal, so the scale is stretched at the
+  far end and crowded at the near end, like the distance scale on a lens barrel. The Redmi Note 13
+  Pro+ reports a closest focus of **10 cm**, so the scale runs from **∞** to **10 cm** and is
+  engraved **∞ · 1 m · 0.5 m · 0.2 m · 0.1 m**, with the exact distance under the thumb while you
+  drag. It works while the focus loupe is up. The `MF DISTANCE` menu item, the magnifier label and
+  the focus toast now read the distance (`0.30 m`) instead of `STEP 7 / 30`.
+- **The HAL probe** — `MENU → SET UP → DIAGNOSTICS` now also dumps what the camera's own hardware
+  says about its high-resolution paths: the vendor super-resolution and remosaic characteristics,
+  the vendor request keys that switch them on, and every output size the scaler advertises,
+  including the Android 13+ maximum-resolution map. The public Camera2 sizes on this phone stop at
+  **4080 × 3060 (12.5 MP)** for both JPEG and RAW, so any bigger mode has to come from the phone's
+  own engine; the probe establishes whether one exists before any of it is built.
+
 ## v0.8.2 — The Preview Read-Back Can No Longer Crash Grain (`Android`)
 
 - **The real cause of the focus peaking crash, found and fixed** — Turning on `PEAKING` and then

@@ -4012,6 +4012,7 @@ public final class MainActivity extends ComponentActivity
       }
       if (faceExposure) o.icons.add("FACE");
     } else o.icons.add("ISP " + strengths[recipe] + "%");
+    o.mfFraction = mfStep / (float) MF_STEPS;
     if (mfOn) o.icons.add("MF");
     else if (afArea == GrainCamera.AF_FACE)
       o.icons.add(focusMode == FocusMath.FOCUS_AFS ? "AF-S" : "AF-C");
@@ -4256,7 +4257,16 @@ public final class MainActivity extends ComponentActivity
     int factor = FocusMath.magFactor(magnifier);
     if (factor <= 1) return "";
     if (!mfOn) return factor + "×";
+    float min = camera == null ? 0f : camera.minFocusDistance();
+    if (min > 0f) return factor + "× · " + FocusScale.label(mfStep / (float) MF_STEPS, min);
     return factor + "× · " + (mfStep == 0 ? "INF" : mfStep + "/" + MF_STEPS);
+  }
+
+  /** The distance the lens is focused at, read off the lens's own dioptre travel. */
+  private String mfLabel() {
+    float min = camera == null ? 0f : camera.minFocusDistance();
+    if (min > 0f) return FocusScale.label(mfStep / (float) MF_STEPS, min);
+    return mfStep == 0 ? "INFINITY" : "STEP " + mfStep + " / " + MF_STEPS;
   }
 
   private void syncMagnifier() {
@@ -4957,9 +4967,7 @@ public final class MainActivity extends ComponentActivity
           savePrefs();
           back.state.magLabel = currentMagLabel();
           pushOsd();
-          back.toast(
-              mfStep == 0 ? "MF INFINITY" : "MF STEP " + mfStep + " / " + MF_STEPS,
-              "manual focus distance");
+          back.toast("MF " + mfLabel(), "manual focus distance");
         } else setZoom(Math.round((zoom + steps * .1) * 10) / 10.0);
         break;
     }
@@ -5311,7 +5319,7 @@ public final class MainActivity extends ComponentActivity
   /** The AF area modes by name, matching the GrainCamera AF_* constants. */
   private static final String[] AF_AREA_NAMES = {"SINGLE", "MULTI", "ZONE", "CENTER", "FACE"};
   /** Manual focus steps: one dial click moves the lens one step between infinity and its closest. */
-  private static final int MF_STEPS = 30;
+  private static final int MF_STEPS = FocusScale.STEPS;
   /** The peaking read-back, kept small so measuring it does not cost the preview. */
   private static final int PEAK_W = 160, PEAK_H = 120;
 
@@ -5420,6 +5428,7 @@ public final class MainActivity extends ComponentActivity
                   focusMode = (focusMode + (d < 0 ? 2 : 1)) % 3;
                   mfOn = focusMode == FocusMath.FOCUS_MANUAL;
                   camera.setFocusMode(focusMode);
+                  if (mfOn) camera.setFocusFraction(mfStep / (float) MF_STEPS);
                   camera.update(snapshot());
                   savePrefs();
                   pushOsd();
@@ -5428,13 +5437,14 @@ public final class MainActivity extends ComponentActivity
         items.add(
             new Item(
                 "MF DISTANCE",
-                () -> mfOn ? (mfStep == 0 ? "INFINITY" : "STEP " + mfStep + " / " + MF_STEPS) : FocusMath.FOCUS_MODE_NAMES[focusMode],
+                () -> mfOn ? mfLabel() : FocusMath.FOCUS_MODE_NAMES[focusMode],
                 d -> {
                   if (!mfOn) return;
                   mfStep = Math.max(0, Math.min(MF_STEPS, mfStep + (d < 0 ? -1 : 1)));
                   camera.setFocusFraction(mfStep / (float) MF_STEPS);
                   camera.update(snapshot());
                   savePrefs();
+                  pushOsd();
                 },
                 false));
         items.add(
@@ -6174,5 +6184,27 @@ public final class MainActivity extends ComponentActivity
                 });
           }
         });
+  }
+
+  @Override
+  public boolean mfVisible() {
+    return mfOn;
+  }
+
+  @Override
+  public void mfSlide(float fraction) {
+    if (camera == null) return;
+    int step = Math.max(0, Math.min(MF_STEPS, Math.round(fraction * MF_STEPS)));
+    if (step == mfStep) return;
+    mfStep = step;
+    camera.setFocusFraction(mfStep / (float) MF_STEPS);
+    camera.update(snapshot());
+    savePrefs();
+    pushOsd();
+  }
+
+  @Override
+  public float minFocusDistance() {
+    return camera == null ? 0f : camera.minFocusDistance();
   }
 }

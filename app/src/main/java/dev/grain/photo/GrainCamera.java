@@ -1984,6 +1984,120 @@ public final class GrainCamera {
         .put("rawSelected", rawSize == null ? JSONObject.NULL : rawSize.toString())
         .put("rawProbe", RawSupport.probe(chars, streams))
         .put("captureLimit", "16 MP balanced / 24 MP larger, selected from public JPEG sizes");
+    // The vendor high-resolution paths. The public JPEG and RAW sizes stop at 12 MP on this
+    // camera, so if a bigger sensor mode exists at all it lives behind these tags.
+    capabilities.put("hal", halProbe(chars, streams));
+  }
+
+  /**
+   * Everything the HAL says about its own high-resolution paths: the vendor characteristics that
+   * carry the super-resolution and remosaic stream lists, the vendor request keys that switch them
+   * on, and every output size the scaler advertises. Read-only, so it is safe to run at any time.
+   */
+  private JSONObject halProbe(CameraCharacteristics chars, StreamConfigurationMap streams)
+      throws JSONException {
+    JSONObject hal = new JSONObject();
+    JSONObject vendor = new JSONObject();
+    try {
+      for (CameraCharacteristics.Key<?> key : chars.getKeys()) {
+        String name = key.getName();
+        if (!name.matches("(?i).*(superres|remosaic|scaler|sat\\.|qcfa|xiaomi\\.).*")) continue;
+        vendor.put(name, jsonable(charValue(chars, key)));
+      }
+    } catch (Throwable t) {
+      vendor.put("error", String.valueOf(t));
+    }
+    hal.put("vendorCharacteristics", vendor);
+    JSONArray vendorKeys = new JSONArray();
+    for (CaptureRequest.Key<?> key : requestKeys)
+      if (key.getName().matches("(?i).*(superres|remosaic|scaler|sat\\.|qcfa|xiaomi\\.).*"))
+        vendorKeys.put(key.getName());
+    hal.put("vendorRequestKeys", vendorKeys);
+    JSONObject sizes = new JSONObject();
+    sizes.put("jpeg", sizeList(outputSizes(streams, ImageFormat.JPEG)));
+    sizes.put("raw", sizeList(outputSizes(streams, ImageFormat.RAW_SENSOR)));
+    sizes.put("yuv", sizeList(outputSizes(streams, ImageFormat.YUV_420_888)));
+    hal.put("streamSizes", sizes);
+    // The maximum-resolution map only exists from Android 13, so it is fetched by name: a device
+    // that does not have it must not fail on a missing field.
+    try {
+      java.lang.reflect.Field f =
+          CameraCharacteristics.class.getField("SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION");
+      @SuppressWarnings("unchecked")
+      CameraCharacteristics.Key<StreamConfigurationMap> key =
+          (CameraCharacteristics.Key<StreamConfigurationMap>) f.get(null);
+      StreamConfigurationMap max = chars.get(key);
+      if (max != null) {
+        JSONObject m = new JSONObject();
+        m.put("jpeg", sizeList(outputSizes(max, ImageFormat.JPEG)));
+        m.put("raw", sizeList(outputSizes(max, ImageFormat.RAW_SENSOR)));
+        m.put("yuv", sizeList(outputSizes(max, ImageFormat.YUV_420_888)));
+        hal.put("maximumResolutionSizes", m);
+      }
+    } catch (Throwable ignored) {
+    }
+    return hal;
+  }
+
+  /** The output sizes of one format, or nothing when the format is not offered. */
+  private static Size[] outputSizes(StreamConfigurationMap map, int format) {
+    try {
+      return map.getOutputSizes(format);
+    } catch (Throwable t) {
+      return null;
+    }
+  }
+
+  /** Reads a characteristic of any flavour, including the vendor ones. */
+  @SuppressWarnings({"unchecked", "rawtypes"})
+  private static Object charValue(CameraCharacteristics chars, CameraCharacteristics.Key<?> key) {
+    try {
+      return chars.get((CameraCharacteristics.Key) key);
+    } catch (Throwable t) {
+      return "unreadable";
+    }
+  }
+
+  /** Turns the arrays a camera characteristic can hold into something JSON can print. */
+  private static Object jsonable(Object value) {
+    if (value instanceof int[]) {
+      JSONArray a = new JSONArray();
+      for (int v : (int[]) value) a.put(v);
+      return a;
+    }
+    if (value instanceof long[]) {
+      JSONArray a = new JSONArray();
+      for (long v : (long[]) value) a.put(v);
+      return a;
+    }
+    if (value instanceof float[]) {
+      JSONArray a = new JSONArray();
+      for (float v : (float[]) value) a.put((double) v);
+      return a;
+    }
+    if (value instanceof double[]) {
+      JSONArray a = new JSONArray();
+      for (double v : (double[]) value) a.put(v);
+      return a;
+    }
+    if (value instanceof boolean[]) {
+      JSONArray a = new JSONArray();
+      for (boolean v : (boolean[]) value) a.put(v);
+      return a;
+    }
+    if (value instanceof Object[]) {
+      JSONArray a = new JSONArray();
+      for (Object v : (Object[]) value) a.put(jsonable(v));
+      return a;
+    }
+    return value;
+  }
+
+  /** The output sizes of one format, as "width x height". */
+  private static JSONArray sizeList(Size[] sizes) throws JSONException {
+    JSONArray a = new JSONArray();
+    if (sizes != null) for (Size s : sizes) a.put(s.getWidth() + "x" + s.getHeight());
+    return a;
   }
 
   public JSONObject capabilities() {

@@ -69,6 +69,24 @@ public final class SmokeTest {
     if (pv[0] != ExposureMath.MAX_PREVIEW_EXPOSURE_NS || pv[1] != 800)
       throw new AssertionError("Slow shutter preview ISO boost broken");
     count += 3;
+    for (float min : new float[] {2f, 10f, 20f}) {
+      for (int step = 0; step <= FocusScale.STEPS; step++) {
+        float fraction = step / (float) FocusScale.STEPS;
+        float metres = FocusScale.metres(fraction, min);
+        if (step == 0) {
+          if (!Float.isInfinite(metres)) throw new AssertionError("Focus far end is not infinity");
+        } else if (metres <= 0f || !Float.isFinite(metres))
+          throw new AssertionError("Illegal focus distance");
+        if (FocusScale.label(fraction, min).isEmpty()) throw new AssertionError("Empty focus label");
+        count++;
+      }
+      for (int i = 0; i < FocusScale.stopCount(min); i++) {
+        float f = FocusScale.stopFraction(i, min);
+        if (f < 0f || f > 1f) throw new AssertionError("Focus stop out of bounds");
+        if (FocusScale.stopLabel(i, min).isEmpty()) throw new AssertionError("Empty stop label");
+        count++;
+      }
+    }
     System.out.println("PASS: " + count + " crop/curve/preview/focus/exposure cases; no Android SDK used.");
   }
 }
