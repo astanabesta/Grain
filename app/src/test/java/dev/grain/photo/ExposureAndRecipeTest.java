@@ -258,6 +258,19 @@ public class ExposureAndRecipeTest {
     assertEquals(-1200f, zoomed[5], 1e-3f);
   }
 
+  @Test
+  public void exportFilenamesIncludeRecipeNameInsteadOfBareNumbers() {
+    assertEquals("Kodak_Portra_800_v3", PhotoStore.recipeFileSlug("Kodak Portra 800 v3"));
+    assertEquals("Reggies_Portra", PhotoStore.recipeFileSlug("Reggie's Portra"));
+    assertEquals("CineStill_800T", PhotoStore.recipeFileSlug("CineStill 800T"));
+    assertEquals("Leica_X", PhotoStore.recipeFileSlug("Leica X"));
+
+    String base =
+        PhotoStore.exportBaseName("Kodak Portra 800 v3", 1762583422123L, "1762583422123-a1b2c3d4");
+    assertTrue(base, base.startsWith("Grain_Kodak_Portra_800_v3_"));
+    assertTrue(base, base.endsWith("_a1b2"));
+  }
+
   private static Recipe findRecipe(String key) {
     for (Recipe r : Recipe.ALL) {
       if (r.fuji != null && key.equals(r.fuji.key)) return r;

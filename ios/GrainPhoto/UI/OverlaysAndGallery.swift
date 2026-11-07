@@ -693,6 +693,28 @@ public struct DarkroomGalleryView: View {
                 }
             }
 
+            HStack(spacing: 6) {
+                Image(systemName: "film")
+                    .font(.system(size: 11))
+                    .foregroundColor(GrainPalette.orange)
+                Text(entry.exportFilename(ext: "jpg"))
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundColor(GrainPalette.warmIvory.opacity(0.88))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if entry.dngURL != nil {
+                    Text("RAW")
+                        .font(.custom("AvenirNextCondensed-Bold", size: 9.5))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1.5)
+                        .background(GrainPalette.orange.opacity(0.22))
+                        .foregroundColor(GrainPalette.orange)
+                        .cornerRadius(3)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+
             HStack(spacing: 16) {
                 Button {
                     showReceipt.toggle()
@@ -704,7 +726,7 @@ public struct DarkroomGalleryView: View {
 
                 Spacer()
 
-                ShareLink(item: entry.jpegURL) {
+                ShareLink(item: store.shareURL(for: entry)) {
                     Label("Share", systemImage: "square.and.arrow.up")
                         .font(.custom("AvenirNextCondensed-Bold", size: 14))
                 }

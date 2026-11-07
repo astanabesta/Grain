@@ -10,6 +10,22 @@ public struct RollEntry: Identifiable, Equatable {
     public let createdAt: Date
     public let filmCode: String
     public let filmName: String
+
+    /// Human-readable filename containing the film recipe + timestamp (e.g. `Grain_Kodak_Portra_800_v3_20261108_143512_412.jpg`).
+    public func exportFilename(ext: String) -> String {
+        if id.hasPrefix("Grain_") && !id.hasPrefix("GRAIN_20") {
+            return "\(id).\(ext)"
+        }
+        let slug = PhotoStore.recipeSlug(filmName)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd_HHmmss"
+        let stamp = formatter.string(from: createdAt)
+        if slug.isEmpty {
+            return "Grain_\(stamp).\(ext)"
+        }
+        return "Grain_\(slug)_\(stamp).\(ext)"
+    }
 }
 
 @MainActor
@@ -76,6 +92,33 @@ public final class PhotoStore: ObservableObject {
         entries = loaded
     }
 
+    /// Converts a recipe display name (e.g. "Reggie's Portra") into a clean filename slug ("Reggies_Portra").
+    nonisolated public static func recipeSlug(_ recipeName: String) -> String {
+        let cleaned = recipeName
+            .replacingOccurrences(of: "'", with: "")
+            .replacingOccurrences(of: "’", with: "")
+            .replacingOccurrences(of: "`", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var parts: [String] = []
+        var current = ""
+        for scalar in cleaned.unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) && scalar.isASCII {
+                current.unicodeScalars.append(scalar)
+            } else if !current.isEmpty {
+                parts.append(current)
+                current = ""
+            }
+        }
+        if !current.isEmpty {
+            parts.append(current)
+        }
+        let joined = parts.joined(separator: "_")
+        if joined.count > 40 {
+            return String(joined.prefix(40)).trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+        }
+        return joined
+    }
+
     nonisolated public func saveCapture(
         jpegData: Data,
         rawDngData: Data?,
@@ -85,7 +128,10 @@ public final class PhotoStore: ObservableObject {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd_HHmmss_SSS"
-        let stem = "GRAIN_\(formatter.string(from: Date()))"
+        let stamp = formatter.string(from: Date())
+        let filmLabel = (receipt["filmName"] as? String) ?? (receipt["filmCode"] as? String) ?? ""
+        let slug = Self.recipeSlug(filmLabel)
+        let stem = slug.isEmpty ? "Grain_\(stamp)" : "Grain_\(slug)_\(stamp)"
 
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         let folder = docs.appendingPathComponent("Roll", isDirectory: true)
@@ -99,8 +145,14 @@ public final class PhotoStore: ObservableObject {
             try? raw.write(to: dngURL, options: .atomic)
         }
 
+        var fullReceipt = receipt
+        fullReceipt["fileName"] = "\(stem).jpg"
+        if keepRaw && rawDngData != nil {
+            fullReceipt["rawFileName"] = "\(stem).dng"
+        }
+
         let jsonURL = folder.appendingPathComponent("\(stem).json")
-        if let jsonData = try? JSONSerialization.data(withJSONObject: receipt, options: [.prettyPrinted, .sortedKeys]) {
+        if let jsonData = try? JSONSerialization.data(withJSONObject: fullReceipt, options: [.prettyPrinted, .sortedKeys]) {
             try? jsonData.write(to: jsonURL, options: .atomic)
         }
 
@@ -110,11 +162,25 @@ public final class PhotoStore: ObservableObject {
     }
 
     public func receiptText(for entry: RollEntry) -> String {
+        let header = "FILE   \(entry.exportFilename(ext: "jpg"))\(entry.dngURL != nil ? "\nRAW    \(entry.exportFilename(ext: "dng"))" : "")\nFILM   \(entry.filmName) (\(entry.filmCode))\n\n"
         guard let data = try? Data(contentsOf: entry.receiptURL),
               let text = String(data: data, encoding: .utf8) else {
-            return "{ \"film\": \"\(entry.filmName)\" }"
+            return header + "{ \"film\": \"\(entry.filmName)\" }"
         }
-        return text
+        return header + text
+    }
+
+    public func shareURL(for entry: RollEntry) -> URL {
+        let wanted = entry.exportFilename(ext: "jpg")
+        if entry.jpegURL.lastPathComponent == wanted {
+            return entry.jpegURL
+        }
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(wanted)
+        try? FileManager.default.removeItem(at: tmp)
+        if (try? FileManager.default.copyItem(at: entry.jpegURL, to: tmp)) != nil {
+            return tmp
+        }
+        return entry.jpegURL
     }
 
     /// Multi-select batch delete with 7-second Undo window.
@@ -219,11 +285,13 @@ public final class PhotoStore: ObservableObject {
                 for item in targets {
                     if let data = try? Data(contentsOf: item.jpegURL) {
                         let req = PHAssetCreationRequest.forAsset()
-                        req.addResource(with: .photo, data: data, options: nil)
+                        let jpgOpt = PHAssetResourceCreationOptions()
+                        jpgOpt.originalFilename = item.exportFilename(ext: "jpg")
+                        req.addResource(with: .photo, data: data, options: jpgOpt)
                         if let dng = item.dngURL, let rawData = try? Data(contentsOf: dng) {
-                            let opt = PHAssetResourceCreationOptions()
-                            opt.originalFilename = dng.lastPathComponent
-                            req.addResource(with: .alternatePhoto, data: rawData, options: opt)
+                            let dngOpt = PHAssetResourceCreationOptions()
+                            dngOpt.originalFilename = item.exportFilename(ext: "dng")
+                            req.addResource(with: .alternatePhoto, data: rawData, options: dngOpt)
                         }
                     }
                 }

@@ -104,6 +104,19 @@ public final class PhotoStore {
       File finalImage = new File(staging, "photo.jpg");
       if (full) {
         copy(source, finalImage);
+        JSONObject recObj = metadata.optJSONObject("recipe");
+        String recTitle = recObj == null ? "" : recObj.optString("name", "");
+        if (!recTitle.isEmpty()) {
+          try {
+            ExifInterface output = new ExifInterface(finalImage);
+            if (output.getAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION) == null) {
+              output.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, recTitle + " · Grain Photo");
+            }
+            output.setAttribute(ExifInterface.TAG_USER_COMMENT, "Grain Photo · " + recTitle);
+            output.saveAttributes();
+          } catch (Exception ignored) {
+          }
+        }
       } else {
         Bitmap decoded = BitmapFactory.decodeFile(source.getPath());
         if (decoded == null) throw new IOException("Cannot decode JPEG");
@@ -131,11 +144,21 @@ public final class PhotoStore {
             ExifInterface.TAG_EXPOSURE_TIME,
             ExifInterface.TAG_F_NUMBER,
             ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY,
-            ExifInterface.TAG_FOCAL_LENGTH
+            ExifInterface.TAG_FOCAL_LENGTH,
+            ExifInterface.TAG_IMAGE_DESCRIPTION,
+            ExifInterface.TAG_USER_COMMENT
           };
           for (String tag : tags) {
             String value = exif.getAttribute(tag);
             if (value != null) output.setAttribute(tag, value);
+          }
+          JSONObject recObj = metadata.optJSONObject("recipe");
+          String recTitle = recObj == null ? "" : recObj.optString("name", "");
+          if (!recTitle.isEmpty()) {
+            if (output.getAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION) == null) {
+              output.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, recTitle + " · Grain Photo");
+            }
+            output.setAttribute(ExifInterface.TAG_USER_COMMENT, "Grain Photo · " + recTitle);
           }
           output.setAttribute(ExifInterface.TAG_ORIENTATION, "1");
           output.setAttribute(ExifInterface.TAG_SOFTWARE, RawDevelopment.SOFTWARE);
@@ -366,9 +389,65 @@ public final class PhotoStore {
     if (dirs != null) for (File f : dirs) if (f.getName().startsWith(".trash-")) deleteTree(f);
   }
 
+  /** Converts a recipe display name (e.g. "Reggie's Portra") into a clean filename slug ("Reggies_Portra"). */
+  public static String recipeFileSlug(String recipeName) {
+    if (recipeName == null) return "";
+    String stripped = recipeName.replace("'", "").replace("’", "").replace("`", "").trim();
+    String slug = stripped.replaceAll("[^A-Za-z0-9]+", "_").replaceAll("^_+|_+$", "");
+    return slug.length() > 40 ? slug.substring(0, 40).replaceAll("_+$", "") : slug;
+  }
+
+  /**
+   * Builds a human-readable base filename that includes the film recipe and capture timestamp, e.g.
+   * {@code Grain_Kodak_Portra_800_v3_20261108_143512_a1b2}.
+   */
+  public static String exportBaseName(String recipeName, long savedAtMs, String fallbackId) {
+    String slug = recipeFileSlug(recipeName);
+    long ts = savedAtMs;
+    if (ts <= 0 && fallbackId != null) {
+      int dash = fallbackId.indexOf('-');
+      String numPart = dash > 0 ? fallbackId.substring(0, dash) : fallbackId;
+      try {
+        ts = Long.parseLong(numPart);
+      } catch (NumberFormatException ignored) {
+      }
+    }
+    String stamp;
+    if (ts > 0) {
+      java.text.SimpleDateFormat fmt =
+          new java.text.SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US);
+      stamp = fmt.format(new Date(ts));
+    } else {
+      stamp = fallbackId == null || fallbackId.isEmpty() ? "0000" : fallbackId;
+    }
+    String tail = "";
+    if (fallbackId != null) {
+      int dash = fallbackId.lastIndexOf('-');
+      if (dash >= 0 && dash + 1 < fallbackId.length()) {
+        String sub = fallbackId.substring(dash + 1).replaceAll("[^A-Za-z0-9]", "");
+        if (!sub.isEmpty()) tail = "_" + (sub.length() > 4 ? sub.substring(0, 4) : sub);
+      }
+    }
+    if (slug.isEmpty()) {
+      return "Grain_" + stamp + tail;
+    }
+    return "Grain_" + slug + "_" + stamp + tail;
+  }
+
+  public static String exportBaseName(Photo photo) {
+    JSONObject r = photo.metadata == null ? null : photo.metadata.optJSONObject("recipe");
+    String recipeName = r == null ? "" : r.optString("name", "");
+    long savedAt = photo.metadata == null ? 0L : photo.metadata.optLong("savedAt", 0L);
+    return exportBaseName(recipeName, savedAt, photo.id);
+  }
+
+  public static String exportFileName(Photo photo, boolean full) {
+    return exportBaseName(photo) + (full ? "_full" : "") + ".jpg";
+  }
+
   public Uri export(Photo photo, boolean full) throws Exception {
     File source = full && photo.original != null ? photo.original : photo.image;
-    String name = "Grain_" + photo.id + (full ? "_full" : "") + ".jpg";
+    String name = exportFileName(photo, full);
     ContentValues v = new ContentValues();
     v.put(MediaStore.Images.Media.DISPLAY_NAME, name);
     v.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
@@ -400,7 +479,7 @@ public final class PhotoStore {
    */
   public List<String> exportTestFiles(Photo photo) throws Exception {
     List<String> done = new ArrayList<>();
-    String base = "Grain_" + photo.id;
+    String base = exportBaseName(photo);
     if (photo.dng != null) {
       insert(photo.dng, base + "_sensor.dng", "image/x-adobe-dng", false);
       done.add("DNG");

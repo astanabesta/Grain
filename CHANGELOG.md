@@ -8,6 +8,17 @@ one was a separate APK install on the device.
 
 ---
 
+## v0.7.10 — Recipe Name in Photo Filenames & File Info (`Android` + `iOS`)
+
+- **Recipe-named filenames (`Grain_<Recipe_Name>_<Date>_<Time>.jpg` / `.dng`)** — saved, exported,
+  and shared photos (plus kept `.dng` RAW files) now include the exact film recipe name instead of
+  bare numbers (e.g. `Grain_Kodak_Portra_800_v3_20261108_143512.jpg`, `Grain_Leica_X_...jpg`,
+  `Grain_CineStill_800T_...jpg`, `Grain_Reggies_Portra_...jpg`).
+- **Apple Photos `ⓘ` File Info & Android Gallery Info** — sets `PHAssetResourceCreationOptions.originalFilename`
+  on iOS (so Photos `ⓘ` Info shows the recipe filename instead of `IMG_XXXX.JPG`) and `MediaStore`
+  `DISPLAY_NAME` + EXIF `ImageDescription` / `UserComment` on both iOS and Android, including for
+  older photos already on your roll when exported or shared.
+
 ## v0.7.9 — Hardware Bayer RAW Capture Hardening for iPhone XR / XS & All iPhones
 
 - **Enforces AVFoundation Bayer RAW capture invariants on all iPhones (`iPhone XR`–`iPhone 16`)** —

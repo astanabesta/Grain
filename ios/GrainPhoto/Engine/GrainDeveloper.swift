@@ -824,7 +824,8 @@ public enum GrainDeveloper {
             exif[kCGImagePropertyExifFNumber] = fNum
         }
         let tiff: [CFString: Any] = [
-            kCGImagePropertyTIFFSoftware: "Grain Photo iOS 0.7.6"
+            kCGImagePropertyTIFFImageDescription: "\(film.name) (\(film.code)) · Grain Photo",
+            kCGImagePropertyTIFFSoftware: "Grain Photo iOS 0.7.10 · \(film.name)"
         ]
         let props: [CFString: Any] = [
             kCGImageDestinationLossyCompressionQuality: 0.95,

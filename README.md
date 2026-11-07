@@ -301,6 +301,7 @@ tools/                          SDK-free syntax/math verifier & desktop RAW CLI 
 
 | Version | Highlights |
 | --- | --- |
+| **v0.7.10** | **Recipe-named photo & RAW filenames + EXIF descriptions** (`Grain_<Recipe_Name>_YYYYMMDD_HHMMSS.jpg` / `.dng`) in Apple Photos `ⓘ` File Info, Android Gallery, Share & Darkroom Roll |
 | **v0.7.9** | **iOS Bayer RAW capture hardening** (`photoQualityPrioritization = .speed` + `videoZoomFactor = 1.0` sensor crop) ensuring rock-solid 12MP `.dng` capture on **iPhone XR / XS & all iOS 16+ iPhones** |
 | **v0.7.8** | **Smooth `1×–8×` gallery photo zoom** on the rear Command slider (with drag-to-pan, pinch & double-tap) while the Focus Lever browses frames |
 | **v0.7.7** | **Native iOS `.ipa` release** (`ios/` Swift + `AVFoundation` Bayer RAW & all-iPhone scene-linear engine) published alongside Android `.apk` |

@@ -3019,6 +3019,7 @@ public final class MainActivity extends ComponentActivity
     TextView name = text(r == null ? "Photo" : r.optString("name"), 27, INK);
     name.setTypeface(Typeface.SERIF);
     body.addView(name);
+    body.addView(paragraph("FILE · " + PhotoStore.exportFileName(photo, false)));
     body.addView(
         paragraph(
             String.format(
@@ -5494,6 +5495,7 @@ public final class MainActivity extends ComponentActivity
     JSONObject r = m.optJSONObject("recipe"), a = m.optJSONObject("actual");
     JSONObject q = m.optJSONObject("requested"), d = m.optJSONObject("development");
     StringBuilder s = new StringBuilder();
+    receiptLine(s, "FILE", PhotoStore.exportFileName(p, false));
     receiptLine(s, "FILM", r == null ? "" : r.optString("name"));
     if (a != null)
       receiptLine(s, "EXPOSURE", shutterText(a.optLong("exposureNs"), false) + "  ·  ISO " + a.optInt("iso"));
