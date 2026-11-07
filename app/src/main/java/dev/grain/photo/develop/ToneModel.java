@@ -120,6 +120,14 @@ public final class ToneModel {
         d -= shadow * 0.0130 * smoothstep(0.2, 3.0, -e);
         return x + d;
       }
+      if ("cinestill-800t".equals(profile)) {
+        d += highlight * 0.0155 * smoothstep(0.0, 2.9, e);
+        d -= drSteps * 0.0100 * smoothstep(0.7, 3.8, e);
+        d += 0.0105 * smoothstep(-0.3, 1.5, e) * (1.0 - smoothstep(1.7, 3.5, e));
+        d -= 0.0090 * smoothstep(0.6, 3.8, -e);
+        d -= shadow * 0.0155 * smoothstep(0.2, 3.2, -e);
+        return x + d;
+      }
       d += highlight * HIGHLIGHT_PER_STEP * smoothstep(0, 2.5, e);
       d -= shadow * SHADOW_PER_STEP * smoothstep(0, 3, -e);
       d -= drSteps * DR200_MODIFIER * smoothstep(0.5, 4, e);

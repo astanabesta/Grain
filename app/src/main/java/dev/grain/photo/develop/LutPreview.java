@@ -50,8 +50,18 @@ public final class LutPreview {
         sp != RawDeveloper.PROFILE_NONE
             ? ToneModel.calibratedCurve(steps, recipe.highlight, recipe.shadow, true, 1.0, recipe.key)
             : null;
-    float wbR = sp == RawDeveloper.PROFILE_KODAK_800_V3 ? 1.07f : sp == RawDeveloper.PROFILE_LEICA_X ? 1.03f : 1f;
-    float wbB = sp == RawDeveloper.PROFILE_KODAK_800_V3 ? 0.90f : sp == RawDeveloper.PROFILE_LEICA_X ? 0.95f : 1f;
+    float wbR =
+        sp == RawDeveloper.PROFILE_KODAK_800_V3
+            ? 1.03f
+            : sp == RawDeveloper.PROFILE_LEICA_X
+                ? 1.03f
+                : sp == RawDeveloper.PROFILE_CINESTILL_800T ? 0.88f : 1f;
+    float wbB =
+        sp == RawDeveloper.PROFILE_KODAK_800_V3
+            ? 0.95f
+            : sp == RawDeveloper.PROFILE_LEICA_X
+                ? 0.95f
+                : sp == RawDeveloper.PROFILE_CINESTILL_800T ? 1.18f : 1f;
     float blueDepth = sp != RawDeveloper.PROFILE_NONE ? RawDeveloper.fxBlueDepth(recipe.colorChromeBlue) : 0f;
     float[] m = REC709_TO_REC2020, out = new float[3];
     float g = (float) gain;

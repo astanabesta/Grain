@@ -697,7 +697,7 @@ public final class FujiRecipe {
 
   /** True when this recipe uses Grain's phone-sensor-to-emulsion tone and perceptual colour model. */
   public boolean sensorCalibrated() {
-    return "kodak-800-v3".equals(key) || "leica-x".equals(key);
+    return "kodak-800-v3".equals(key) || "leica-x".equals(key) || "cinestill-800t".equals(key);
   }
 
   /**

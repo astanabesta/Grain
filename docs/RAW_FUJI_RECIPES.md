@@ -599,6 +599,13 @@ must be re-measured with the receipt's `timingMs`.
   darkening with skin-hue protection (`~50°` OKLab), phone lime-foliage rotation toward sage/forest
   green, Portra golden-amber + paper-ivory highlights + gentle emulsion micro-bloom, Leica crimson /
   cobalt depth, and hue-preserving gamut compression.
+- (v0.7.5) **CineStill 800T** (`cinestill-800t`, `800T`) upgraded to full Vision3 500T remjet-free
+  phone-sensor calibration: true `3450K` tungsten white balance (fixing greenish `Fluorescent 3`
+  cast), scene-linear red-orange pressure-plate halation around both clipped and unclipped bright
+  lamps/neon (`> +1.85 EV`), `-1.0 EV` low-light RAW capture headroom, grounded `Shadow +2` cinema
+  toe, OKLab Vision3 chroma rescue over flat Eterna, and cyan-teal shadow / warm-amber highlight
+  split-toning. Also maps Fujifilm menu Kelvin (`6600K` on Kodak 800 v3) through the RAF-measured
+  Planckian curve (`~5693K` DNG) so `6600K` never overshoots past Shade into heavy yellow/orange.
 
 Desktop harness: `tools/DevelopRaw.java` develops a raw Bayer dump with any `.cube` file. No Android
 is needed. `-Drecipe=<key>` picks a published recipe (e.g. `kodak-gold-200`, `vibrant-arizona`, `reggies-superia`) or

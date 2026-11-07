@@ -56,8 +56,8 @@ public final class Recipe {
       "Ritchie Roesch’s published recipe: a stylised summer palette, blue-teal with warm neutrals and"
           + " deep shadows.",
       "Ritchie Roesch’s published recipe: bright, warm and pastel-leaning, a sun-washed cinematic feel.",
-      "Ritchie Roesch’s published recipe for artificial light: cool night ambience against coloured"
-          + " lights, soft and grainy.",
+      "Ritchie Roesch’s published recipe for artificial light: Vision3 tungsten balance, cyan-teal"
+          + " night shadows, warm amber lights and remjet-free red-orange halation.",
       "Anders Lindborg’s recipe (Ritchie Roesch’s X100V version): gritty, textured black and white with"
           + " strong shadows.",
       "Reggie Ballesteros’ published Fujifilm recipe: Classic Negative, moodier, grainier and more"
@@ -214,6 +214,8 @@ public final class Recipe {
     if (f.sony()) return -1f / 3;
     if ("kodak-800-v3".equals(f.key) && f.dynamicRange == FujiRecipe.DynamicRange.DR400)
       return -1.25f; // phone-sensor optimal headroom: 1.25 EV highlight safety without 4x shadow photon loss
+    if ("cinestill-800t".equals(f.key) && f.dynamicRange == FujiRecipe.DynamicRange.DR400)
+      return -1.0f; // night/low-light optimal headroom: 1 EV lamp protection with 2x cleaner shadow photons
     if ("leica-x".equals(f.key) && f.dynamicRange == FujiRecipe.DynamicRange.AUTO)
       return -2f / 3f; // 2/3 EV specular protection for crisp sunlit whites on phone CMOS
     switch (f.dynamicRange) {
@@ -245,11 +247,15 @@ public final class Recipe {
       case FLUORESCENT_1:
         return CaptureRequest.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT;
       case FLUORESCENT_3:
-        return CaptureRequest.CONTROL_AWB_MODE_FLUORESCENT;
+        return "cinestill-800t".equals(f.key)
+            ? CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT
+            : CaptureRequest.CONTROL_AWB_MODE_FLUORESCENT;
       case INCANDESCENT:
         return CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT;
       case KELVIN:
         int k = f.kelvin;
+        if (f.sensorCalibrated() && k <= 6700 && k >= 5000)
+          return CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT;
         return k <= 3300
             ? CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT
             : k <= 3800

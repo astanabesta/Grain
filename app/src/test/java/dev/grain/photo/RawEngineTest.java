@@ -1834,6 +1834,9 @@ public class RawEngineTest {
 
     Map<String, Object> mk = stKodak.get(0), ml = stLeica.get(0);
     assertTrue(String.valueOf(mk.get("sensorCalibration")).contains("Kodak Portra 800 v3"));
+    assertTrue(
+        "Kodak 800 v3 maps Fuji 6600K to RAF-measured ~5693K DNG Planckian (below 6000K Shade)",
+        String.valueOf(mk.get("whiteBalance")).contains("5693 K"));
     assertTrue(String.valueOf(ml.get("sensorCalibration")).contains("Leica X"));
     assertTrue(
         "Kodak 800 v3 applies gentle emulsion highlight micro-bloom",
@@ -1867,6 +1870,109 @@ public class RawEngineTest {
     assertNotEquals(fnv(tileC), fnv(tileK));
     assertNotEquals(fnv(tileC), fnv(tileL));
     assertNotEquals(fnv(tileK), fnv(tileL));
+  }
+
+  @Test
+  public void cinestill800tDeliversTungstenTealSplitVision3ColorAndRedHalation() throws Exception {
+    ToneModel.Curve cs =
+        ToneModel.calibratedCurve(2, 0.0, 2.0, true, 1.0, FujiRecipe.CINESTILL_800T.key);
+    double prev = -1;
+    for (double ev = -8.0; ev <= 8.0; ev += 0.125) {
+      double c = cs.apply(FLog2.encode(0.18 * Math.pow(2, ev)));
+      assertTrue("CineStill 800T curve strictly monotonic at EV " + ev, c > prev);
+      prev = c;
+    }
+
+    FujiRecipe plainEterna = FujiRecipe.standard("ETERNA", "Eterna");
+    java.util.List<Map<String, Object>> stEterna = new java.util.ArrayList<>();
+    java.util.List<Map<String, Object>> stCine = new java.util.ArrayList<>();
+    int[] pxEterna = developGolden(plainEterna, false, stEterna);
+    int[] pxCine = developGolden(FujiRecipe.CINESTILL_800T, true, stCine);
+    Map<String, Object> mc = stCine.get(0);
+
+    assertTrue(String.valueOf(mc.get("sensorCalibration")).contains("CineStill 800T"));
+    assertTrue(
+        "CineStill 800T develops at true 3450K tungsten white point",
+        String.valueOf(mc.get("whiteBalance")).contains("3450 K"));
+    assertTrue(
+        "CineStill 800T enables remjet-free red-orange halation",
+        ((Number) mc.get("halationRed")).doubleValue() >= 0.085);
+    assertTrue(
+        "CineStill 800T boosts Vision3 colour richness well above flat Eterna",
+        meanSaturation(pxCine) > meanSaturation(pxEterna) * 1.15);
+
+    // Night point-light scene: dark neutral background with a bright unclipped lamp in the centre
+    int w = 160, h = 160;
+    short[] data = new short[w * h];
+    RawFrame night = new RawFrame(data, w, h, w);
+    night.cfa = RawFrame.GRBG;
+    double[] n = {0.55, 1.0, 0.58}; // ~3400K tungsten scene neutral
+    night.neutral = n;
+    night.colorMatrix1 = PHONE_CM1;
+    night.colorMatrix2 = PHONE_CM2;
+    night.forwardMatrix1 = PHONE_FM1;
+    night.forwardMatrix2 = PHONE_FM2;
+    night.illuminant1 = 21;
+    night.illuminant2 = 17;
+    night.iso = 800;
+    for (int y = 0; y < h; y++)
+      for (int x = 0; x < w; x++) {
+        int c = night.color(x, y);
+        boolean lamp = Math.hypot(x - 80, y - 80) <= 6.0;
+        double level = lamp ? 0.78 : 0.035; // bright unclipped lamp vs dark night street
+        data[y * w + x] = (short) Math.round(64 + Math.min(1.0, level * n[c]) * (1023 - 64));
+      }
+    RawDeveloper.Options opt = new RawDeveloper.Options();
+    opt.grain = false;
+    opt.fixedGain = 1.6;
+    int[] outCine = new int[w * h], outEterna = new int[w * h];
+    RawDeveloper.develop(
+        night,
+        FujiRecipe.CINESTILL_800T,
+        goldenLut(),
+        opt,
+        (y, rows, argb, width) -> System.arraycopy(argb, 0, outCine, y * width, rows * width));
+    RawDeveloper.develop(
+        night,
+        plainEterna,
+        goldenLut(),
+        opt,
+        (y, rows, argb, width) -> System.arraycopy(argb, 0, outEterna, y * width, rows * width));
+
+    // Ring just outside the lamp (radius 8..13 px) vs far dark background (radius > 48 px):
+    // CineStill 800T's dark background leans cyan-teal (bgB > bgR), while the ring around the
+    // bright lamp glows with remjet-free red-orange halation (ringR rises strongly over ringB).
+    double ringR = 0, ringB = 0, bgR = 0, bgB = 0;
+    int ringCnt = 0, bgCnt = 0;
+    for (int y = 16; y < h - 16; y++)
+      for (int x = 16; x < w - 16; x++) {
+        double d = Math.hypot(x - 80, y - 80);
+        int pc = outCine[y * w + x];
+        if (d >= 8.0 && d <= 13.0) {
+          ringR += (pc >> 16) & 255;
+          ringB += pc & 255;
+          ringCnt++;
+        } else if (d >= 48.0) {
+          bgR += (pc >> 16) & 255;
+          bgB += pc & 255;
+          bgCnt++;
+        }
+      }
+    ringR /= ringCnt;
+    ringB /= ringCnt;
+    bgR /= bgCnt;
+    bgB /= bgCnt;
+    double haloRedLift = ringR - bgR, haloBlueLift = ringB - bgB;
+    assertTrue(
+        "Dark night shadows lean cyan-teal (B=" + bgB + " > R=" + bgR + ")",
+        bgB > bgR + 2.0);
+    assertTrue(
+        "Remjet-free red-orange halation glows around bright night lamps (redLift="
+            + haloRedLift
+            + ", blueLift="
+            + haloBlueLift
+            + ")",
+        haloRedLift > 12.0 && haloRedLift > haloBlueLift + 8.0);
   }
 
   private static double meanSaturation(int[] argb) {

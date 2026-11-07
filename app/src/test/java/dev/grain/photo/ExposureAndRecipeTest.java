@@ -100,6 +100,16 @@ public class ExposureAndRecipeTest {
     assertTrue(leica.sensorCalibrated());
     assertEquals(-2f / 3f, Recipe.rawCaptureBias(leica), 1e-5f);
 
+    FujiRecipe cine = FujiRecipe.CINESTILL_800T;
+    assertTrue(cine.sensorCalibrated());
+    assertEquals(-1.0f, Recipe.rawCaptureBias(cine), 1e-5f);
+    assertEquals(
+        android.hardware.camera2.CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT,
+        Recipe.awbModeFor(cine));
+    assertEquals(
+        android.hardware.camera2.CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT,
+        Recipe.awbModeFor(k800));
+
     assertSame(FujiRecipe.KODAK_800_V3, Recipe.ALL[26].fuji);
     assertSame(FujiRecipe.LEICA_X, Recipe.ALL[27].fuji);
     int bkdIdx = -1, k800Idx = -1, lcxIdx = -1;

@@ -106,7 +106,10 @@ public final class RawDeveloper {
    */
   static final float FV_CCE_C0 = 0.07f, FV_CCE_C1 = 0.19f;
 
-  static final int PROFILE_NONE = 0, PROFILE_KODAK_800_V3 = 1, PROFILE_LEICA_X = 2;
+  static final int PROFILE_NONE = 0,
+      PROFILE_KODAK_800_V3 = 1,
+      PROFILE_LEICA_X = 2,
+      PROFILE_CINESTILL_800T = 3;
   private static final float[] CBRT_Q = new float[2049];
   private static final float[] SRGB_DEC = new float[4097], SRGB_ENC = new float[2049];
 
@@ -127,7 +130,20 @@ public final class RawDeveloper {
     if (r == null) return PROFILE_NONE;
     if ("kodak-800-v3".equals(r.key)) return PROFILE_KODAK_800_V3;
     if ("leica-x".equals(r.key)) return PROFILE_LEICA_X;
+    if ("cinestill-800t".equals(r.key)) return PROFILE_CINESTILL_800T;
     return PROFILE_NONE;
+  }
+
+  /**
+   * Maps Fujifilm's menu Kelvin dial to the RAF-measured DNG Planckian CCT curve (Incandescent
+   * 3000K -> 2856K, Daylight 5500K -> 4850K, Shade 7000K -> 6000K), preventing 6600K recipes from
+   * overshooting past Shade into heavy yellow/orange on smartphone DNG matrices.
+   */
+  static double fujiKelvinToDngCct(double k) {
+    if (k <= 3000.0) return k * (2856.0 / 3000.0);
+    if (k <= 5500.0) return 2856.0 + (4850.0 - 2856.0) * (k - 3000.0) / (5500.0 - 3000.0);
+    if (k <= 7000.0) return 4850.0 + (6000.0 - 4850.0) * (k - 5500.0) / (7000.0 - 5500.0);
+    return 6000.0 + 0.80 * (k - 7000.0);
   }
 
   private static float cbrtUnit(float x) {
@@ -204,13 +220,19 @@ public final class RawDeveloper {
       float cBlue2 = cBlue > 0f ? cBlue * cBlue : 0f;
       float wBlue = (cBlue2 * cBlue2) * sstep(0.04f, 0.11f, C);
 
-      float shGuard = 0.55f + 0.45f * sstep(0.04f, 0.16f, L);
-      float hlGuard = 1f - 0.55f * sstep(0.80f, 0.99f, L);
+      float shGuard =
+          (profile == PROFILE_CINESTILL_800T ? 0.60f : 0.55f)
+              + (profile == PROFILE_CINESTILL_800T ? 0.40f : 0.45f) * sstep(0.04f, 0.16f, L);
+      float hlGuard = 1f - (profile == PROFILE_CINESTILL_800T ? 0.45f : 0.55f) * sstep(0.80f, 0.99f, L);
       float env = shGuard * hlGuard;
 
-      float cScale = 1f + (0.065f * colorStep) * env;
+      float gainPerStep = profile == PROFILE_CINESTILL_800T ? 0.092f : 0.065f;
+      float cScale = 1f + (gainPerStep * colorStep) * env;
       if (cScale < 0f) cScale = 0f;
-      float cce = cceLevel == 2 ? 0.130f : cceLevel == 1 ? 0.065f : 0f;
+      float cce =
+          cceLevel == 2
+              ? (profile == PROFILE_CINESTILL_800T ? 0.135f : 0.130f)
+              : cceLevel == 1 ? 0.065f : 0f;
       if (cce > 0f) {
         float wCce = sstep(0.045f, 0.185f, C);
         L -= cce * wCce * (1f - 0.55f * wSkin) * L;
@@ -219,8 +241,12 @@ public final class RawDeveloper {
       float rotDeg;
       if (profile == PROFILE_KODAK_800_V3) {
         L += 0.010f * wSkin * sstep(0.25f, 0.50f, L) * (1f - sstep(0.75f, 0.92f, L));
-        cScale *= (1f + 0.08f * wGold - 0.07f * wLime);
-        rotDeg = 2.5f * wSkin - 3.5f * wGold + 7.5f * wLime;
+        cScale *= (1f + 0.06f * wGold - 0.07f * wLime);
+        rotDeg = 2.5f * wSkin - 2.5f * wGold + 7.5f * wLime;
+      } else if (profile == PROFILE_CINESTILL_800T) {
+        cScale *= (1f + 0.10f * wRed + 0.08f * wGold + 0.10f * wBlue - 0.08f * wSkin);
+        L -= (0.020f * wBlue + 0.018f * wLime) * L;
+        rotDeg = -8.0f * wBlue + 11.0f * wLime - 2.0f * wGold;
       } else {
         cScale *= (1f + 0.10f * wRed - 0.11f * wSkin + 0.09f * wBlue - 0.04f * wLime);
         L -= (0.028f * wRed + 0.022f * wLime + 0.020f * wBlue) * L;
@@ -236,9 +262,17 @@ public final class RawDeveloper {
     }
     if (profile == PROFILE_KODAK_800_V3) {
       float wPaper =
-          sstep(0.76f, 0.88f, L) * (1f - sstep(0.93f, 0.995f, L)) * (1f - sstep(0.03f, 0.10f, C));
-      Bb += 0.006f * wPaper;
-      A += 0.0015f * wPaper;
+          sstep(0.78f, 0.90f, L) * (1f - sstep(0.94f, 0.995f, L)) * (1f - sstep(0.03f, 0.10f, C));
+      Bb += 0.0025f * wPaper;
+      A += 0.0006f * wPaper;
+    } else if (profile == PROFILE_CINESTILL_800T) {
+      float wShSplit = sstep(0.05f, 0.18f, L) * (1f - sstep(0.32f, 0.50f, L));
+      A -= 0.0085f * wShSplit;
+      Bb -= 0.0115f * wShSplit;
+      float wHiSplit =
+          sstep(0.68f, 0.84f, L) * (1f - sstep(0.94f, 0.995f, L)) * (1f - 0.5f * sstep(0.06f, 0.15f, C));
+      A += 0.0035f * wHiSplit;
+      Bb += 0.0105f * wHiSplit;
     }
     if (L < 0f) L = 0f;
     else if (L > 1f) L = 1f;
@@ -473,14 +507,28 @@ public final class RawDeveloper {
         colorK[k] = f.color(x, y);
         shadeK[k] = f.shadingChannel(x, y);
       }
+      boolean fvInit = r.development == FujiRecipe.Development.FIRST_VERSION;
+      sensorProfile = fvInit ? PROFILE_NONE : sensorProfileOf(r);
+      recipeColor = r.color;
+      recipeCce = r.colorChrome;
       // --- white balance: the phone's as-shot (auto) white, or a fixed Fujifilm mode's white point
       double[] neutral = f.neutral, whiteXy = null;
       FujiRecipe.WhiteBalance wbMode = r.wbMode;
+      boolean cineDefaultWb =
+          sensorProfile == PROFILE_CINESTILL_800T
+              && wbMode == FujiRecipe.WhiteBalance.FLUORESCENT_3
+              && r.wbShiftRed == -6
+              && r.wbShiftBlue == -4;
       if (wbMode == FujiRecipe.WhiteBalance.AUTO) {
         stats.put("whiteBalance", "Auto (the phone's as-shot white)");
       } else {
-        double targetCct = wbMode == FujiRecipe.WhiteBalance.KELVIN ? r.kelvin : wbMode.cct;
-        double targetDuv = wbMode == FujiRecipe.WhiteBalance.KELVIN ? 0 : wbMode.duv;
+        double targetCct =
+            cineDefaultWb
+                ? 3450.0
+                : wbMode == FujiRecipe.WhiteBalance.KELVIN
+                    ? (sensorProfile != PROFILE_NONE ? fujiKelvinToDngCct(r.kelvin) : r.kelvin)
+                    : wbMode.cct;
+        double targetDuv = cineDefaultWb ? 0.002 : wbMode == FujiRecipe.WhiteBalance.KELVIN ? 0 : wbMode.duv;
         whiteXy = ColorMath.whiteXy(targetCct, targetDuv);
         neutral =
             ColorMath.neutralForXy(
@@ -503,8 +551,10 @@ public final class RawDeveloper {
       }
       double nR = neutral[0], nG = neutral[1], nB = neutral[2];
       if (!(nR > 0 && nG > 0 && nB > 0)) throw new IllegalArgumentException("Invalid neutral");
-      double shiftR = Math.pow(2, WB_SHIFT_LOG2_PER_STEP * r.wbShiftRed);
-      double shiftB = Math.pow(2, WB_SHIFT_LOG2_PER_STEP * r.wbShiftBlue);
+      int effShiftRed = cineDefaultWb ? -1 : r.wbShiftRed;
+      int effShiftBlue = cineDefaultWb ? 1 : r.wbShiftBlue;
+      double shiftR = Math.pow(2, WB_SHIFT_LOG2_PER_STEP * effShiftRed);
+      double shiftB = Math.pow(2, WB_SHIFT_LOG2_PER_STEP * effShiftBlue);
       double gR = nG / nR * shiftR, gB = nG / nB * shiftB;
       for (int k = 0; k < 4; k++) gainK[k] = (float) (colorK[k] == 0 ? gR : colorK[k] == 2 ? gB : 1);
       clipFactor = (float) Math.min(1, Math.min(gR, gB));
@@ -585,10 +635,6 @@ public final class RawDeveloper {
       stats.put("rawClippedFraction", round(rawClipped, 5));
 
       // --- dynamic range and the white point
-      boolean fvInit = r.development == FujiRecipe.Development.FIRST_VERSION;
-      sensorProfile = fvInit ? PROFILE_NONE : sensorProfileOf(r);
-      recipeColor = r.color;
-      recipeCce = r.colorChrome;
       double gEv = Math.log(gain) / Math.log(2);
       double clipEv = Math.log(gain * clipFactor / 0.18) / Math.log(2);
       // D-Range Priority replaces DR and the tone curve (approximation, see DRP_* constants)
@@ -731,7 +777,10 @@ public final class RawDeveloper {
       pV = new float[qn];
       kq = new float[qn];
       qx0 = new int[W];
-      if (r.halation > 0 || r.bloom > 0 || (sensorProfile == PROFILE_KODAK_800_V3 && o.stillsTone)) {
+      if (r.halation > 0
+          || r.bloom > 0
+          || ((sensorProfile == PROFILE_KODAK_800_V3 || sensorProfile == PROFILE_CINESTILL_800T)
+              && o.stillsTone)) {
         qLin = new float[3 * qn];
         qClip = new float[qn];
       }
@@ -814,14 +863,22 @@ public final class RawDeveloper {
       float baseBloom = (float) (BLOOM_PER_STEP * bloomSteps);
       if (sensorProfile == PROFILE_KODAK_800_V3 && o.stillsTone && bloomSteps == 0)
         baseBloom = 0.036f; // Portra 800 v3 gentle emulsion highlight diffusion (Clarity -3 / 10% CineBloom)
+      else if (sensorProfile == PROFILE_CINESTILL_800T && o.stillsTone) {
+        aH = Math.max(aH, 0.085); // Remjet-free Vision3 500T red-orange pressure-plate halation
+        if (bloomSteps == 0) baseBloom = 0.028f; // Soft cinema night diffusion (Clarity -5)
+      }
       bloomA = baseBloom;
       haloA[0] = (float) aH;
       haloA[1] = (float) (aH * HALATION_GREEN);
       haloA[2] = 0;
       for (int c = 0; c < 3; c++) glowKeep[c] = (1 - bloomA) * (1 - haloA[c]);
-      glow = halSteps > 0 || bloomA > 0;
+      glow = aH > 0 || bloomA > 0;
       double longSide = Math.max(W, H) / 4.0; // in quarter-resolution blocks
-      haloR = boxRadius(HALATION_SIGMA * longSide);
+      double haloSigma =
+          (sensorProfile == PROFILE_CINESTILL_800T && o.stillsTone && halSteps == 0)
+              ? 0.0095
+              : HALATION_SIGMA;
+      haloR = boxRadius(haloSigma * longSide);
       bloomR = boxRadius(BLOOM_SIGMA * longSide);
       clarityR = boxRadius(CLARITY_SIGMA * longSide);
       for (int k = 0; k < 4; k++) clipRaw[k] = (int) Math.ceil(black[k] + CLIP_LEVEL * (f.white - black[k]));
@@ -843,11 +900,15 @@ public final class RawDeveloper {
       if (sensorProfile == PROFILE_KODAK_800_V3)
         stats.put(
             "sensorCalibration",
-            "Phone CMOS -> Kodak Portra 800 v3: soft highlight shoulder, open shadow toe, OKLab Color/CCE, golden-amber/skin/sage-foliage calibration, paper-ivory highlights");
+            "Phone CMOS -> Kodak Portra 800 v3: Fuji-RAF Kelvin curve (6600K -> 5693K DNG), soft highlight shoulder, open shadow toe, OKLab Color/CCE, golden-amber/skin/sage-foliage calibration");
       else if (sensorProfile == PROFILE_LEICA_X)
         stats.put(
             "sensorCalibration",
             "Phone CMOS -> Leica X: Summilux midtone/black-toe contrast, specular roll-off, OKLab Color +4/CCE pigment density, Leica crimson/skin-guard/forest-green/cobalt calibration");
+      else if (sensorProfile == PROFILE_CINESTILL_800T)
+        stats.put(
+            "sensorCalibration",
+            "Phone CMOS -> CineStill 800T (Vision3 500T remjet-free): 3450K tungsten balance, scene-linear red-orange halation around bright lights, cyan-teal shadow / warm-amber highlight split, OKLab cinema colour");
       fvNoise = firstVersion && (epsFine > 0 || sharpen != 0 || clarityK != 0);
       if (firstVersion && post) {
         srgbDecode = new float[4097];
@@ -1048,6 +1109,26 @@ public final class RawDeveloper {
       }
       // inside clipped sources the light given away is put back (weight keepIn = min(1, 2 x clipped
       // share)): the film stays saturated there
+      float[] remHalo = null;
+      if (sensorProfile == PROFILE_CINESTILL_800T && haloA[0] > 0) {
+        float[] rem = new float[n], remBlur = new float[n];
+        boolean hasBright = false;
+        for (int i = 0; i < n; i++) {
+          float yLin =
+              0.2627f * Math.max(0f, qLin[3 * i])
+                  + 0.6780f * Math.max(0f, qLin[3 * i + 1])
+                  + 0.0593f * Math.max(0f, qLin[3 * i + 2]);
+          if (yLin > 0.50f) {
+            rem[i] = (yLin - 0.50f) * 6.5f;
+            hasBright = true;
+          }
+        }
+        if (hasBright) {
+          gauss(rem, remBlur, haloR, box);
+          remHalo = new float[n];
+          for (int i = 0; i < n; i++) remHalo[i] = Math.max(0f, remBlur[i] - rem[i]);
+        }
+      }
       glowQ = new float[3][];
       for (int c = 0; c < 3; c++) {
         float clip = (m[3 * c] + m[3 * c + 1] + m[3 * c + 2]) * clipFactor;
@@ -1056,9 +1137,11 @@ public final class RawDeveloper {
         if (haloA[c] > 0) {
           gauss(src, blur, haloR, box);
           float w = (1 - bloomA) * haloA[c];
+          float remScale = c == 0 ? 1.0f : c == 1 ? 0.26f : 0f;
           for (int i = 0; i < n; i++) {
             float keepIn = Math.min(1, 2 * qClip[i]);
-            g[i] += w * (blur[i] + (xh == null ? 0 : clip * xh[i]) + keepIn * Math.max(0, src[i] - blur[i]));
+            float extra = (xh == null ? 0 : clip * xh[i]) + (remHalo == null ? 0 : remScale * remHalo[i]);
+            g[i] += w * (blur[i] + extra + keepIn * Math.max(0, src[i] - blur[i]));
           }
         }
         if (bloomA > 0) {
