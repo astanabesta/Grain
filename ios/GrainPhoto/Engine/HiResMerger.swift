@@ -1,15 +1,18 @@
 import Foundation
 import CoreGraphics
 
-/// Streaming 4-frame Tripod Multi-Frame Super-Resolution accumulator (~36 MP) in 16-bit scene-linear Rec.2020.
+/// Streaming 4-frame Tripod Multi-Frame Super-Resolution accumulator (~36 MP or ~48 MP) in 16-bit scene-linear Rec.2020.
 ///
 /// Designed specifically to fit comfortably within 3 GB RAM devices (e.g. iPhone XR):
-/// - Holds only a single `[UInt16]` RGB accumulator (~216 MB at 36 MP) plus a 768 KB anchor pyramid.
+/// - Holds only a single `[UInt16]` RGB accumulator (~216 MB at 36 MP, ~288 MB at 48 MP) plus a 768 KB anchor pyramid.
 /// - Each 12 MP Bayer RAW frame is decoded inside an `autoreleasepool`, sub-pixel aligned across a 4x4
 ///   quadrant tile grid (~0.02 px parabolic refinement), splatted with anti-ghost rejection across all CPU
 ///   cores via `DispatchQueue.concurrentPerform`, and immediately released before the next frame arrives.
 public final class HiResAccumulator {
+    /// Target output pixel count for the 36 MP mode.
     public static let targetPixels: Int = 36_000_000
+    /// Target output pixel count for the 48 MP mode.
+    public static let targetPixels48: Int = 48_000_000
     /// Fixed-point linear scale: 1.0 scene-linear = 8192, max per frame = 16383 (~2.0x linear headroom),
     /// so 4 accumulated frames (4 * 16383 = 65,532) never overflow UInt16 (65,535).
     public static let oneLinear: Float = 8192.0
@@ -22,6 +25,8 @@ public final class HiResAccumulator {
 
     public let outWidth: Int
     public let outHeight: Int
+    /// Target output pixel count for this merge (36 MP or 48 MP).
+    public let targetPixelCount: Int
     private let aspectRatio: String
     private let digitalZoom: Float
 
@@ -40,16 +45,17 @@ public final class HiResAccumulator {
     public private(set) var usedTrueRaw: Bool = false
     private var shiftReports: [String] = []
 
-    public init(aspectRatio: String, digitalZoom: Float) {
+    public init(aspectRatio: String, digitalZoom: Float, targetPixelCount: Int = HiResAccumulator.targetPixels) {
         self.aspectRatio = aspectRatio
         self.digitalZoom = max(1.0, min(5.0, digitalZoom))
+        self.targetPixelCount = targetPixelCount
         // Provisional dimensions; locked to exact sensor orientation on Frame 1
-        let dims = Self.computeOutputDimensions(portrait: true, ratioString: aspectRatio)
+        let dims = Self.computeOutputDimensions(portrait: true, ratioString: aspectRatio, targetPixelCount: targetPixelCount)
         self.outWidth = dims.width
         self.outHeight = dims.height
     }
 
-    public static func computeOutputDimensions(portrait: Bool, ratioString: String) -> (width: Int, height: Int) {
+    public static func computeOutputDimensions(portrait: Bool, ratioString: String, targetPixelCount: Int = HiResAccumulator.targetPixels) -> (width: Int, height: Int) {
         let aspect: Double // width / height
         switch ratioString {
         case "1:1":
@@ -59,7 +65,7 @@ public final class HiResAccumulator {
         default:
             aspect = portrait ? (3.0 / 4.0) : (4.0 / 3.0)
         }
-        let h = sqrt(Double(targetPixels) / aspect)
+        let h = sqrt(Double(targetPixelCount) / aspect)
         let w = h * aspect
         let evenW = max(64, (Int(w.rounded()) + 2) & ~3)
         let evenH = max(64, (Int(h.rounded()) + 2) & ~3)
@@ -89,7 +95,7 @@ public final class HiResAccumulator {
                 srcHeight = decoded.height
                 usedTrueRaw = decoded.usedRaw
                 let portrait = srcHeight >= srcWidth
-                let dims = Self.computeOutputDimensions(portrait: portrait, ratioString: aspectRatio)
+                let dims = Self.computeOutputDimensions(portrait: portrait, ratioString: aspectRatio, targetPixelCount: targetPixelCount)
                 actualOutWidth = dims.width
                 actualOutHeight = dims.height
 

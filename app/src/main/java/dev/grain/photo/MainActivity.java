@@ -95,8 +95,17 @@ public final class MainActivity extends ComponentActivity
     50, 64, 80, 100, 125, 160, 200, 250, 320, 400, 500, 640, 800, 1000, 1250, 1600, 2000, 2500, 3200,
     4000, 5000, 6400, 8000, 10000, 12800
   };
+  /** Drive-dial positions. The two tripod super-resolution modes sit at the end. */
+  private static final int DRIVE_SINGLE = 0,
+      DRIVE_TIMER_3 = 1,
+      DRIVE_TIMER_5 = 2,
+      DRIVE_FS_BKT = 3,
+      DRIVE_FOCUS_BKT = 4,
+      DRIVE_HIRES_36 = 5,
+      DRIVE_HIRES_48 = 6;
+
   private static final String[] DRIVES = {
-    "SINGLE", "TIMER 3S", "TIMER 5S", "FS BKT", "FOCUS BKT", "HI-RES 4×"
+    "SINGLE", "TIMER 3S", "TIMER 5S", "FS BKT", "FOCUS BKT", "HI-RES 1 36MP", "HI-RES 2 48MP"
   };
   private static final String[] VIEW_MODES = {"EYE SENSOR", "EVF ONLY", "LCD ONLY"};
   private static final String[] EV_LABELS = {
@@ -149,9 +158,11 @@ public final class MainActivity extends ComponentActivity
   private float[] focusBracketPlan;
   private int focusBracketStep;
   private long focusBracketStartNs;
-  /** Tripod 4-Frame 36MP High-Resolution burst state. */
+  /** Tripod 4-Frame High-Resolution burst state. */
   private boolean hiResActive, hiResSavedAeLock;
   private int hiResStep;
+  /** The drive mode this burst is running, so the merge size survives a mid-burst dial change. */
+  private int hiResMode = DRIVE_HIRES_36;
   private long hiResStartNs;
   private HiResMerger.Accumulator hiResAccumulator;
   private File hiResAnchorDng;
@@ -1405,7 +1416,7 @@ public final class MainActivity extends ComponentActivity
               zoom = 1;
               ev = 0;
               timerSeconds = 0;
-              drive = 0;
+              drive = DRIVE_SINGLE;
               shutterNs = 0;
               isoSetting = 0;
               evCustom = false;
@@ -1537,7 +1548,7 @@ public final class MainActivity extends ComponentActivity
     shutter.setContentDescription("Cancel timer");
     back.state.countdown = String.valueOf(remaining);
     status.setText(
-        drive == 5
+        drive == DRIVE_HIRES_36 || drive == DRIVE_HIRES_48
             ? "Tripod settling (" + remaining + "s) · tap shutter to cancel"
             : "Tap shutter again to cancel");
     main.postDelayed(() -> countdown(remaining - 1, token), 1000);
@@ -1562,12 +1573,14 @@ public final class MainActivity extends ComponentActivity
     camera.neutralPreview(false);
     neutralHeld = false;
     Recipe r = Recipe.ALL[recipe];
-    bracketFilms = drive == 3 && r.raw ? bracketSet() : null;
-    if (drive == 3 && !r.raw) back.toast("FS BKT", "bracketing develops RAW films · single frame");
+    bracketFilms = drive == DRIVE_FS_BKT && r.raw ? bracketSet() : null;
+    if (drive == DRIVE_FS_BKT && !r.raw) {
+      back.toast("FS BKT", "bracketing develops RAW films · single frame");
+    }
     back.state.countdown = "";
     shutter.setText("·");
     shutter.setContentDescription("Capturing photo");
-    if (drive == 4) {
+    if (drive == DRIVE_FOCUS_BKT) {
       if (camera.focusBracketingAvailable()) {
         int count = FocusMath.BKT_COUNTS[Math.max(0, Math.min(FocusMath.BKT_COUNTS.length - 1, bktFramesIndex))];
         focusBracketPlan = FocusMath.bracketFractions(camera.currentFocusFraction(), count, bktStepMode);
@@ -1579,10 +1592,11 @@ public final class MainActivity extends ComponentActivity
       }
       back.toast("FOCUS BKT", "manual focus distance unavailable · single frame");
     }
-    if (drive == 5) {
+    if (drive == DRIVE_HIRES_36 || drive == DRIVE_HIRES_48) {
       if (r.raw && camera.rawAvailable()) {
         hiResActive = true;
         hiResStep = 0;
+        hiResMode = drive;
         hiResStartNs = System.nanoTime();
         hiResSavedAeLock = aeLock;
         hiResAccumulator = null;
@@ -1592,7 +1606,7 @@ public final class MainActivity extends ComponentActivity
         runHiResStep();
         return;
       }
-      back.toast("HI-RES 4×", "develops from sensor RAW · shooting single frame");
+      back.toast(hiResLabel(drive), "develops from sensor RAW · shooting single frame");
     }
     status.setText(
         r.raw
@@ -1925,12 +1939,13 @@ public final class MainActivity extends ComponentActivity
       status.setText(
           hStep < 3
               ? "HI-RES " + (hStep + 1) + "/4 · aligning RAW sub-pixels…"
-              : "HI-RES 4/4 · merging 36MP & developing " + filmName + "…");
+              : "HI-RES 4/4 · merging " + hiResMegapixels(hiResMode) + "MP & developing " + filmName + "…");
       files.execute(
           () -> {
             try {
               if (hStep == 0) {
-                hiResAccumulator = new HiResMerger.Accumulator(capture.frame);
+                hiResAccumulator =
+                    new HiResMerger.Accumulator(capture.frame, hiResTargetPixelsFor(hiResMode));
                 hiResAnchorDng = capture.dng;
                 hiResAnchorPhoneJpeg = keepRawFiles ? capture.phoneJpeg : null;
               } else if (capture.dng != null && capture.dng.exists() && !capture.dng.delete()) {
@@ -1951,7 +1966,7 @@ public final class MainActivity extends ComponentActivity
                 return;
               }
 
-              // All 4 RAW frames accumulated: finalize 36MP RawFrame & free accumulator before developing
+              // All 4 RAW frames accumulated: finalize the merged RawFrame & free accumulator before developing
               long mergeStart = System.nanoTime();
               String shifts = hiResAccumulator.shiftsSummary();
               RawFrame mergedFrame = hiResAccumulator.finish();
@@ -1985,7 +2000,10 @@ public final class MainActivity extends ComponentActivity
                       meterFaces);
               long devMs = (System.nanoTime() - devStart) / 1_000_000;
 
-              receipt.put("hiResMode", "tripod_4shot_36mp");
+              receipt.put(
+                  "hiResMode",
+                  hiResMode == DRIVE_HIRES_48 ? "tripod_4shot_48mp" : "tripod_4shot_36mp");
+              receipt.put("hiResMegapixels", hiResMegapixels(hiResMode));
               receipt.put("hiResFrames", 4);
               receipt.put("hiResShifts", shifts);
               receipt.put("hiResMergeMs", mergeMs);
@@ -3512,9 +3530,14 @@ public final class MainActivity extends ComponentActivity
     skippedUpdateTag = preferences.getString("skippedUpdateTag", "");
     timerSeconds = preferences.getInt("timer", 0);
     if (timerSeconds != 3 && timerSeconds != 5) timerSeconds = 0;
-    drive = preferences.getInt("drive", timerSeconds == 3 ? 1 : timerSeconds == 5 ? 2 : 0);
-    if (drive < 0 || drive >= DRIVES.length) drive = 0;
-    timerSeconds = drive == 1 ? 3 : drive == 2 ? 5 : drive == 5 ? 4 : 0;
+    drive =
+        preferences.getInt(
+            "drive",
+            timerSeconds == 3
+                ? DRIVE_TIMER_3
+                : timerSeconds == 5 ? DRIVE_TIMER_5 : DRIVE_SINGLE);
+    if (drive < 0 || drive >= DRIVES.length) drive = DRIVE_SINGLE;
+    timerSeconds = driveTimerSeconds(drive);
     dispMode = Math.max(0, Math.min(1, preferences.getInt("disp", 0)));
     viewMode = Math.max(0, Math.min(2, preferences.getInt("viewMode", 0)));
     finish = Math.max(0, Math.min(2, preferences.getInt("finish", 0)));
@@ -3822,6 +3845,8 @@ public final class MainActivity extends ComponentActivity
   private final int[] histogramBins = new int[64];
   private Bitmap peakBitmap;
   private int[] peakPixels, peakLuma, peakOut;
+  /** Consecutive failed preview read-backs; peaking gives up after {@link #PEAK_MAX_FAILURES}. */
+  private int peakFailures;
 
   private static String shutterText(long ns, boolean dial) {
     if (ns <= 0) return "";
@@ -3978,14 +4003,14 @@ public final class MainActivity extends ComponentActivity
     o.exposure = plan[2];
     o.exposureWarn = plan[3] > 0;
     o.drive =
-        drive == 0
+        drive == DRIVE_SINGLE
             ? ""
-            : drive == 3
+            : drive == DRIVE_FS_BKT
                 ? "FS BKT"
-                : drive == 4
+                : drive == DRIVE_FOCUS_BKT
                     ? "BKT " + FocusMath.BKT_COUNTS[bktFramesIndex]
-                    : drive == 5
-                        ? "HR 4×"
+                    : drive == DRIVE_HIRES_36 || drive == DRIVE_HIRES_48
+                        ? "HR " + hiResMegapixels(drive) + "MP"
                         : "◷ " + timerSeconds + "S";
     o.zoom = zoom > 1.04 ? String.format(Locale.US, "%.1f×", zoom) : "";
     o.updateAvailable = availableUpdate != null && !availableUpdate.tagName.equals(skippedUpdateTag);
@@ -4109,8 +4134,28 @@ public final class MainActivity extends ComponentActivity
             peakLuma = new int[PEAK_W * PEAK_H];
             peakOut = new int[PEAK_W * PEAK_H];
           }
-          Bitmap b = texture.getBitmap(peakBitmap);
+          // The preview TextureView only gets a size once the camera back has reported its LCD
+          // rectangle. Until then it is 0x0 and there is nothing to read back.
+          if (texture.getWidth() <= 0 || texture.getHeight() <= 0) return;
+          Bitmap b;
+          try {
+            b = texture.getBitmap(peakBitmap);
+          } catch (RuntimeException e) {
+            // Reading a TextureView back needs its hardware layer, and getBitmap throws instead of
+            // returning null when it cannot get one — the menu overlay can be up, or the surface can
+            // be torn down mid-frame. Peaking is an aid, not the camera: it must never take the app
+            // down with it.
+            if (++peakFailures > PEAK_MAX_FAILURES) {
+              peakFailures = 0;
+              peaking = false;
+              savePrefs();
+              stopPeaking();
+              back.toast("PEAKING", "preview read-back unavailable on this device");
+            }
+            return;
+          }
           if (b == null) return;
+          peakFailures = 0;
           b.getPixels(peakPixels, 0, PEAK_W, 0, 0, PEAK_W, PEAK_H);
           for (int i = 0; i < peakPixels.length; i++) {
             int c = peakPixels[i];
@@ -4651,9 +4696,32 @@ public final class MainActivity extends ComponentActivity
   private void setDrive(int value) {
     if (counting) cancelTimer();
     drive = (value % DRIVES.length + DRIVES.length) % DRIVES.length;
-    timerSeconds = drive == 1 ? 3 : drive == 2 ? 5 : drive == 5 ? 4 : 0;
+    timerSeconds = driveTimerSeconds(drive);
     savePrefs();
     pushOsd();
+  }
+
+  /** The self-timer length a drive mode implies (the Hi-Res modes use a 4 s tripod settle). */
+  private static int driveTimerSeconds(int drive) {
+    if (drive == DRIVE_TIMER_3) return 3;
+    if (drive == DRIVE_TIMER_5) return 5;
+    if (drive == DRIVE_HIRES_36 || drive == DRIVE_HIRES_48) return 4;
+    return 0;
+  }
+
+  /** The nominal output size of a tripod super-resolution drive mode, in megapixels. */
+  private static int hiResMegapixels(int drive) {
+    return drive == DRIVE_HIRES_48 ? 48 : 36;
+  }
+
+  /** The target pixel count a tripod super-resolution drive mode merges toward. */
+  private static long hiResTargetPixelsFor(int drive) {
+    return drive == DRIVE_HIRES_48 ? HiResMerger.TARGET_PIXELS_48 : HiResMerger.TARGET_PIXELS;
+  }
+
+  /** Short label for a tripod super-resolution drive mode. */
+  private static String hiResLabel(int drive) {
+    return drive == DRIVE_HIRES_48 ? "HI-RES 2 48MP" : "HI-RES 1 36MP";
   }
 
   private void driveKey() {
@@ -4665,16 +4733,16 @@ public final class MainActivity extends ComponentActivity
     setDrive(drive + 1);
     back.toast(
         DRIVES[drive],
-        drive == 3
+        drive == DRIVE_FS_BKT
             ? "one RAW, developed as three films"
-            : drive == 4
+            : drive == DRIVE_FOCUS_BKT
                 ? FocusMath.BKT_COUNTS[bktFramesIndex]
                     + " focus planes · "
                     + FocusMath.BKT_STEP_NAMES[bktStepMode].toLowerCase(Locale.ROOT)
                     + " step"
-                : drive == 5
-                    ? "4s tripod settle · merges 4 RAWs into 36MP"
-                    : drive == 0
+                : drive == DRIVE_HIRES_36 || drive == DRIVE_HIRES_48
+                    ? "4s tripod settle · merges 4 RAWs into " + hiResMegapixels(drive) + "MP"
+                    : drive == DRIVE_SINGLE
                         ? "one frame per press"
                         : "self-timer · tap the shutter to cancel");
   }
@@ -5172,6 +5240,12 @@ public final class MainActivity extends ComponentActivity
   private static final int MF_STEPS = 30;
   /** The peaking read-back, kept small so measuring it does not cost the preview. */
   private static final int PEAK_W = 160, PEAK_H = 120;
+
+  /**
+   * How many consecutive failed preview read-backs peaking tolerates before it switches itself off.
+   * At one attempt every 140 ms this is a little over four seconds of continuous failure.
+   */
+  private static final int PEAK_MAX_FAILURES = 30;
   private static final String[] MENU_TITLES = {"IMAGE QUALITY", "AF / FACE", "SHOOTING", "SET UP"};
 
   private static final class Item {
@@ -5737,7 +5811,9 @@ public final class MainActivity extends ComponentActivity
             + playList.size()
             + "    "
             + (r == null ? "PHOTO" : r.optString("name").toUpperCase(Locale.ROOT))
-            + (p.metadata.has("hiResMode") ? "  ·  HI-RES 36MP" : "")
+            + (p.metadata.has("hiResMode")
+                ? "  ·  HI-RES " + p.metadata.optInt("hiResMegapixels", 36) + "MP"
+                : "")
             + (p.metadata.has("bracket") ? "  ·  FS BKT " + p.metadata.optString("bracket") : "")
             + (p.metadata.has("focusBracketSummary")
                 ? "  ·  FOCUS BKT " + p.metadata.optString("focusBracketSummary")
@@ -5773,7 +5849,13 @@ public final class MainActivity extends ComponentActivity
       if (d.has("totalMs")) receiptLine(s, "DEVELOPED", String.format(Locale.US, "%.1f s", d.optLong("totalMs") / 1000.0));
     }
     if (m.has("hiResMode")) {
-      receiptLine(s, "HI-RES", "4 RAW frames · " + m.optString("hiResShifts", ""));
+      receiptLine(
+          s,
+          "HI-RES",
+          "4 RAW frames · "
+              + m.optInt("hiResMegapixels", 36)
+              + "MP · "
+              + m.optString("hiResShifts", ""));
     }
     receiptLine(s, "FS BKT", m.optString("bracket", ""));
     receiptLine(s, "FOCUS BKT", m.optString("focusBracketSummary", ""));

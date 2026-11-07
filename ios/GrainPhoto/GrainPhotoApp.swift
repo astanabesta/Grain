@@ -398,8 +398,8 @@ struct RangefinderCameraScreen: View {
                                     .font(.custom("AvenirNextCondensed-Bold", size: 38))
                                     .foregroundColor(GrainPalette.orange)
                                     .shadow(color: .black.opacity(0.9), radius: 4)
-                                if camera.driveSetting == .hiRes4x {
-                                    Text(camera.countdownText.contains("/") ? "CAPTURING HI-RES" : (camera.countdownText == "36M" ? "MERGING 36MP" : "TRIPOD SETTLING"))
+                                if camera.driveSetting.hiResTargetPixelCount != nil {
+                                    Text(camera.countdownText.contains("/") ? "CAPTURING HI-RES" : (camera.countdownText.hasSuffix("M") ? "MERGING \(camera.driveSetting.hiResMegapixels)MP" : "TRIPOD SETTLING"))
                                         .font(.custom("AvenirNextCondensed-Bold", size: 10.5))
                                         .tracking(1.1)
                                         .foregroundColor(GrainPalette.warmIvory.opacity(0.9))
@@ -559,8 +559,8 @@ struct RangefinderCameraScreen: View {
                         .font(.custom("AvenirNextCondensed-Bold", size: 11))
                         .shadow(color: .black.opacity(0.8), radius: 2)
                     Spacer()
-                    if camera.driveSetting == .hiRes4x {
-                        Text("HR 36MP")
+                    if camera.driveSetting.hiResTargetPixelCount != nil {
+                        Text("HR \(camera.driveSetting.hiResMegapixels)MP")
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
                             .background(RoundedRectangle(cornerRadius: 3).fill(GrainPalette.orange.opacity(0.88)))

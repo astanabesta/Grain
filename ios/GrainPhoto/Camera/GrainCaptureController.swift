@@ -27,7 +27,8 @@ public enum DriveSetting: Int, CaseIterable {
     case timer5 = 2
     case filmBracket = 3
     case focusBracket = 4
-    case hiRes4x = 5
+    case hiRes36 = 5
+    case hiRes48 = 6
 
     public var label: String {
         switch self {
@@ -36,7 +37,8 @@ public enum DriveSetting: Int, CaseIterable {
         case .timer5: return "5s TIMER"
         case .filmBracket: return "FS BKT"
         case .focusBracket: return "FOCUS BKT"
-        case .hiRes4x: return "HI-RES 36MP"
+        case .hiRes36: return "HI-RES 36MP"
+        case .hiRes48: return "HI-RES 48MP"
         }
     }
 
@@ -47,7 +49,25 @@ public enum DriveSetting: Int, CaseIterable {
         case .timer5: return "5s"
         case .filmBracket: return "FS-B"
         case .focusBracket: return "FC-B"
-        case .hiRes4x: return "HR 4×"
+        case .hiRes36: return "HR 36MP"
+        case .hiRes48: return "HR 48MP"
+        }
+    }
+
+    /// The target output pixel count of a tripod super-resolution mode, or nil for the other modes.
+    public var hiResTargetPixelCount: Int? {
+        switch self {
+        case .hiRes36: return HiResAccumulator.targetPixels
+        case .hiRes48: return HiResAccumulator.targetPixels48
+        default: return nil
+        }
+    }
+
+    /// The nominal output size of a tripod super-resolution mode, in megapixels.
+    public var hiResMegapixels: Int {
+        switch self {
+        case .hiRes48: return 48
+        default: return 36
         }
     }
 }
@@ -537,10 +557,10 @@ public final class GrainCaptureController: NSObject, ObservableObject {
         case .focusBracket:
             showToast("FOCUS BRACKET", subtitle: "3 focus planes")
             captureFocusBracket(planes: [0.25, 0.52, 0.80])
-        case .hiRes4x:
-            showToast("HI-RES 36MP · 4s SETTLE", subtitle: "Keep tripod steady · tap shutter to cancel")
+        case .hiRes36, .hiRes48:
+            showToast("\(label) · 4s SETTLE", subtitle: "Keep tripod steady · tap shutter to cancel")
             runSelfTimer(seconds: 4) { [weak self] in
-                self?.captureHiRes4xSequence()
+                self?.captureHiResSequence()
             }
         }
     }
@@ -567,7 +587,7 @@ public final class GrainCaptureController: NSObject, ObservableObject {
         }
     }
 
-    private func captureHiRes4xSequence() {
+    private func captureHiResSequence() {
         isCapturing = true
         let primaryFilm = currentFilm
         let primaryTuning = tunings[primaryFilm.id] ?? FilmTuning.defaults(for: primaryFilm)
@@ -576,7 +596,9 @@ public final class GrainCaptureController: NSObject, ObservableObject {
         let keepRaw = keepRawDng
         let flash = flashSetting
         let reqZoom = Float(max(1.0, min(5.0, zoomFactor)))
-        let accumulator = HiResAccumulator(aspectRatio: ratio, digitalZoom: reqZoom)
+        let targetPixels = driveSetting.hiResTargetPixelCount ?? HiResAccumulator.targetPixels
+        let hiResMp = driveSetting.hiResMegapixels
+        let accumulator = HiResAccumulator(aspectRatio: ratio, digitalZoom: reqZoom, targetPixelCount: targetPixels)
         var anchorRawData: Data? = nil
         var savedCaptureMeta: [String: Any] = [:]
         var savedPreviewZoom: CGFloat? = nil
@@ -622,7 +644,7 @@ public final class GrainCaptureController: NSObject, ObservableObject {
                         self.showToast("HI-RES FAILED", subtitle: msg)
                     } else {
                         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                        self.showToast("36MP HI-RES SAVED", subtitle: "\(primaryFilm.name) · 4 frames merged")
+                        self.showToast("\(hiResMp)MP HI-RES SAVED", subtitle: "\(primaryFilm.name) · 4 frames merged")
                     }
                 }
             }
@@ -703,8 +725,8 @@ public final class GrainCaptureController: NSObject, ObservableObject {
                                 fireStep(step + 1)
                             } else {
                                 Task { @MainActor in
-                                    self.countdownText = "36M"
-                                    self.showToast("MERGING 36MP…", subtitle: primaryFilm.name)
+                                    self.countdownText = "\(hiResMp)M"
+                                    self.showToast("MERGING \(hiResMp)MP…", subtitle: primaryFilm.name)
                                 }
                                 if let out = GrainDeveloper.developHiRes(
                                     accumulator: accumulator,
@@ -724,7 +746,7 @@ public final class GrainCaptureController: NSObject, ObservableObject {
                                     finishAndCleanup(failedMessage: nil)
                                 } else {
                                     anchorRawData = nil
-                                    finishAndCleanup(failedMessage: "Could not encode 36MP image")
+                                    finishAndCleanup(failedMessage: "Could not encode \(hiResMp)MP image")
                                 }
                             }
                         }

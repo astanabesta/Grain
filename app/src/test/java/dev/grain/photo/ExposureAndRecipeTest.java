@@ -314,6 +314,34 @@ public class ExposureAndRecipeTest {
     assertTrue(acc.shiftsSummary().contains("f4:"));
   }
 
+  @Test
+  public void hiResMergerTargets48MpAndNeverUpscalesPastTwoX() {
+    // 4000 x 3000 is the 12 MP Bayer source the Redmi's RAW_SENSOR stream reports.
+    int[] dims = HiResMerger.targetDimensions(4000, 3000, HiResMerger.TARGET_PIXELS_48);
+    assertEquals(0, dims[0] & 3);
+    assertEquals(0, dims[1] & 3);
+    // 48 MP over 12 MP wants exactly 2x linear, which is the cap four frames can resolve.
+    assertEquals(8000, dims[0]);
+    assertEquals(6000, dims[1]);
+    long totalPx = (long) dims[0] * dims[1];
+    assertTrue("Expected ~48MP, got " + totalPx, totalPx >= 47_500_000L && totalPx <= 48_500_000L);
+
+    // The 36 MP mode is unchanged by the new target parameter.
+    int[] dims36 = HiResMerger.targetDimensions(4000, 3000);
+    long px36 = (long) dims36[0] * dims36[1];
+    assertTrue("Expected ~36MP, got " + px36, px36 >= 35_500_000L && px36 <= 36_500_000L);
+
+    // A source larger than the target is never downscaled (dimensions are rounded down to 4 px).
+    int[] big = HiResMerger.targetDimensions(7000, 5250, HiResMerger.TARGET_PIXELS);
+    assertEquals(7000, big[0]);
+    assertEquals(5248, big[1]);
+
+    // A source far below 12 MP cannot reach 48 MP through four frames, so the 2x cap holds it back.
+    int[] small = HiResMerger.targetDimensions(2000, 1500, HiResMerger.TARGET_PIXELS_48);
+    assertEquals(4000, small[0]);
+    assertEquals(3000, small[1]);
+  }
+
   private static Recipe findRecipe(String key) {
     for (Recipe r : Recipe.ALL) {
       if (r.fuji != null && key.equals(r.fuji.key)) return r;

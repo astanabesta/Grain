@@ -392,7 +392,8 @@ public enum GrainDeveloper {
         return nil
     }
 
-    /// Low-memory strip-tiled 36 MP developer for `HiResAccumulator` (keeps peak RAM < ~365 MB on 3 GB iPhones).
+    /// Low-memory strip-tiled developer for `HiResAccumulator` (keeps peak RAM < ~365 MB at 36 MP on a
+    /// 3 GB iPhone; the 48 MP mode needs roughly a third more, so give it a device with headroom).
     public static func developHiRes(
         accumulator: HiResAccumulator,
         film: GrainFilm,
@@ -407,6 +408,7 @@ public enum GrainDeveloper {
         let frames = max(1, accumulator.framesAdded)
         let usedTrueRaw = accumulator.usedTrueRaw
         let shifts = accumulator.shiftsSummary
+        let hiResMp = accumulator.targetPixelCount >= HiResAccumulator.targetPixels48 ? 48 : 36
         guard width > 16, height > 16, accumulator.accRgb.count == width * height * 3 else {
             return nil
         }
@@ -699,8 +701,9 @@ public enum GrainDeveloper {
             "filmName": film.name,
             "simulation": film.simulationKey,
             "lutSource": lut.isOfficial ? "official_cube_\(lut.size)" : "analytical_flog2_\(lut.size)",
-            "pipeline": usedTrueRaw ? "hires_4shot_bayer_raw_36mp" : "hires_4shot_scene_linear_36mp",
-            "hiResMode": "tripod_4shot_36mp",
+            "pipeline": usedTrueRaw ? "hires_4shot_bayer_raw_\(hiResMp)mp" : "hires_4shot_scene_linear_\(hiResMp)mp",
+            "hiResMode": "tripod_4shot_\(hiResMp)mp",
+            "hiResMegapixels": hiResMp,
             "hiResFrames": frames,
             "hiResShifts": shifts,
             "sensorProfile": String(describing: film.sensorProfile),

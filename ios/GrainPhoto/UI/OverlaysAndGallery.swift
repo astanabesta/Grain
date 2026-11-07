@@ -704,7 +704,7 @@ public struct DarkroomGalleryView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if entry.isHiRes {
-                    Text("36MP")
+                    Text("\(entry.hiResMegapixels)MP")
                         .font(.custom("AvenirNextCondensed-Bold", size: 9.5))
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1.5)

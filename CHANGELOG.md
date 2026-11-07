@@ -8,6 +8,22 @@ one was a separate APK install on the device.
 
 ---
 
+## v0.8.1 — Two Tripod High-Resolution Modes (`36 MP` / `48 MP`) & Focus Peaking Fix (`Android` + `iOS`)
+
+- **Focus peaking no longer crashes** — Turning on `PEAKING` could take the app down. The preview
+  read-back now waits for the viewfinder to have a real size, and a failed read-back can never take
+  the camera down with it. On a device that cannot read the preview back at all, Grain switches
+  peaking off and says so instead of crashing.
+- **Two tripod high-resolution modes (`HI-RES 1 36MP` / `HI-RES 2 48MP`)** — The `DRIVE` dial now
+  offers `HI-RES 1 36MP` (the existing `~36 MP` merge, unchanged at `~6928 × 5196`) and the new
+  `HI-RES 2 48MP` (`~8000 × 6000`), resolving more detail from the same 12 MP sensor frame using
+  the same 4-frame `4×4` sub-pixel tile registration, 4-second tripod settle, locked AE/AF and
+  haptic/Taptic OIS micro-shift. The merge never upscales past `2×` linear, so a sensor below
+  `12 MP` lands under `48 MP` and the receipt records the real output size.
+- **Receipts and gallery record which merge you shot** — Hi-Res frames now carry their nominal merge
+  size (`36 MP` or `48 MP`) alongside the sub-pixel shift diagnostics, and the Darkroom gallery shows
+  it on each frame on both platforms.
+
 ## v0.8.0 — Tripod 4-Shot `~36 MP` High-Resolution Mode (`Android` + `iOS`)
 
 - **Selectable `HI-RES 4×` / `HI-RES 36MP` Drive Mode (`DRIVE` button & `SHOOTING MENU`)** —

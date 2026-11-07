@@ -1,16 +1,22 @@
-## Grain Photo vVERSION — Tripod 4-Shot `~36 MP` High-Resolution Mode (`Android` + `iOS`)
+## Grain Photo vVERSION — Two Tripod High-Resolution Modes & a Focus Peaking Fix (`Android` + `iOS`)
 
 - **Android (`Grain-vVERSION.apk`):** Install directly inside Grain (**MENU → SET UP → APP UPDATE**) or download **`Grain-vVERSION.apk`** below.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** Download **`Grain-iOS-vVERSION.ipa`** below and install onto any iPhone (iOS 16+, including **iPhone XR / XS** and newer) using **[Sideloadly](https://sideloadly.io/)**, **[AltStore](https://altstore.io/)**, or **[SideStore](https://sidestore.io/)**.
 
-### What's new in v0.8.0
+### What's new in v0.8.1
 
-#### 1. Tripod-Optimized 4-Shot `~36 MP` High-Resolution Mode (`HI-RES 4×` / `HI-RES 36MP`)
-- **Select via `DRIVE` button or `MENU → SHOOTING → DRIVE`:** Cycles through `SINGLE → 3s → 5s → FS BKT → FOCUS BKT → HI-RES 4×` (`HR 4×` / `HR 36MP` badge in the viewfinder OSD).
-- **4-Second Tripod Settle Delay:** Pressing the shutter starts a **4-second** countdown (`4 → 3 → 2 → 1`, tap shutter again anytime to cancel) so every trace of finger and tripod vibration settles before Frame 1 fires.
-- **Locked Exposure/Focus + Haptic/Taptic OIS Micro-Shift:** Locks AE & AF across all 4 exposures and pulses calibrated haptic/Taptic micro-impulses (`38 ms` before Frames 2, 3, and 4) to excite sub-pixel (`~0.35–0.75 px`) OIS sensor/lens offsets even on a rock-solid tripod.
-- **True Multi-Frame RAW Super-Resolution (`~36 MP`, `~6912 × 5184`):**
-  - Registers all 4 linear sensor frames on a `4×4` sub-pixel tile grid (`0.05 px` parabolic refinement) with automatic anti-ghosting fallback on moving foliage, clouds, or water.
-  - Cuts shadow shot noise in half (`+1 EV` cleaner dynamic range) and develops the merged `~36 MP` negative through Grain's full F-Log2 / S-Log3, 3D LUT, `OKLab` colour calibration, halation, and film grain pipeline.
-  - Engineered with streaming `UInt16` accumulation and row-strip film development so even 3 GB RAM devices (such as **iPhone XR**) merge and save `36 MP` frames smoothly without memory pressure.
-- **Hi-Res Recipe Filenames & Receipts:** Saved and exported files automatically include both the film recipe and `_HiRes` tag (e.g. **`Grain_Kodak_Portra_800_v3_HiRes_20261108_151022.jpg`**) plus sub-pixel shift diagnostics in the Darkroom receipt.
+#### 1. Focus Peaking No Longer Crashes
+- **Fixed:** Turning on `PEAKING` could take the app down. The preview read-back now waits for the viewfinder to have a real size, and a failed read-back can never take the camera down with it.
+- **Never fatal:** If a device cannot read the preview back at all, Grain switches peaking off and tells you, instead of crashing. Everything else in the camera keeps working.
+
+#### 2. Two Tripod High-Resolution Modes (`HI-RES 1 36MP` / `HI-RES 2 48MP`)
+- **Select via `DRIVE` button or `MENU → SHOOTING → DRIVE`:** Cycles through `SINGLE → 3s → 5s → FS BKT → FOCUS BKT → HI-RES 1 36MP → HI-RES 2 48MP` (`HR 36MP` / `HR 48MP` badge in the viewfinder OSD).
+- **`HI-RES 1 36MP` (unchanged):** The 4-shot tripod merge you already know, at `~6928 × 5196` (`36.00 MP`).
+- **`HI-RES 2 48MP` (new):** The same 4-frame sub-pixel merge, now resolving `~8000 × 6000` (`48.00 MP`) from the same 12 MP sensor frame.
+- **Same 4-second tripod settle, same locked AE/AF, same haptic/Taptic OIS micro-shift** — only the merge size changes.
+- **Registers all 4 linear sensor frames on a `4×4` sub-pixel tile grid** (`0.05 px` parabolic refinement) with automatic anti-ghosting fallback on moving foliage, clouds, or water, then develops the merged negative through Grain's full F-Log2 / S-Log3, 3D LUT, `OKLab` colour calibration, halation, and film grain pipeline.
+- **Honest limits:** `48 MP` needs near-perfect sub-pixel registration, so it is more sensitive to movement than `36 MP` — use a tripod. The merge never upscales past `2×` linear (the most four frames can resolve), so a smaller sensor than `12 MP` will land below `48 MP`; the receipt always records the real output size.
+
+#### 3. Receipts & Gallery Say Which Mode You Shot
+- **Saved files** still carry the `_HiRes` filename tag, and the receipt now records the nominal merge size (`36 MP` or `48 MP`) alongside the sub-pixel shift diagnostics.
+- **Darkroom gallery** shows the merge size on each Hi-Res frame, on both Android and iOS.

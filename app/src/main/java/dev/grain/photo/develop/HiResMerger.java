@@ -9,18 +9,32 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 /**
- * Streaming 4-frame Tripod Multi-Frame Super-Resolution merger ({@code ~36 MP}) in linear Bayer
- * sensor space.
+ * Streaming 4-frame Tripod Multi-Frame Super-Resolution merger ({@code ~36 MP} or {@code ~48 MP}) in
+ * linear Bayer sensor space.
  *
  * <p>Each incoming {@link RawFrame} is aligned across a {@code 4 x 4} grid of quadrant tiles to
  * sub-pixel precision ({@code ~0.02 px} via parabolic 2D refinement against Frame 1's anchor
  * pyramid), directional-demosaiced on the fly with its per-frame lens-shading map applied, and
- * accumulated onto a {@code ~36 MP} CFA-aligned {@code char[]} grid with ghost rejection so no two
- * full RAW frames need to stay in memory simultaneously.
+ * accumulated onto a CFA-aligned {@code char[]} grid with ghost rejection so no two full RAW
+ * frames need to stay in memory simultaneously.
+ *
+ * <p>The output size is set by the target pixel count ({@link #TARGET_PIXELS} or
+ * {@link #TARGET_PIXELS_48}) rather than by the source: the four frames are registered to
+ * sub-pixel precision, so the merge resolves more detail than any single frame holds. The
+ * linear scale is capped at 2x, which is the most four tripod frames can resolve.
  */
 public final class HiResMerger {
-  /** Target pixel count (~36 MP: e.g. 6928 x 5196 = 35,997,888 px for a 4:3 sensor). */
+  /** Target pixel count for the 36 MP mode (~36 MP: e.g. 6928 x 5196 = 35,997,888 px for a 4:3 sensor). */
   public static final long TARGET_PIXELS = 36_000_000L;
+
+  /** Target pixel count for the 48 MP mode (e.g. 8000 x 6000 = 48,000,000 px for a 4:3 sensor). */
+  public static final long TARGET_PIXELS_48 = 48_000_000L;
+
+  /**
+   * The most four tripod frames can resolve through sub-pixel registration: 2x linear. A target that
+   * would need more than that is quietly rounded down to it rather than upscaling past the data.
+   */
+  private static final double MAX_SCALE = 2.0;
 
   /** 13-bit linear unit so 4 accumulated frames (4 * 8191 = 32,764) fit inside unsigned 16-bit char[]. */
   private static final int ONE_LINEAR = 8191;
@@ -31,15 +45,25 @@ public final class HiResMerger {
 
   private HiResMerger() {}
 
-  /** Computes even, 4-pixel-aligned output dimensions targeting ~36 MP (never shrinking larger sensors). */
+  /** Computes even, 4-pixel-aligned output dimensions targeting the 36 MP mode (never shrinking larger sensors). */
   public static int[] targetDimensions(int srcW, int srcH) {
+    return targetDimensions(srcW, srcH, TARGET_PIXELS);
+  }
+
+  /**
+   * Computes even, 4-pixel-aligned output dimensions for a given target pixel count. The scale is
+   * clamped to 2x linear (the most four tripod frames resolve through sub-pixel registration), so a
+   * target that would need more is rounded down to it rather than upscaling past the data.
+   */
+  public static int[] targetDimensions(int srcW, int srcH, long targetPixels) {
     long srcPixels = (long) srcW * (long) srcH;
     if (srcPixels <= 0) throw new IllegalArgumentException("Invalid source size");
-    if (srcPixels >= TARGET_PIXELS) {
+    if (targetPixels <= 0) throw new IllegalArgumentException("Invalid target pixel count");
+    if (srcPixels >= targetPixels) {
       return new int[] {srcW & ~3, srcH & ~3};
     }
-    double scale = Math.sqrt((double) TARGET_PIXELS / (double) srcPixels);
-    scale = Math.min(2.0, Math.max(1.0, scale));
+    double scale = Math.sqrt((double) targetPixels / (double) srcPixels);
+    scale = Math.min(MAX_SCALE, Math.max(1.0, scale));
     int outW = Math.max(8, ((int) Math.round(srcW * scale) + 2) & ~3);
     int outH = Math.max(8, ((int) Math.round(srcH * scale) + 2) & ~3);
     return new int[] {outW, outH};
@@ -67,9 +91,14 @@ public final class HiResMerger {
     private final List<String> shiftReports = new ArrayList<>();
 
     public Accumulator(RawFrame anchor) {
+      this(anchor, TARGET_PIXELS);
+    }
+
+    /** @param targetPixels nominal output size for this mode (36 MP or 48 MP). */
+    public Accumulator(RawFrame anchor, long targetPixels) {
       this.srcW = anchor.width;
       this.srcH = anchor.height;
-      int[] dims = targetDimensions(srcW, srcH);
+      int[] dims = targetDimensions(srcW, srcH, targetPixels);
       this.outW = dims[0];
       this.outH = dims[1];
       this.cfa = anchor.cfa;
@@ -179,7 +208,7 @@ public final class HiResMerger {
       return String.join(" ", shiftReports);
     }
 
-    /** Finalizes accumulation, applies edge-protected optical PSF deconvolution, and returns a 36MP RawFrame. */
+    /** Finalizes accumulation, applies edge-protected optical PSF deconvolution, and returns the merged RawFrame. */
     public synchronized RawFrame finish() {
       if (accSum == null || framesAdded <= 0) {
         throw new IllegalStateException("No frames accumulated");
@@ -197,7 +226,7 @@ public final class HiResMerger {
         }
       }
 
-      // Allocate final 36 MP Bayer RawFrame and apply 1-pass CFA-aware optical PSF micro-deconvolution
+      // Allocate the final Bayer RawFrame and apply 1-pass CFA-aware optical PSF micro-deconvolution
       short[] outPixels = new short[outW * outH];
       deconvolveSameColorPsa(avg, outPixels, outW, outH, count);
       this.accSum = null;

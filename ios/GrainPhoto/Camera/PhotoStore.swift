@@ -11,6 +11,8 @@ public struct RollEntry: Identifiable, Equatable {
     public let filmCode: String
     public let filmName: String
     public let isHiRes: Bool
+    /// Nominal output size of the tripod super-resolution merge this frame came from.
+    public let hiResMegapixels: Int
 
     /// Human-readable filename containing the film recipe + timestamp (e.g. `Grain_Kodak_Portra_800_v3_20261108_143512_412.jpg`).
     public func exportFilename(ext: String) -> String {
@@ -18,7 +20,7 @@ public struct RollEntry: Identifiable, Equatable {
             return "\(id).\(ext)"
         }
         let baseSlug = PhotoStore.recipeSlug(filmName)
-        let slug = isHiRes ? (baseSlug.isEmpty ? "HiRes_36MP" : "\(baseSlug)_HiRes") : baseSlug
+        let slug = isHiRes ? (baseSlug.isEmpty ? "HiRes" : "\(baseSlug)_HiRes") : baseSlug
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd_HHmmss"
@@ -74,12 +76,16 @@ public final class PhotoStore: ObservableObject {
             var code = "GRAIN"
             var name = stem
             var hiRes = stem.contains("_HiRes_")
+            var hiResMp = 36
             if let data = try? Data(contentsOf: json),
                let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 code = (obj["filmCode"] as? String) ?? code
                 name = (obj["filmName"] as? String) ?? name
                 if obj["hiResMode"] != nil {
                     hiRes = true
+                }
+                if let mp = obj["hiResMegapixels"] as? Int {
+                    hiResMp = mp
                 }
             }
             loaded.append(
@@ -91,7 +97,8 @@ public final class PhotoStore: ObservableObject {
                     createdAt: created,
                     filmCode: code,
                     filmName: name,
-                    isHiRes: hiRes
+                    isHiRes: hiRes,
+                    hiResMegapixels: hiResMp
                 )
             )
         }
@@ -139,7 +146,7 @@ public final class PhotoStore: ObservableObject {
         let filmLabel = (receipt["filmName"] as? String) ?? (receipt["filmCode"] as? String) ?? ""
         let isHiRes = (receipt["hiResMode"] as? String) != nil
         let baseSlug = Self.recipeSlug(filmLabel)
-        let slug = isHiRes ? (baseSlug.isEmpty ? "HiRes_36MP" : "\(baseSlug)_HiRes") : baseSlug
+        let slug = isHiRes ? (baseSlug.isEmpty ? "HiRes" : "\(baseSlug)_HiRes") : baseSlug
         let stem = slug.isEmpty ? "Grain_\(stamp)" : "Grain_\(slug)_\(stamp)"
 
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
@@ -171,13 +178,17 @@ public final class PhotoStore: ObservableObject {
     }
 
     public func receiptText(for entry: RollEntry) -> String {
-        let modeLine = entry.isHiRes ? "\nMODE   HI-RES 36MP (4 FRAMES MERGED)" : ""
-        let header = "FILE   \(entry.exportFilename(ext: "jpg"))\(entry.dngURL != nil ? "\nRAW    \(entry.exportFilename(ext: "dng"))" : "")\nFILM   \(entry.filmName) (\(entry.filmCode))\(modeLine)\n\n"
         guard let data = try? Data(contentsOf: entry.receiptURL),
               let text = String(data: data, encoding: .utf8) else {
-            return header + "{ \"film\": \"\(entry.filmName)\" }"
+            return Self.receiptHeader(for: entry, megapixels: nil) + "{ \"film\": \"\(entry.filmName)\" }"
         }
-        return header + text
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        return Self.receiptHeader(for: entry, megapixels: json?["hiResMegapixels"] as? Int) + text
+    }
+
+    private static func receiptHeader(for entry: RollEntry, megapixels: Int?) -> String {
+        let modeLine = entry.isHiRes ? "\nMODE   HI-RES \(megapixels ?? 36)MP (4 FRAMES MERGED)" : ""
+        return "FILE   \(entry.exportFilename(ext: "jpg"))\(entry.dngURL != nil ? "\nRAW    \(entry.exportFilename(ext: "dng"))" : "")\nFILM   \(entry.filmName) (\(entry.filmCode))\(modeLine)\n\n"
     }
 
     public func shareURL(for entry: RollEntry) -> URL {
@@ -225,7 +236,8 @@ public final class PhotoStore: ObservableObject {
                         createdAt: item.createdAt,
                         filmCode: item.filmCode,
                         filmName: item.filmName,
-                        isHiRes: item.isHiRes
+                        isHiRes: item.isHiRes,
+                        hiResMegapixels: item.hiResMegapixels
                     )
                 )
             }

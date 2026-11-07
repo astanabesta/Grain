@@ -59,7 +59,7 @@ Every exposure saves a machine-readable **JSON receipt** documenting what was re
 | **Phone-Sensor Calibration** | Dedicated CMOS-to-emulsion calibration on **Kodak 800 v3 (`K800`)**, **Leica X (`LCX`)**, and **CineStill 800T (`800T`)**: RAF-matched Kelvin white points, soft highlight shoulders, open Portra / grounded Leica & Vision3 shadow toes, scene-linear remjet-free red-orange halation, perceptual `OKLab` colour & `Color Chrome` pigment density, skin protection, foliage hue calibration, and hue-preserving gamut compression |
 | **Exposure & Flash** | Closed-loop **P / S / ISO / M** exposure solver (`1/4000 s` – `1 s`, `ISO 50–12800`), EV `−2…+2` (plus `0.1 EV` fine command-dial mode), AE-L, face-weighted metering, and hardware flash (`⚡ OFF / ON / AUTO / TORCH`) |
 | **Focus & Loupe** | Single / Zone / Centre / Face AF, sticky **AF-C face tracking**, AF lock, **30-step manual focus**, real-time **focus peaking**, and **`4× / 8×` Focus Check magnifier loupe** |
-| **Drive & Bracketing** | Single shot, `3 s` / `5 s` self-timer, **3-film simulation bracketing (`FS BKT`)**, **3 / 5 / 7-frame focus bracketing (`FOCUS BKT`)**, and **Tripod 4-Shot `~36 MP` High-Resolution Mode (`HI-RES 4×` / `HI-RES 36MP`)** |
+| **Drive & Bracketing** | Single shot, `3 s` / `5 s` self-timer, **3-film simulation bracketing (`FS BKT`)**, **3 / 5 / 7-frame focus bracketing (`FOCUS BKT`)**, and **two Tripod 4-Shot High-Resolution Modes (`HI-RES 1 36MP` / `HI-RES 2 48MP`)** |
 | **Darkroom Gallery** | Private on-device film roll, **multi-select batch delete** (with 7-second Undo) & **batch export** to `Pictures/Grain`, share sheet, and full per-photo technical receipts |
 | **Updates & Privacy** | Zero accounts, analytics, telemetry, or cloud uploads; optional SHA-256-verified in-app updates from GitHub Releases (with Xiaomi HyperOS / MIUI system-installer support) |
 
@@ -157,7 +157,7 @@ Developed from sensor `RAW_SENSOR` through Fujifilm's official F-Log2 LUTs. Ever
 | **Flash (`⚡`)** | Cycles **`OFF`**, **`ON`**, **`AUTO`**, and continuous **`TORCH`** fill light. |
 | **Focus Lever (Joystick)** | **360° analog thumb stick:** drag in any direction to glide the AF point smoothly at 60–120 Hz (press centre to re-centre); tilt & hold to navigate / auto-repeat **`Q`**, **`MENU`**, and **`PLAY`**. |
 | **`Q` Menu** | 16-tile quick grid (`Film`, `WB`, `WB R`, `WB B`, `DR`, `H Tone`, `S Tone`, `Color`, `Sharp`, `NR`, `Clarity`, `Grain`, `CCE`, `FX Blue`, `Dev`, `Face`). |
-| **`DRIVE`** | `SINGLE`, `3 s` / `5 s` self-timer, **`FS BKT`** (3-film RAW bracket), and **`FOCUS BKT`** (`3 / 5 / 7` focus planes). |
+| **`DRIVE`** | `SINGLE`, `3 s` / `5 s` self-timer, **`FS BKT`** (3-film RAW bracket), **`FOCUS BKT`** (`3 / 5 / 7` focus planes), and **`HI-RES 1 36MP` / `HI-RES 2 48MP`** (4-shot tripod super-resolution). |
 | **Playback (`▶`)** | Opens the private gallery: swipe frames, inspect JSON/settings receipts (`DISP`), or tap **Select** to batch-mark multiple photos for **Delete (N)** (with 7 s Undo) or **Save (N)** to `Pictures/Grain`. |
 | **Memo Holder** | Tap to write a roll note; press-and-hold on the camera screen for an unfiltered reference preview. |
 
@@ -194,7 +194,7 @@ Full mathematical derivations and calibration measurements are documented in **[
 - **Requirements:** Android 10+ (API 29+, targeting API 36). `◆` RAW films require Camera2 `RAW_SENSOR` support on the active rear lens.
 - **Automated suite:**
   - **1,278** SDK-free pure-Java crop, tone-curve, preview, focus, and exposure smoke tests (`tools/check-source.sh`).
-  - **83** JUnit & Robolectric tests covering F-Log2 / S-Log3 round-trips, DNG Planckian/Bradford colour math, noise measurement, bit-identical golden hashes, sensor-calibrated tone/colour/halation invariants, analog focus-lever physics, blackout viewfinder geometry, exposure planning, and OTA update verification.
+  - **89** JUnit & Robolectric tests covering F-Log2 / S-Log3 round-trips, DNG Planckian/Bradford colour math, noise measurement, bit-identical golden hashes, sensor-calibrated tone/colour/halation invariants, analog focus-lever physics, blackout viewfinder geometry, exposure planning, Hi-Res merge sizing, and OTA update verification.
   - GitHub Actions runs `:app:testDebugUnitTest`, `:app:lintDebug`, and `:app:assembleRelease` before publishing every release.
 
 ---
@@ -301,6 +301,7 @@ tools/                          SDK-free syntax/math verifier & desktop RAW CLI 
 
 | Version | Highlights |
 | --- | --- |
+| **v0.8.1** | **Two Tripod High-Resolution Modes (`HI-RES 1 36MP` / `HI-RES 2 48MP`)** on Android & iOS — the existing `~36 MP` merge plus a new `~48 MP` (`~8000 × 6000`) merge from the same 4-frame sub-pixel registration — and a **fix for the focus-peaking crash** (preview read-back can no longer take the app down) |
 | **v0.8.0** | **Tripod 4-Shot `~36 MP` High-Resolution Mode (`HI-RES 4×` / `HI-RES 36MP`)** on Android & iOS: `4 s` tripod settle countdown, haptic/Taptic OIS sub-pixel micro-shift, 4-frame RAW super-resolution merge (~`6912 × 5184`), and strip-tiled low-RAM film development |
 | **v0.7.10** | **Recipe-named photo & RAW filenames + EXIF descriptions** (`Grain_<Recipe_Name>_YYYYMMDD_HHMMSS.jpg` / `.dng`) in Apple Photos `ⓘ` File Info, Android Gallery, Share & Darkroom Roll |
 | **v0.7.9** | **iOS Bayer RAW capture hardening** (`photoQualityPrioritization = .speed` + `videoZoomFactor = 1.0` sensor crop) ensuring rock-solid 12MP `.dng` capture on **iPhone XR / XS & all iOS 16+ iPhones** |
