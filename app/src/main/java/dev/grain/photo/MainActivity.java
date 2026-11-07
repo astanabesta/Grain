@@ -143,10 +143,11 @@ public final class MainActivity extends ComponentActivity
   private int focusBracketStep;
   private long focusBracketStartNs;
   /** In-app update state. */
-  private boolean notifyUpdates = true, updateDownloading;
+  private boolean notifyUpdates = true, updateDownloading, updateFallbackTried;
   private String skippedUpdateTag = "", startupNotifiedTag = "";
   private long lastUpdateCheckMs;
   private AppUpdater.Release availableUpdate, pendingInstallRelease;
+  private File lastDownloadedUpdateApk;
   private boolean grid,
       keepFull = true,
       faceExposure = true,
@@ -193,21 +194,58 @@ public final class MainActivity extends ComponentActivity
                 startUpdateDownload(pending);
               }
             });
-    AppUpdater.setStatusListener(
-        (installStatus, msg) -> {
-          if (isDestroyed()) return;
-          if (installStatus == PackageInstaller.STATUS_SUCCESS) {
-            availableUpdate = null;
-            pushOsd();
-            message("Grain updated successfully.");
-          } else if (installStatus == PackageInstaller.STATUS_FAILURE_ABORTED) {
-            message("Update cancelled.");
-          } else {
-            message(
-                "Update could not install"
-                    + (msg != null && !msg.isEmpty() ? ": " + msg : " (matching signing key required)"));
+    AppUpdater.setConfirmationLauncher(
+        confirmIntent -> {
+          if (isDestroyed() || isFinishing() || !resumed) return false;
+          try {
+            startActivity(confirmIntent);
+            return true;
+          } catch (Exception e) {
+            return false;
           }
         });
+    AppUpdater.setStatusListener(
+        (installStatus, msg) ->
+            runOnUiThread(
+                () -> {
+                  if (isDestroyed()) return;
+                  if (installStatus == PackageInstaller.STATUS_PENDING_USER_ACTION) {
+                    message("Tap Update in the system prompt to finish installing.");
+                  } else if (installStatus == PackageInstaller.STATUS_SUCCESS) {
+                    availableUpdate = null;
+                    lastDownloadedUpdateApk = null;
+                    pushOsd();
+                    message("Grain updated successfully.");
+                  } else if (AppUpdater.isSystemBlockedAbort(installStatus, msg)
+                      || (installStatus != PackageInstaller.STATUS_FAILURE_ABORTED
+                          && lastDownloadedUpdateApk != null
+                          && lastDownloadedUpdateApk.isFile()
+                          && !updateFallbackTried)) {
+                    if (lastDownloadedUpdateApk != null
+                        && lastDownloadedUpdateApk.isFile()
+                        && !updateFallbackTried) {
+                      updateFallbackTried = true;
+                      try {
+                        AppUpdater.launchSystemApkInstaller(this, lastDownloadedUpdateApk);
+                        return;
+                      } catch (Exception ignored) {
+                      }
+                    }
+                    message(
+                        "Update could not install"
+                            + (msg != null && !msg.isEmpty()
+                                ? ": " + msg
+                                : " (matching signing key required)"));
+                  } else if (installStatus == PackageInstaller.STATUS_FAILURE_ABORTED) {
+                    message("Update cancelled.");
+                  } else {
+                    message(
+                        "Update could not install"
+                            + (msg != null && !msg.isEmpty()
+                                ? ": " + msg
+                                : " (matching signing key required)"));
+                  }
+                }));
     build();
     getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
       @Override public void handleOnBackPressed() { navigateBack(); }
@@ -1978,6 +2016,7 @@ public final class MainActivity extends ComponentActivity
   @Override
   protected void onDestroy() {
     AppUpdater.setStatusListener(null);
+    AppUpdater.setConfirmationLauncher(null);
     if (camera != null) camera.close();
     if (sound != null) sound.release();
     main.removeCallbacksAndMessages(null);
@@ -5081,6 +5120,8 @@ public final class MainActivity extends ComponentActivity
             runOnUiThread(
                 () -> {
                   updateDownloading = false;
+                  updateFallbackTried = false;
+                  lastDownloadedUpdateApk = apk;
                   if (isDestroyed() || isFinishing()) return;
                   if (dialog.isShowing()) dialog.dismiss();
                   try {

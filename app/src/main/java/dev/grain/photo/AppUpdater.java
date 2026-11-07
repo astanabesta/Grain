@@ -1,11 +1,14 @@
 package dev.grain.photo;
 
 import android.annotation.SuppressLint;
+import android.app.Activity;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageInstaller;
+import android.net.Uri;
 import android.os.Build;
+import androidx.core.content.FileProvider;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -36,14 +39,28 @@ public final class AppUpdater {
     void onInstallStatus(int status, String message);
   }
 
+  public interface ConfirmationLauncher {
+    boolean launchConfirmIntent(Intent confirmIntent);
+  }
+
   public interface ProgressListener {
     void onProgress(long downloadedBytes, long totalBytes);
   }
 
   private static volatile StatusListener statusListener;
+  private static volatile ConfirmationLauncher confirmationLauncher;
 
   public static void setStatusListener(StatusListener listener) {
     statusListener = listener;
+  }
+
+  public static void setConfirmationLauncher(ConfirmationLauncher launcher) {
+    confirmationLauncher = launcher;
+  }
+
+  static boolean tryLaunchFromForeground(Intent confirmIntent) {
+    ConfirmationLauncher l = confirmationLauncher;
+    return l != null && l.launchConfirmIntent(confirmIntent);
   }
 
   static void dispatchInstallStatus(int status, String message) {
@@ -331,14 +348,83 @@ public final class AppUpdater {
   }
 
   /**
-   * Streams {@code apkFile} into a {@link PackageInstaller.Session} and commits it. On Android 12+
-   * requests {@code USER_ACTION_NOT_REQUIRED} so self-installed builds update seamlessly; when
-   * Android requires confirmation, {@link UpdateReceiver} launches the single-tap system prompt.
+   * Returns true on Xiaomi / Redmi / POCO / BlackShark devices (MIUI & HyperOS), where Xiaomi's
+   * {@code PKMSImpl.assertCallerAndPackage} rejects {@code USER_ACTION_NOT_REQUIRED} sessions with
+   * {@code STATUS_FAILURE_ABORTED: Permission denied} and HyperOS may suppress background receiver
+   * confirmation intents.
+   */
+  public static boolean isXiaomiBrand(String manufacturer, String brand) {
+    String m = manufacturer == null ? "" : manufacturer.toLowerCase(Locale.ROOT);
+    String b = brand == null ? "" : brand.toLowerCase(Locale.ROOT);
+    return m.contains("xiaomi")
+        || m.contains("redmi")
+        || m.contains("poco")
+        || m.contains("blackshark")
+        || b.contains("xiaomi")
+        || b.contains("redmi")
+        || b.contains("poco")
+        || b.contains("blackshark");
+  }
+
+  public static boolean isXiaomiDevice() {
+    return isXiaomiBrand(Build.MANUFACTURER, Build.BRAND);
+  }
+
+  /**
+   * Distinguishes OEM/system permission rejections that report {@code STATUS_FAILURE_ABORTED} (such
+   * as HyperOS's {@code INSTALL_FAILED_ABORTED: Permission denied}) from a genuine user tap on
+   * Cancel.
+   */
+  public static boolean isSystemBlockedAbort(int status, String message) {
+    if (status != PackageInstaller.STATUS_FAILURE_ABORTED || message == null) return false;
+    String m = message.toLowerCase(Locale.ROOT);
+    return m.contains("permission")
+        || m.contains("install_failed")
+        || m.contains("blocked")
+        || m.contains("restricted")
+        || m.contains("not allowed");
+  }
+
+  /**
+   * Opens Android's standard system package installer directly via {@link FileProvider} ({@code
+   * content://} URI + {@code application/vnd.android.package-archive}). Works reliably from a
+   * foreground {@link Activity} across Xiaomi HyperOS/MIUI, ColorOS, OneUI, and stock Android.
+   */
+  @SuppressLint("RequestInstallPackagesPolicy")
+  public static void launchSystemApkInstaller(Context context, File apkFile) throws IOException {
+    if (apkFile == null || !apkFile.isFile() || apkFile.length() <= 0) {
+      throw new IOException("Update APK file is missing");
+    }
+    Uri uri =
+        FileProvider.getUriForFile(context, context.getPackageName() + ".fileprovider", apkFile);
+    Intent intent = new Intent(Intent.ACTION_VIEW);
+    intent.setDataAndType(uri, "application/vnd.android.package-archive");
+    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+    if (!(context instanceof Activity)) {
+      intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+    }
+    intent.putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true);
+    try {
+      context.startActivity(intent);
+    } catch (Exception e) {
+      throw new IOException("Could not open system package installer: " + e.getMessage(), e);
+    }
+  }
+
+  /**
+   * Installs {@code apkFile}. On Xiaomi/Redmi/POCO (HyperOS/MIUI), launches the system package
+   * installer directly via {@link FileProvider} to avoid HyperOS's {@code PKMSImpl} abort on silent
+   * sessions. On other devices, streams into a {@link PackageInstaller.Session} and falls back to
+   * {@link #launchSystemApkInstaller} if the session cannot be created or committed.
    */
   @SuppressLint({"RequestInstallPackagesPolicy", "MutableImplicitPendingIntent"})
   public static void installApk(Context context, File apkFile) throws IOException {
     if (apkFile == null || !apkFile.isFile() || apkFile.length() <= 0) {
       throw new IOException("Update APK file is missing");
+    }
+    if (isXiaomiDevice()) {
+      launchSystemApkInstaller(context, apkFile);
+      return;
     }
     PackageInstaller installer = context.getPackageManager().getPackageInstaller();
     PackageInstaller.SessionParams params =
@@ -348,31 +434,36 @@ public final class AppUpdater {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
       params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED);
     }
-    int sessionId = installer.createSession(params);
-    try (PackageInstaller.Session session = installer.openSession(sessionId)) {
-      try (InputStream in = new FileInputStream(apkFile);
-          OutputStream out = session.openWrite("grain-update.apk", 0, apkFile.length())) {
-        byte[] buf = new byte[64 * 1024];
-        int n;
-        while ((n = in.read(buf)) >= 0) {
-          out.write(buf, 0, n);
+    int sessionId = -1;
+    try {
+      sessionId = installer.createSession(params);
+      try (PackageInstaller.Session session = installer.openSession(sessionId)) {
+        try (InputStream in = new FileInputStream(apkFile);
+            OutputStream out = session.openWrite("grain-update.apk", 0, apkFile.length())) {
+          byte[] buf = new byte[64 * 1024];
+          int n;
+          while ((n = in.read(buf)) >= 0) {
+            out.write(buf, 0, n);
+          }
+          session.fsync(out);
         }
-        session.fsync(out);
+        Intent callback = new Intent(context, UpdateReceiver.class);
+        callback.setAction(UpdateReceiver.ACTION_INSTALL_STATUS);
+        callback.setPackage(context.getPackageName());
+        int flags =
+            PendingIntent.FLAG_UPDATE_CURRENT
+                | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? PendingIntent.FLAG_MUTABLE : 0);
+        PendingIntent pending = PendingIntent.getBroadcast(context, sessionId, callback, flags);
+        session.commit(pending.getIntentSender());
       }
-      Intent callback = new Intent(context, UpdateReceiver.class);
-      callback.setAction(UpdateReceiver.ACTION_INSTALL_STATUS);
-      callback.setPackage(context.getPackageName());
-      int flags =
-          PendingIntent.FLAG_UPDATE_CURRENT
-              | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? PendingIntent.FLAG_MUTABLE : 0);
-      PendingIntent pending = PendingIntent.getBroadcast(context, sessionId, callback, flags);
-      session.commit(pending.getIntentSender());
     } catch (IOException | RuntimeException e) {
-      try {
-        installer.abandonSession(sessionId);
-      } catch (Exception ignored) {
+      if (sessionId >= 0) {
+        try {
+          installer.abandonSession(sessionId);
+        } catch (Exception ignored) {
+        }
       }
-      throw e;
+      launchSystemApkInstaller(context, apkFile);
     }
   }
 

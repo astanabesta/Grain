@@ -6,8 +6,8 @@ android {
         applicationId 'dev.grain.photo'
         minSdk 29
         targetSdk 36
-        versionCode 21
-        versionName '0.7.0'
+        versionCode 22
+        versionName '0.7.1'
     }
     buildFeatures {
         buildConfig true // RawDevelopment writes BuildConfig.VERSION_NAME into the EXIF Software tag
@@ -50,6 +50,7 @@ android {
     }
 }
 dependencies {
+    implementation 'androidx.core:core:1.13.0'
     implementation 'androidx.exifinterface:exifinterface:1.3.7'
     implementation 'androidx.activity:activity:1.11.0'
     testImplementation 'junit:junit:4.13.2'

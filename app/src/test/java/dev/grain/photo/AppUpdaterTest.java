@@ -156,6 +156,22 @@ public class AppUpdaterTest {
     }
   }
 
+  @Test
+  public void detectsXiaomiHyperOsAndSystemBlockedAborts() {
+    assertTrue(AppUpdater.isXiaomiBrand("Xiaomi", "Redmi"));
+    assertTrue(AppUpdater.isXiaomiBrand("Xiaomi", "POCO"));
+    assertTrue(AppUpdater.isXiaomiBrand("blackshark", "blackshark"));
+    assertFalse(AppUpdater.isXiaomiBrand("Google", "google"));
+    assertFalse(AppUpdater.isXiaomiBrand("samsung", "samsung"));
+
+    int aborted = android.content.pm.PackageInstaller.STATUS_FAILURE_ABORTED;
+    assertTrue(
+        AppUpdater.isSystemBlockedAbort(aborted, "INSTALL_FAILED_ABORTED: Permission denied"));
+    assertTrue(AppUpdater.isSystemBlockedAbort(aborted, "Session blocked by policy"));
+    assertFalse(AppUpdater.isSystemBlockedAbort(aborted, "User aborted"));
+    assertFalse(AppUpdater.isSystemBlockedAbort(aborted, null));
+  }
+
   private interface HttpHandler {
     void handle(String path, Map<String, String> headers, OutputStream out) throws Exception;
   }

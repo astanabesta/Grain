@@ -20,6 +20,10 @@ public final class UpdateReceiver extends BroadcastReceiver {
     if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
       Intent confirm = extraIntent(intent);
       if (confirm != null) {
+        if (AppUpdater.tryLaunchFromForeground(confirm)) {
+          AppUpdater.dispatchInstallStatus(status, "Confirm the update to finish installing");
+          return;
+        }
         confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         try {
           context.startActivity(confirm);
@@ -34,7 +38,8 @@ public final class UpdateReceiver extends BroadcastReceiver {
     AppUpdater.dispatchInstallStatus(status, detail);
     if (status == PackageInstaller.STATUS_SUCCESS) {
       Toast.makeText(context, "Grain updated", Toast.LENGTH_SHORT).show();
-    } else if (status != PackageInstaller.STATUS_FAILURE_ABORTED) {
+    } else if (status != PackageInstaller.STATUS_FAILURE_ABORTED
+        && !AppUpdater.isSystemBlockedAbort(status, detail)) {
       String msg =
           detail == null || detail.isEmpty() ? "Update failed (" + status + ")" : "Update failed: " + detail;
       Toast.makeText(context, msg, Toast.LENGTH_LONG).show();
