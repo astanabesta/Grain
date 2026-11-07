@@ -63,7 +63,7 @@ public final class Recipe {
       "Reggie Ballesteros’ published Fujifilm recipe: Classic Negative, moodier, grainier and more"
           + " contrasty than his Portra, made for rich skin tones in directional light."
     };
-    Recipe[] all = new Recipe[fixed.length + sims.length + recipes.length + 1];
+    Recipe[] all = new Recipe[fixed.length + sims.length + recipes.length + 2];
     System.arraycopy(fixed, 0, all, 0, fixed.length);
     for (int i = 0; i < sims.length; i++) {
       int id = fixed.length + i;
@@ -97,6 +97,16 @@ public final class Recipe {
                 + " softer, low-contrast tone curve close to film. Sony’s official s709 LUT,"
                 + " developed from this phone’s RAW through S-Log3 / S-Gamut3.Cine.",
             true);
+    // Append-only recipes after id 24 so existing persisted recipe ids never shift.
+    int brightKodakId = sonyId + 1;
+    all[brightKodakId] =
+        new Recipe(
+            brightKodakId,
+            FujiRecipe.BRIGHT_KODAK,
+            "Ritchie Roesch’s published recipe: sun-drenched warmth, open shadows and bold Kodak"
+                + " colour. Developed from this phone’s RAW with Fujifilm’s official Classic"
+                + " Chrome LUT.",
+            false);
     return all;
   }
 

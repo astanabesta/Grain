@@ -6,8 +6,8 @@ android {
         applicationId 'dev.grain.photo'
         minSdk 29
         targetSdk 36
-        versionCode 20
-        versionName '0.6.0'
+        versionCode 21
+        versionName '0.7.0'
     }
     buildFeatures {
         buildConfig true // RawDevelopment writes BuildConfig.VERSION_NAME into the EXIF Software tag
@@ -43,7 +43,7 @@ android {
             includeAndroidResources = true
             // Camera-back screenshots (Robolectric): only when GRAIN_SCREENS=1 (dev branches in CI).
             all { test ->
-                if (System.getenv('GRAIN_SCREENS') == '1') test.maxHeapSize = '2g'
+                if (System.getenv('GRAIN_SCREENS') == '1') test.maxHeapSize = System.getenv('GRAIN_SCREENS_HEAP') ?: '2g'
                 else test.exclude '**/CameraBackScreensTest*'
             }
         }

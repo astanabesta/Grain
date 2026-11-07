@@ -52,6 +52,8 @@ public final class GrainCamera {
     public final float focusDistance;
     /** Upright normalized [l, t, r, b] box of the actively tracked face in AF_FACE mode, or null. */
     public final double[] faceUpright;
+    /** True scene neutral (ns × ISO) preserved when preview is driven in manual AE_MODE_OFF. */
+    public final double neutralOverrideNsIso;
 
     Meter(
         long exposureNs,
@@ -62,6 +64,28 @@ public final class GrainCamera {
         boolean aeLocked,
         float focusDistance,
         double[] faceUpright) {
+      this(
+          exposureNs,
+          iso,
+          compensationEv,
+          afState,
+          aeState,
+          aeLocked,
+          focusDistance,
+          faceUpright,
+          0.0);
+    }
+
+    Meter(
+        long exposureNs,
+        int iso,
+        double compensationEv,
+        int afState,
+        int aeState,
+        boolean aeLocked,
+        float focusDistance,
+        double[] faceUpright,
+        double neutralOverrideNsIso) {
       this.exposureNs = exposureNs;
       this.iso = iso;
       this.compensationEv = compensationEv;
@@ -70,10 +94,12 @@ public final class GrainCamera {
       this.aeLocked = aeLocked;
       this.focusDistance = focusDistance;
       this.faceUpright = faceUpright;
+      this.neutralOverrideNsIso = neutralOverrideNsIso;
     }
 
     /** Exposure (ns × ISO) the meter asks for at 0 EV. */
     public double neutralNsIso() {
+      if (neutralOverrideNsIso > 1.0) return neutralOverrideNsIso;
       return exposureNs * (double) iso / Math.pow(2, compensationEv);
     }
   }
@@ -86,9 +112,11 @@ public final class GrainCamera {
     public final float ev;
     /** The RAW film as tuned in the app (null for ISP looks): what capture and development use. */
     public final FujiRecipe fuji;
-    /** Manual exposure for the still: shutter time in ns and ISO, 0 = automatic. */
+    /** Manual exposure: shutter time in ns and ISO, 0 = automatic. */
     public final long shutterNs;
     public final int iso;
+    /** Flash mode ({@link ExposureMath#FLASH_OFF} .. {@link ExposureMath#FLASH_TORCH}). */
+    public final int flashMode;
 
     public Snapshot(
         int recipe, int strength, double zoom, String ratio, boolean keepFull, float ev) {
@@ -103,7 +131,7 @@ public final class GrainCamera {
         boolean keepFull,
         float ev,
         FujiRecipe fuji) {
-      this(recipe, strength, zoom, ratio, keepFull, ev, fuji, 0, 0);
+      this(recipe, strength, zoom, ratio, keepFull, ev, fuji, 0, 0, ExposureMath.FLASH_OFF);
     }
 
     public Snapshot(
@@ -116,8 +144,23 @@ public final class GrainCamera {
         FujiRecipe fuji,
         long shutterNs,
         int iso) {
+      this(recipe, strength, zoom, ratio, keepFull, ev, fuji, shutterNs, iso, ExposureMath.FLASH_OFF);
+    }
+
+    public Snapshot(
+        int recipe,
+        int strength,
+        double zoom,
+        String ratio,
+        boolean keepFull,
+        float ev,
+        FujiRecipe fuji,
+        long shutterNs,
+        int iso,
+        int flashMode) {
       this.shutterNs = Math.max(0, shutterNs);
       this.iso = Math.max(0, iso);
+      this.flashMode = Math.max(ExposureMath.FLASH_OFF, Math.min(ExposureMath.FLASH_TORCH, flashMode));
       this.fuji = fuji;
       this.recipe = recipe;
       this.strength = strength;
@@ -230,7 +273,12 @@ public final class GrainCamera {
   private volatile Meter meter;
   private long lastMeterPost;
   private int lastAfState = -2;
+  private volatile int lastAeState = -1;
+  private volatile boolean precaptureSawStart;
+  private volatile double sceneNeutralNsIso = ExposureMath.DEFAULT_NEUTRAL_NS_ISO;
+  private volatile double lastAppliedPreviewNsIso;
   private boolean manualSensor;
+  private volatile boolean flashAvailable;
   private final CameraCaptureSession.CaptureCallback previewCallback =
       new CameraCaptureSession.CaptureCallback() {
         @Override
@@ -241,6 +289,10 @@ public final class GrainCamera {
           Integer comp = result.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION);
           Integer af = result.get(CaptureResult.CONTROL_AF_STATE);
           Integer ae = result.get(CaptureResult.CONTROL_AE_STATE);
+          Integer reqAe = r.get(CaptureRequest.CONTROL_AE_MODE);
+          boolean manualAe = reqAe != null && reqAe == CaptureRequest.CONTROL_AE_MODE_OFF;
+          lastAeState = ae == null ? -1 : ae;
+          if (lastAeState == CaptureResult.CONTROL_AE_STATE_PRECAPTURE) precaptureSawStart = true;
           Float fd = result.get(CaptureResult.LENS_FOCUS_DISTANCE);
           if (fd != null && fd >= 0f) lastFocusDistance = fd;
           Integer ls = result.get(CaptureResult.LENS_STATE);
@@ -260,16 +312,22 @@ public final class GrainCamera {
           boolean faceUiChanged = FocusMath.movedEnough(lastPostedFaceNorm, trackedFaceNorm, 0.012f);
           CameraCharacteristics c = chars;
           Rational step = c == null ? null : c.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP);
+          double compEv = comp == null || step == null ? 0 : comp * step.doubleValue();
+          if (!manualAe && time != null && time > 0 && iso != null && iso > 0) {
+            double hwNeutral = (time * (double) iso) / Math.pow(2.0, compEv);
+            if (Double.isFinite(hwNeutral) && hwNeutral > 1.0) sceneNeutralNsIso = hwNeutral;
+          }
           Meter m =
               new Meter(
                   time == null ? 0 : time,
                   iso == null ? 0 : iso,
-                  comp == null || step == null ? 0 : comp * step.doubleValue(),
+                  compEv,
                   af == null ? -1 : af,
-                  ae == null ? -1 : ae,
+                  lastAeState,
                   aeLock,
                   lastFocusDistance,
-                  faceUpright);
+                  faceUpright,
+                  manualAe ? sceneNeutralNsIso : 0.0);
           meter = m;
           long now = SystemClock.uptimeMillis();
           if (now - lastMeterPost >= 160 || m.afState != lastAfState || faceUiChanged) {
@@ -587,6 +645,65 @@ public final class GrainCamera {
     return manualSensor;
   }
 
+  /** True when this camera unit reports a physical flash / LED torch. */
+  public boolean flashAvailable() {
+    return flashAvailable;
+  }
+
+  /**
+   * Feeds center-weighted linear luminance of the live preview back into the scene meter while
+   * manual or priority exposure is active ({@code CONTROL_AE_MODE_OFF}), keeping Shutter Priority,
+   * ISO Priority, and the Manual EV bar responsive to lighting changes.
+   */
+  public void reportPreviewLuma(double meanLinearY) {
+    Snapshot s = current;
+    CameraCharacteristics c = chars;
+    if (!manualSensor || c == null || s == null || (s.shutterNs <= 0 && s.iso <= 0)) return;
+    double applied = lastAppliedPreviewNsIso;
+    if (applied <= 1.0 || meanLinearY < 0.0) return;
+    Range<Long> times = c.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
+    Range<Integer> isos = c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
+    double minNsIso =
+        times != null && isos != null ? times.getLower() * (double) isos.getLower() : 10_000.0;
+    double maxNsIso =
+        times != null && isos != null ? times.getUpper() * (double) isos.getUpper() : 1e14;
+    double prev = sceneNeutralNsIso;
+    double next = ExposureMath.refineSceneNeutral(prev, applied, meanLinearY, minNsIso, maxNsIso);
+    sceneNeutralNsIso = next;
+    double logDelta = Math.abs(Math.log(next / Math.max(1.0, prev)));
+    Meter prevMeter = meter;
+    if (prevMeter != null && logDelta >= 0.05) {
+      Meter updated =
+          new Meter(
+              prevMeter.exposureNs,
+              prevMeter.iso,
+              prevMeter.compensationEv,
+              prevMeter.afState,
+              prevMeter.aeState,
+              prevMeter.aeLocked,
+              prevMeter.focusDistance,
+              prevMeter.faceUpright,
+              next);
+      meter = updated;
+      main.post(() -> listener.meter(updated));
+    }
+    boolean priorityMode = (s.shutterNs > 0) != (s.iso > 0);
+    if (priorityMode && logDelta >= 0.09) {
+      Handler h = handler;
+      if (h != null && !closed) {
+        h.post(
+            () -> {
+              if (!closed && session != null && !inFlight) {
+                try {
+                  repeat();
+                } catch (Exception ignored) {
+                }
+              }
+            });
+      }
+    }
+  }
+
   /** AF mode for a request: AF-C tracks continuously; AF-S and AF lock hold between triggers. */
   private int afMode(boolean still) {
     if (bracketFraction >= 0f || focusMode == FocusMath.FOCUS_MANUAL)
@@ -608,60 +725,155 @@ public final class GrainCamera {
   }
 
   /**
-   * Manual exposure for a still (the preview keeps auto exposure, like Fujifilm's "preview exposure
-   * off"). Shutter priority picks the ISO and ISO priority the shutter time from the preview's meter
-   * plus the user's EV; with both set they are used as they are. RAW films keep their dynamic-range
-   * headroom by a lower ISO (never a different shutter time); development then shows the exposure's
-   * difference from the meter ("developEv"), so a darker setting gives a darker photo. Returns null
-   * when the exposure stays automatic.
+   * Applies Manual (M), Shutter Priority (S), or ISO Priority exposure on BOTH live preview and
+   * still capture so turning the Shutter or ISO dial immediately updates the live viewfinder as
+   * well as the captured photo. On still capture, ZSL is explicitly disabled and frame duration is
+   * raised for slow shutter speeds so HALs never return a buffered auto-exposed preview frame.
    */
-  private JSONObject manualExposure(CaptureRequest.Builder b, Snapshot s, double headroomEv)
-      throws Exception {
-    if (s.shutterNs <= 0 && s.iso <= 0) return null;
-    Meter m = meter;
+  private JSONObject manualExposure(
+      CaptureRequest.Builder b, Snapshot s, double headroomEv, boolean still) throws Exception {
+    if (s.shutterNs <= 0 && s.iso <= 0) {
+      if (!still) lastAppliedPreviewNsIso = 0.0;
+      return null;
+    }
     Range<Long> times = chars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
     Range<Integer> isos = chars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
-    if (!manualSensor || times == null || isos == null || m == null || m.exposureNs <= 0 || m.iso <= 0
+    if (!manualSensor
+        || times == null
+        || isos == null
         || !requestKeys.contains(CaptureRequest.SENSOR_EXPOSURE_TIME)
         || !requestKeys.contains(CaptureRequest.SENSOR_SENSITIVITY)) {
+      if (!still) lastAppliedPreviewNsIso = 0.0;
       warnings.add("Manual exposure unavailable on this camera; automatic exposure used");
       return new JSONObject().put("mode", "unavailable");
     }
-    double neutral = m.neutralNsIso(), target = neutral * Math.pow(2, s.ev);
-    long time;
-    int iso;
-    String mode;
-    if (s.shutterNs > 0 && s.iso > 0) {
-      time = s.shutterNs;
-      iso = s.iso;
-      mode = "manual";
-    } else if (s.shutterNs > 0) {
-      time = s.shutterNs;
-      iso = (int) Math.round(target / time);
-      mode = "shutter priority";
-    } else {
-      iso = s.iso;
-      time = Math.round(target / iso);
-      mode = "ISO priority";
+    Meter m = meter;
+    double neutral =
+        m != null && m.exposureNs > 0 && m.iso > 0 ? m.neutralNsIso() : sceneNeutralNsIso;
+    ExposureMath.Plan plan =
+        ExposureMath.planStill(
+            s.shutterNs,
+            s.iso,
+            s.ev,
+            still ? headroomEv : 0.0,
+            neutral,
+            times.getLower(),
+            times.getUpper(),
+            isos.getLower(),
+            isos.getUpper());
+    if (plan == null) {
+      if (!still) lastAppliedPreviewNsIso = 0.0;
+      return null;
     }
-    time = Math.max(times.getLower(), Math.min(times.getUpper(), time));
-    iso = Math.max(isos.getLower(), Math.min(isos.getUpper(), iso));
-    int captureIso =
-        headroomEv < 0
-            ? Math.max(isos.getLower(), (int) Math.round(iso * Math.pow(2, headroomEv)))
-            : iso;
+    long requestTime;
+    int requestIso;
+    long frameDurationNs;
+    if (still) {
+      requestTime = plan.shutterNs;
+      requestIso = plan.captureIso;
+      frameDurationNs = Math.max(33_333_333L, requestTime);
+      if (requestKeys.contains(CaptureRequest.CONTROL_ENABLE_ZSL)) {
+        set(b, CaptureRequest.CONTROL_ENABLE_ZSL, false);
+      }
+    } else {
+      long[] pv =
+          ExposureMath.planPreview(
+              plan.shutterNs,
+              plan.iso,
+              times.getLower(),
+              times.getUpper(),
+              isos.getLower(),
+              isos.getUpper());
+      requestTime = pv[0];
+      requestIso = (int) pv[1];
+      frameDurationNs = pv[2];
+      lastAppliedPreviewNsIso = requestTime * (double) requestIso;
+    }
     set(b, CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF);
-    set(b, CaptureRequest.SENSOR_EXPOSURE_TIME, time);
-    set(b, CaptureRequest.SENSOR_SENSITIVITY, captureIso);
-    double developEv = Math.log(time * (double) iso / neutral) / Math.log(2);
+    set(b, CaptureRequest.SENSOR_EXPOSURE_TIME, requestTime);
+    set(b, CaptureRequest.SENSOR_SENSITIVITY, requestIso);
+    if (requestKeys.contains(CaptureRequest.SENSOR_FRAME_DURATION)) {
+      set(b, CaptureRequest.SENSOR_FRAME_DURATION, frameDurationNs);
+    }
     return new JSONObject()
-        .put("mode", mode)
-        .put("shutterNs", time)
-        .put("iso", iso)
-        .put("captureIso", captureIso)
-        .put("headroomEv", headroomEv)
-        .put("meterNeutralNsIso", neutral)
-        .put("developEv", developEv);
+        .put("mode", plan.mode)
+        .put("shutterNs", plan.shutterNs)
+        .put("iso", plan.iso)
+        .put("captureIso", plan.captureIso)
+        .put("requestShutterNs", requestTime)
+        .put("requestIso", requestIso)
+        .put("headroomEv", still ? headroomEv : 0.0)
+        .put("meterNeutralNsIso", plan.neutralNsIso)
+        .put("developEv", plan.developEv);
+  }
+
+  /**
+   * Configures Camera2 flash & AE mode for Off, Auto, Fill On, and continuous Torch across both
+   * Program Auto ({@code CONTROL_AE_MODE_ON_*}) and Manual ({@code CONTROL_AE_MODE_OFF}).
+   */
+  private void applyFlash(
+      CaptureRequest.Builder b,
+      Snapshot s,
+      boolean still,
+      boolean manualActive,
+      JSONObject applied)
+      throws Exception {
+    int fm = flashAvailable ? s.flashMode : ExposureMath.FLASH_OFF;
+    applied.put("flashMode", ExposureMath.FLASH_RECEIPT[fm]);
+    if (!flashAvailable && s.flashMode != ExposureMath.FLASH_OFF) {
+      warnings.add("Flash requested, but this camera unit reports no flash hardware");
+    }
+    if (fm == ExposureMath.FLASH_OFF) {
+      if (requestKeys.contains(CaptureRequest.FLASH_MODE)) {
+        set(b, CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF);
+      }
+      return;
+    }
+    if (fm == ExposureMath.FLASH_TORCH) {
+      if (still && requestKeys.contains(CaptureRequest.CONTROL_ENABLE_ZSL)) {
+        set(b, CaptureRequest.CONTROL_ENABLE_ZSL, false);
+      }
+      if (requestKeys.contains(CaptureRequest.FLASH_MODE)) {
+        set(b, CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH);
+      }
+      return;
+    }
+    // FLASH_AUTO or FLASH_ON
+    if (still && requestKeys.contains(CaptureRequest.CONTROL_ENABLE_ZSL)) {
+      set(b, CaptureRequest.CONTROL_ENABLE_ZSL, false);
+    }
+    if (manualActive) {
+      boolean fireSingle =
+          still
+              && (fm == ExposureMath.FLASH_ON
+                  || (fm == ExposureMath.FLASH_AUTO
+                      && sceneNeutralNsIso > 33_333_333.0 * 400.0));
+      if (requestKeys.contains(CaptureRequest.FLASH_MODE)) {
+        set(
+            b,
+            CaptureRequest.FLASH_MODE,
+            fireSingle ? CaptureRequest.FLASH_MODE_SINGLE : CaptureRequest.FLASH_MODE_OFF);
+      }
+      return;
+    }
+    int wantAe =
+        fm == ExposureMath.FLASH_ON
+            ? CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH
+            : CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH;
+    int chosenAe =
+        chooseMode(
+            chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES),
+            wantAe,
+            CaptureRequest.CONTROL_AE_MODE_ON);
+    set(b, CaptureRequest.CONTROL_AE_MODE, chosenAe);
+    if (requestKeys.contains(CaptureRequest.FLASH_MODE)) {
+      boolean fallbackSingle =
+          still && chosenAe == CaptureRequest.CONTROL_AE_MODE_ON && fm == ExposureMath.FLASH_ON;
+      set(
+          b,
+          CaptureRequest.FLASH_MODE,
+          fallbackSingle ? CaptureRequest.FLASH_MODE_SINGLE : CaptureRequest.FLASH_MODE_OFF);
+    }
   }
 
   private JSONObject applyRecipe(CaptureRequest.Builder b, Snapshot s, boolean still)
@@ -677,14 +889,14 @@ public final class GrainCamera {
     set(b, CaptureRequest.CONTROL_AF_MODE, afMode(still));
     applyAfArea(b, applied);
     applyManualFocus(b, applied);
-    if (aeLock || bracketAeHold) {
+    JSONObject manual = (!still && neutral) ? null : manualExposure(b, s, 0, still);
+    boolean manualActive = manual != null && !"unavailable".equals(manual.optString("mode"));
+    if (manual != null) applied.put("manual", manual);
+    if (!manualActive && (aeLock || bracketAeHold)) {
       set(b, CaptureRequest.CONTROL_AE_LOCK, true);
       applied.put("aeLock", true);
     }
-    if (still) {
-      JSONObject manual = manualExposure(b, s, 0);
-      if (manual != null) applied.put("manual", manual);
-    }
+    applyFlash(b, s, still, manualActive, applied);
     Range<Integer> range = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE);
     Rational step = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP);
     int index = 0;
@@ -776,10 +988,6 @@ public final class GrainCamera {
     set(b, CaptureRequest.CONTROL_AF_MODE, afMode(true));
     applyAfArea(b, applied);
     applyManualFocus(b, applied);
-    if (aeLock || bracketAeHold) {
-      set(b, CaptureRequest.CONTROL_AE_LOCK, true);
-      applied.put("aeLock", true);
-    }
     // Auto films keep the phone's auto white balance (development uses its as-shot white); a fixed
     // Fujifilm white balance requests the nearest Camera2 preset for the reference JPEG and the
     // DNG's as-shot white, while development uses the exact white point.
@@ -807,8 +1015,14 @@ public final class GrainCamera {
     set(b, CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, index);
     applied.put("evIndex", index).put("userEvAppliedInDevelopment", s.ev)
         .put("captureEvBias", bias);
-    JSONObject manual = manualExposure(b, s, bias);
+    JSONObject manual = manualExposure(b, s, bias, true);
+    boolean manualActive = manual != null && !"unavailable".equals(manual.optString("mode"));
     if (manual != null) applied.put("manual", manual);
+    if (!manualActive && (aeLock || bracketAeHold)) {
+      set(b, CaptureRequest.CONTROL_AE_LOCK, true);
+      applied.put("aeLock", true);
+    }
+    applyFlash(b, s, true, manualActive, applied);
     int[] shadingModes =
         chars.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_LENS_SHADING_MAP_MODES);
     if (contains(shadingModes, CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON)
@@ -1048,48 +1262,104 @@ public final class GrainCamera {
           pendingBytes = null;
           pendingResult = null;
           pendingWantsRaw = wantsRaw;
-          try {
-            CaptureRequest.Builder b =
-                device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
-            pendingApplied = applyRecipe(b, snapshot, true);
-            b.addTarget(jpegReader.getSurface());
-            if (wantsRaw) b.addTarget(rawReader.getSurface());
-            b.setTag(snapshot);
-            session.capture(
-                b.build(),
-                new CameraCaptureSession.CaptureCallback() {
-                  @Override
-                  public void onCaptureCompleted(
-                      CameraCaptureSession s, CaptureRequest r, TotalCaptureResult result) {
-                    if (inFlight && pending == snapshot) {
-                      pendingResult = result;
-                      tryFinish();
+          int token = generation;
+          boolean manualActive =
+              manualSensor && (snapshot.shutterNs > 0 || snapshot.iso > 0);
+          boolean needPrecapture =
+              flashAvailable
+                  && !manualActive
+                  && !aeLock
+                  && !bracketAeHold
+                  && requestKeys.contains(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER)
+                  && (snapshot.flashMode == ExposureMath.FLASH_ON
+                      || (snapshot.flashMode == ExposureMath.FLASH_AUTO
+                          && (lastAeState == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED
+                              || sceneNeutralNsIso > 33_333_333.0 * 350.0)));
+          if (needPrecapture) {
+            try {
+              precaptureSawStart = false;
+              CaptureRequest.Builder pre =
+                  request(CameraDevice.TEMPLATE_PREVIEW, snapshot, false);
+              pre.addTarget(previewSurface);
+              set(
+                  pre,
+                  CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
+                  CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START);
+              session.capture(pre.build(), previewCallback, handler);
+              long startMs = SystemClock.uptimeMillis();
+              Runnable pollPrecapture =
+                  new Runnable() {
+                    @Override
+                    public void run() {
+                      if (closed || token != generation || !inFlight || pending != snapshot) return;
+                      long elapsed = SystemClock.uptimeMillis() - startMs;
+                      int ae = lastAeState;
+                      boolean settled =
+                          (precaptureSawStart && ae != CaptureResult.CONTROL_AE_STATE_PRECAPTURE)
+                              || (elapsed >= 180
+                                  && (ae == CaptureResult.CONTROL_AE_STATE_CONVERGED
+                                      || ae == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED
+                                      || ae == CaptureResult.CONTROL_AE_STATE_LOCKED));
+                      if (settled || elapsed >= 850) {
+                        submitStillCapture(snapshot, wantsRaw);
+                      } else {
+                        handler.postDelayed(this, 40);
+                      }
                     }
-                  }
-
-                  @Override
-                  public void onCaptureFailed(
-                      CameraCaptureSession s, CaptureRequest r, CaptureFailure failure) {
-                    if (pending != snapshot) return;
-                    failCapture(
-                        "Photo request failed (reason "
-                            + failure.getReason()
-                            + "). Check Diagnostics; try another recipe or restart the camera.");
-                  }
-                },
-                handler);
-            Snapshot tag = snapshot;
-            handler.postDelayed(
-                () -> {
-                  if (inFlight && pending == tag)
-                    failCapture(
-                        "Photo capture timed out. No success was reported; retry the shot.");
-                },
-                12000);
-          } catch (Exception e) {
-            failCapture("Capture failed: " + e.getMessage());
+                  };
+              handler.postDelayed(pollPrecapture, 60);
+              return;
+            } catch (Exception ignored) {
+              // Fall through to direct still capture if precapture request fails on a quirk HAL.
+            }
           }
+          submitStillCapture(snapshot, wantsRaw);
         });
+  }
+
+  private void submitStillCapture(Snapshot snapshot, boolean wantsRaw) {
+    if (session == null || device == null || !inFlight || pending != snapshot) return;
+    try {
+      CaptureRequest.Builder b =
+          device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
+      pendingApplied = applyRecipe(b, snapshot, true);
+      b.addTarget(jpegReader.getSurface());
+      if (wantsRaw) b.addTarget(rawReader.getSurface());
+      b.setTag(snapshot);
+      session.capture(
+          b.build(),
+          new CameraCaptureSession.CaptureCallback() {
+            @Override
+            public void onCaptureCompleted(
+                CameraCaptureSession s, CaptureRequest r, TotalCaptureResult result) {
+              if (inFlight && pending == snapshot) {
+                pendingResult = result;
+                tryFinish();
+              }
+            }
+
+            @Override
+            public void onCaptureFailed(
+                CameraCaptureSession s, CaptureRequest r, CaptureFailure failure) {
+              if (pending != snapshot) return;
+              failCapture(
+                  "Photo request failed (reason "
+                      + failure.getReason()
+                      + "). Check Diagnostics; try another recipe or restart the camera.");
+            }
+          },
+          handler);
+      Snapshot tag = snapshot;
+      handler.postDelayed(
+          () -> {
+            if (inFlight && pending == tag)
+              failCapture(
+                  "Photo capture timed out. No success was reported; retry the shot.");
+          },
+          12000);
+    } catch (Exception e) {
+      failCapture("Capture failed: " + e.getMessage());
+    }
   }
 
   private void tryFinish() {
@@ -1181,6 +1451,7 @@ public final class GrainCamera {
     put(j, "awbState", r.get(CaptureResult.CONTROL_AWB_STATE));
     put(j, "aeState", r.get(CaptureResult.CONTROL_AE_STATE));
     put(j, "afState", r.get(CaptureResult.CONTROL_AF_STATE));
+    put(j, "flashState", r.get(CaptureResult.FLASH_STATE));
     put(j, "focusDistance", r.get(CaptureResult.LENS_FOCUS_DISTANCE));
     put(j, "tonemapMode", r.get(CaptureResult.TONEMAP_MODE));
     put(j, "edgeMode", r.get(CaptureResult.EDGE_MODE));
@@ -1641,6 +1912,10 @@ public final class GrainCamera {
             chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES),
             CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR);
     capabilities.put("manualSensor", manualSensor);
+    Boolean flashInfo = chars.get(CameraCharacteristics.FLASH_INFO_AVAILABLE);
+    flashAvailable = flashInfo != null && flashInfo;
+    capabilities.put("flashAvailable", flashAvailable);
+    capabilities.put("aeModes", ints(chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES)));
     // Focus probe (v0.5.0 plan, step 0): what this HAL exposes for the AF area modes, eye AF and
     // manual focus. Static facts here; the live part (whether FULL face detection actually fills
     // the optional eye/mouth/id fields) is probeFaceLandmarks(), and the receipt reports landmark

@@ -55,6 +55,20 @@ public final class SmokeTest {
         }
       }
     }
-    System.out.println("PASS: " + count + " crop/curve/preview/focus cases; no Android SDK used.");
+    if (!"P".equals(ExposureMath.modeLabel(0, 0))
+        || !"S".equals(ExposureMath.modeLabel(8_000_000L, 0))
+        || !"ISO".equals(ExposureMath.modeLabel(0, 400))
+        || !"M".equals(ExposureMath.modeLabel(8_000_000L, 400)))
+      throw new AssertionError("Wrong exposure mode label");
+    ExposureMath.Plan sp =
+        ExposureMath.planStill(
+            2_000_000L, 0, 0.0, 0.0, 16_000_000.0 * 100.0, 10_000L, 1_000_000_000L, 50, 6400);
+    if (sp == null || sp.shutterNs != 2_000_000L || sp.iso != 800)
+      throw new AssertionError("Shutter priority math broken");
+    long[] pv = ExposureMath.planPreview(1_000_000_000L, 100, 10_000L, 1_000_000_000L, 50, 6400);
+    if (pv[0] != ExposureMath.MAX_PREVIEW_EXPOSURE_NS || pv[1] != 800)
+      throw new AssertionError("Slow shutter preview ISO boost broken");
+    count += 3;
+    System.out.println("PASS: " + count + " crop/curve/preview/focus/exposure cases; no Android SDK used.");
   }
 }

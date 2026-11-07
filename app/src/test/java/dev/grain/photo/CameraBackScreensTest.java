@@ -49,6 +49,16 @@ public class CameraBackScreensTest {
     dir.mkdirs();
     ShadowLog.clear();
     activity = Robolectric.buildActivity(MainActivity.class).setup().get();
+    Method showOnboarding = MainActivity.class.getDeclaredMethod("showOnboarding", int.class);
+    showOnboarding.setAccessible(true);
+    Method closeOnboarding = MainActivity.class.getDeclaredMethod("closeOnboarding");
+    closeOnboarding.setAccessible(true);
+    step("00-onboarding-1-welcome", () -> showOnboarding.invoke(activity, 0));
+    step("00-onboarding-2-offers", () -> showOnboarding.invoke(activity, 1));
+    step("00-onboarding-3-permission", () -> showOnboarding.invoke(activity, 2));
+    step("00-onboarding-4-start", () -> showOnboarding.invoke(activity, 3));
+    closeOnboarding.invoke(activity);
+    settle();
     step("01-portrait", () -> {});
     step("02-portrait-portra", () -> selectFilm("PTR"));
     step("03-q-menu", () -> key(CameraBack.K_Q, 0));
@@ -157,6 +167,16 @@ public class CameraBackScreensTest {
           Method showSettings = MainActivity.class.getDeclaredMethod("showSettings");
           showSettings.setAccessible(true);
           showSettings.invoke(activity);
+        });
+    step(
+        "22-bright-kodak-flash",
+        () -> {
+          Method closePanel = MainActivity.class.getDeclaredMethod("closePanel");
+          closePanel.setAccessible(true);
+          closePanel.invoke(activity);
+          selectFilm("BKD");
+          key(CameraBack.K_FLASH, 0);
+          key(CameraBack.K_FLASH, 0);
         });
     StringBuilder logs = new StringBuilder();
     for (ShadowLog.LogItem item : ShadowLog.getLogs())

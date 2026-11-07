@@ -1,30 +1,24 @@
-## Grain Photo vVERSION — magnifier, AF-C face tracking, focus bracketing & in-app updates (device-test beta)
+## Grain Photo vVERSION — working Shutter/ISO dials, Bright Kodak, Flash & first-install intro (device-test beta)
 
-Install **Grain-vVERSION.apk** once on the Redmi Note 13 Pro+ — from this build onward, **Grain checks GitHub Releases on launch and updates itself directly inside the app**.
-- **From v0.2.1 – v0.5.3:** installs cleanly as an update. Your photos, imported LUTs and tuning stay intact.
-- **From v0.2.0 or older:** first export the photos you want to keep (photo → **Save to device gallery**), uninstall Grain, install this APK, then re-import your LUT pack (*Tune → Import LUT pack*).
+If you already have **Grain v0.6.0** installed, simply open Grain (or tap **MENU → SET UP → APP UPDATE**) to install **vVERSION** directly inside the app — or download **Grain-vVERSION.apk** below.
+- **From v0.2.1 – v0.6.0:** installs cleanly as an update. Your photos, imported LUTs and tuning stay intact.
 
-### What's new in v0.6.0
+### What's new in v0.7.0
 
-#### 1. Focus Check Magnifier (`4×` / `8×` held-to-magnify)
-- **Press and hold** anywhere on the picture to open a live `4×` or `8×` magnified loupe centered on the active focus point (or tracked face), and lift your finger to dismiss it without firing a tap-focus.
-- **MENU → AF / FACE → MAGNIFIER** switches between **`OFF`**, **`4× HOLD`** (default), **`8× HOLD`**, and **`4× ON`** (continuous loupe).
-- In **MANUAL** focus, half-pressing the shutter also opens the Focus Check loupe, and turning the **Command dial** while magnified steps `MF DISTANCE` (`0..30`) live with instant readout (`4× · 15/30`). When **PEAKING** is on, mid-tone sharp edges are highlighted right inside the loupe.
+#### 1. Fixed: Shutter Speed & ISO Dial (`P` / `S` / `ISO` / `M`)
+- **Live viewfinder preview:** Turning the top-left **Shutter Speed** or **ISO** drum now drives live sensor exposure in real time (`P`, `S` Shutter Priority, `ISO` Priority, and `M` Manual) instead of leaving the viewfinder on auto exposure. Slow shutter speeds (`1/4s` – `1"`) cap preview frame time at `1/8s` with proportional preview ISO boost so viewfinder brightness matches your dial while staying smooth.
+- **Reliable manual still capture:** Disables Zero-Shutter-Lag (`CONTROL_ENABLE_ZSL = false`) and sets `SENSOR_FRAME_DURATION` on manual/priority stills so Android 10+ / Xiaomi / MediaTek HALs expose at your exact requested shutter time and ISO rather than returning a buffered auto-exposed ZSL frame.
+- **Closed-loop priority metering & easier `[ISO]` toggle:** Tracks ambient brightness changes during `S` and `ISO` priority modes, displays distinct `P` / `S` / `ISO` / `M` mode badges + dial toasts, and expands the `[ISO]` / `SHUTTER` tap target beneath the top-left drum so finger taps never miss.
 
-#### 2. AF-C Face Tracking
-- **MENU → AF / FACE → FOCUS MODE** now separates **`AF-C`** (continuous tracking), **`AF-S`** (single-servo autofocus), and **`MANUAL`**.
-- With **`AF AREA → FACE`** in **`AF-C`**, Grain enables Camera2 face detection on both ISP and RAW previews, tracks your subject with sticky proximity/ID locking and exponential smoothing, re-aims the live `CONTROL_AF_REGIONS` repeating request as the face moves across the frame, and draws live corner brackets that turn green on `PASSIVE_FOCUSED`.
+#### 2. New Film Recipe: **Bright Kodak** (`BKD`)
+- Added Ritchie Roesch’s published X-Trans IV **Bright Kodak** recipe right alongside *Kodak Gold 200* on the Film dial (**`BKD`**): Classic Chrome, `DR400`, Highlight `-2`, Shadow `-2`, Color `+4`, Sharpness `-2`, High ISO NR `-4`, Clarity `-3`, Strong Large grain, Color Chrome Off, FX Blue Off, Daylight WB (`R +3, B -7`), typical exposure `+1 to +1 2/3 EV`.
 
-#### 3. Focus Bracketing (`FOCUS BKT`)
-- Press **DRIVE** (or **MENU → SHOOT → DRIVE**) to select **`FOCUS BKT`**.
-- Configure **BKT FRAMES** (**`3`**, **`5`**, or **`7`** frames) and **BKT STEP** (**`NARROW`**, **`MEDIUM`**, or **`WIDE`**) in **MENU → SHOOT**.
-- Pressing the shutter steps `LENS_FOCUS_DISTANCE` across focus planes around your current focus distance (locking AE after the first frame for consistent exposure across the stack), waits for `LENS_STATE_STATIONARY` on each plane, and captures either ISP JPEGs or developed RAW frames with per-frame `focusBracket` metadata in the receipt.
+#### 3. Hardware **Flash** (`⚡ Off · Auto · Fill On · Torch`)
+- Added a dedicated top-plate **`⚡`** Flash button (portrait & landscape), **MENU → SHOOT → FLASH**, and OSD flash indicator.
+- Runs full Camera2 `CONTROL_AE_PRECAPTURE_TRIGGER` metering before `AUTO` / `FILL ON` flash captures, supports `FLASH_MODE_SINGLE` with manual exposure, and provides continuous `TORCH` LED fill light.
 
-#### 4. In-App Update + Startup Notification
-- On launch, Grain checks `astanabesta/Grain` GitHub Releases in the background and notifies you immediately when a newer version is published (**Update now** / **Skip** / **Later**).
-- **Update now** downloads the release APK with live progress, verifies its **SHA-256** digest against GitHub's release metadata / `SHA256SUMS.txt` before touching the installer, and commits a `PackageInstaller` session directly inside Grain (on Android 12+, subsequent updates can complete without extra confirmation prompts).
-- Manual check and notification toggle live in **MENU → SET UP → APP UPDATE** and **ALL PREFERENCES → APP UPDATES**.
-
-Nothing in the RAW colour science or LUT development pipeline changed — same engines, same goldens.
+#### 4. First-Install Intro & Onboarding Guide
+- New full-screen 4-step welcome flow on first install covering what Grain is, what it offers, contextual camera-only permission + local privacy pledge, and live **Silver / Black / Graphite** camera body finish selection before opening the shutter.
+- Replayable anytime from **MENU → SET UP → INTRO GUIDE**.
 
 Signed with the project's personal key (certificate SHA-256 `6e073ef6…`). `SHA256SUMS.txt` verifies the APK download.

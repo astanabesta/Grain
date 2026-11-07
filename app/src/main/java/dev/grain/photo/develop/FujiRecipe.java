@@ -628,12 +628,34 @@ public final class FujiRecipe {
           .build();
 
   /**
+   * Bright Kodak by Ritchie Roesch (X-Trans IV), as published by Fuji X Weekly. Published Auto ISO
+   * up to ISO 6400.
+   */
+  public static final FujiRecipe BRIGHT_KODAK =
+      new Builder(
+              "bright-kodak",
+              "Bright Kodak",
+              ROESCH,
+              "https://fujixweekly.com/2022/06/10/fujifilm-x-trans-iv-film-simulation-recipe-bright-kodak/",
+              "CLASSIC-CHROME",
+              "Classic Chrome")
+          .dynamicRange(DynamicRange.DR400)
+          .whiteBalance(WhiteBalance.DAYLIGHT, 3, -7)
+          .tone(-2, -2)
+          .color(4)
+          .detail(-2, -4, -3)
+          .grain(2, true)
+          .colorChrome(0, 0)
+          .exposure("+1 to +1 2/3 EV")
+          .build();
+
+  /**
    * The published recipes Grain develops, in the order the film list shows them (Reggie's two
    * first). Ids are assigned in Recipe and never change.
    */
   public static final FujiRecipe[] PUBLISHED = {
-    REGGIES_PORTRA, REGGIES_SUPERIA, KODAK_GOLD_200, KODACHROME_64, PACIFIC_BLUES, VIBRANT_ARIZONA,
-    CINESTILL_800T, KODAK_TRI_X_400
+    REGGIES_PORTRA, REGGIES_SUPERIA, KODAK_GOLD_200, BRIGHT_KODAK, KODACHROME_64, PACIFIC_BLUES,
+    VIBRANT_ARIZONA, CINESTILL_800T, KODAK_TRI_X_400
   };
 
   /** Fujifilm's LUT download page, credited for the plain film simulations. */

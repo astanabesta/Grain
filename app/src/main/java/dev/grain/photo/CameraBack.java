@@ -46,7 +46,7 @@ final class CameraBack extends ViewGroup {
 
   static final int K_Q = 1, K_OK = 2, K_DISP = 3, K_PLAY = 4, K_DRIVE = 5, K_AEL = 6, K_LEVER = 7,
       K_COMMAND = 8, K_EYE = 9, K_VIEW_MODE = 10, K_POWER = 11, K_MEMO = 12, K_FILM = 13, K_EV = 14,
-      K_SS = 15, K_ISO_TOGGLE = 16, K_SHUTTER = 17, K_EVF_BACK = 18, K_SWIPE = 19;
+      K_SS = 15, K_ISO_TOGGLE = 16, K_SHUTTER = 17, K_EVF_BACK = 18, K_SWIPE = 19, K_FLASH = 20;
   static final int LEVER_CENTER = 0, LEVER_UP = 1, LEVER_RIGHT = 2, LEVER_DOWN = 3, LEVER_LEFT = 4;
   static final int ORANGE = 0xffe2622f, GREEN = 0xff63d36e;
   static final String[] FINISHES = {"SILVER", "BLACK", "GRAPHITE"};
@@ -75,7 +75,7 @@ final class CameraBack extends ViewGroup {
   final OsdState state = new OsdState();
   final Body body;
   final Drum film, shutterDial, exposure;
-  final TextView isoChip, viewMode, ael, q, drive, play, ok, disp, evfBack;
+  final TextView isoChip, viewMode, flashBtn, ael, q, drive, play, ok, disp, evfBack;
   final Eyepiece eyepiece;
   final Lamp lamp;
   final Power power;
@@ -89,10 +89,10 @@ final class CameraBack extends ViewGroup {
   private final List<Engraving> engravings = new ArrayList<>();
   private Engraving shutterEngraving;
   private final RectF bezel = new RectF(), screen = new RectF(), image = new RectF(), slot = new RectF(),
-      thumb = new RectF(), grille = new RectF(), overlayRect = new RectF();
+      thumb = new RectF(), grille = new RectF(), overlayRect = new RectF(), isoHitRect = new RectF();
   private float plateHeight, ox, oy;
   boolean landscape, evf, on = true, isoMode;
-  int finish;
+  int finish, flashMode;
   /** Pixels per design unit (the layouts are drawn on a 400 × 860 / 860 × 400 grid). */
   float u = 1;
   private float styledU = -1;
@@ -120,6 +120,9 @@ final class CameraBack extends ViewGroup {
     viewMode = key(c, "", false, K_VIEW_MODE);
     viewMode.setContentDescription("View mode: eye sensor, viewfinder only or screen only");
     addView(viewMode);
+    flashBtn = key(c, "⚡ OFF", false, K_FLASH);
+    flashBtn.setContentDescription("Flash mode: off, auto, fill on or continuous torch");
+    addView(flashBtn);
     power = new Power(c);
     addView(power);
     film = new Drum(c, K_FILM, 34, "Film simulation dial");
@@ -201,8 +204,15 @@ final class CameraBack extends ViewGroup {
   void setFinish(int value) {
     finish = Math.max(0, Math.min(2, value));
     body.prepare();
-    for (View v : new View[] {film, shutterDial, exposure, power, isoChip}) v.invalidate();
+    for (View v : new View[] {film, shutterDial, exposure, power, isoChip, flashBtn}) v.invalidate();
     styleIsoChip();
+    styleFlashBtn();
+  }
+
+  void setFlashMode(int value) {
+    flashMode = Math.max(ExposureMath.FLASH_OFF, Math.min(ExposureMath.FLASH_TORCH, value));
+    flashBtn.setText(ExposureMath.FLASH_SHORT[flashMode]);
+    styleFlashBtn();
   }
 
   void setOn(boolean value) {
@@ -345,7 +355,76 @@ final class CameraBack extends ViewGroup {
       int left = Math.round(p.left), top = Math.round(p.top);
       child.layout(left, top, left + child.getMeasuredWidth(), top + child.getMeasuredHeight());
     }
+    installTouchDelegates();
     post(this::reportPreview);
+  }
+
+  private void installTouchDelegates() {
+    if (evf) {
+      setTouchDelegate(null);
+      return;
+    }
+    MultiTouchDelegate group = new MultiTouchDelegate(this);
+    if (!isoHitRect.isEmpty() && isoChip.getVisibility() == VISIBLE) {
+      group.add(roundRect(isoHitRect), isoChip);
+    }
+    RectF vm = places.get(viewMode);
+    if (vm != null && viewMode.getVisibility() == VISIBLE) {
+      Rect pad = roundRect(vm);
+      pad.inset(Math.round(-3 * u), Math.round(-6 * u));
+      group.add(pad, viewMode);
+    }
+    RectF fl = places.get(flashBtn);
+    if (fl != null && flashBtn.getVisibility() == VISIBLE) {
+      Rect pad = roundRect(fl);
+      pad.inset(Math.round(-3 * u), Math.round(-6 * u));
+      group.add(pad, flashBtn);
+    }
+    setTouchDelegate(group);
+  }
+
+  private static Rect roundRect(RectF f) {
+    return new Rect(Math.round(f.left), Math.round(f.top), Math.round(f.right), Math.round(f.bottom));
+  }
+
+  private static final class MultiTouchDelegate extends TouchDelegate {
+    private final List<TouchDelegate> delegates = new ArrayList<>();
+    private TouchDelegate active;
+
+    MultiTouchDelegate(View parent) {
+      super(new Rect(), parent);
+    }
+
+    void add(Rect bounds, View child) {
+      delegates.add(new TouchDelegate(bounds, child));
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+      int action = event.getActionMasked();
+      if (action == MotionEvent.ACTION_DOWN) {
+        active = null;
+        for (TouchDelegate d : delegates) {
+          MotionEvent copy = MotionEvent.obtain(event);
+          boolean handled = d.onTouchEvent(copy);
+          copy.recycle();
+          if (handled) {
+            active = d;
+            return true;
+          }
+        }
+        return false;
+      }
+      TouchDelegate current = active;
+      if (current == null) return false;
+      if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+        active = null;
+      }
+      MotionEvent copy = MotionEvent.obtain(event);
+      boolean handled = current.onTouchEvent(copy);
+      copy.recycle();
+      return handled;
+    }
   }
 
   private RectF d(float x, float y, float w, float h) {
@@ -381,13 +460,14 @@ final class CameraBack extends ViewGroup {
     slot.setEmpty();
     thumb.setEmpty();
     grille.setEmpty();
+    isoHitRect.setEmpty();
     if (w == 0 || h == 0) return;
     double ratio = landscape ? 1 / portraitRatio : portraitRatio;
     if (evf) layoutEvf(w, h, ratio);
     else if (landscape) layoutLandscape(w, h, ratio);
     else layoutPortrait(w, h, ratio);
     boolean screenParts = !evf;
-    for (View v : new View[] {eyepiece, lamp, viewMode, power, film, shutterDial, exposure, isoChip, memo, ael, command, drive, play, lever, ok, disp})
+    for (View v : new View[] {eyepiece, lamp, viewMode, flashBtn, power, film, shutterDial, exposure, isoChip, memo, ael, command, drive, play, lever, ok, disp})
       v.setVisibility(screenParts ? VISIBLE : GONE);
     evfBack.setVisibility(evf ? VISIBLE : GONE);
     put(body, new RectF(0, 0, w, h));
@@ -401,6 +481,7 @@ final class CameraBack extends ViewGroup {
       evfBack.setTextSize(TypedValue.COMPLEX_UNIT_PX, 7.4f * u);
       evfBack.setBackground(pill(0x99000000, 0x55ffffff));
       styleIsoChip();
+      styleFlashBtn();
     }
     body.prepare();
   }
@@ -421,13 +502,16 @@ final class CameraBack extends ViewGroup {
     put(eyepiece, d(16, 12, 112, 46));
     put(lamp, d(137, 27, 6, 6));
     put(viewMode, d(136, 40, 40, 15));
+    engrave("FLASH", 206, 35, 5.2f, Paint.Align.CENTER, true);
+    put(flashBtn, d(183, 40, 46, 15));
     put(power, d(316, 10, 66, 24));
     engrave("OFF", 318, 45, 6.2f, Paint.Align.LEFT, true);
     engrave("ON", 382, 45, 6.2f, Paint.Align.RIGHT, true);
-    engrave(lens, 270, 30, 6.4f, Paint.Align.CENTER, true);
+    engrave(lens, 274, 30, 6.2f, Paint.Align.CENTER, true);
     put(shutterDial, d(16, 68, 176, 32));
-    shutterEngraving = engrave(isoMode ? "ISO" : "SHUTTER", 98, 112, 6.6f, Paint.Align.CENTER, true);
-    put(isoChip, d(160, 104, 30, 11));
+    shutterEngraving = engrave(isoMode ? "ISO" : "SHUTTER", 96, 112, 6.6f, Paint.Align.CENTER, true);
+    put(isoChip, d(158, 103, 34, 13));
+    isoHitRect.set(d(58, 101, 136, 18));
     put(exposure, d(208, 68, 176, 32));
     engrave("EXPOSURE  ±", 296, 112, 6.6f, Paint.Align.CENTER, true);
     put(film, d(16, 120, 368, 30));
@@ -466,14 +550,16 @@ final class CameraBack extends ViewGroup {
     ox = 0;
     plateHeight = oy + 66 * u;
     put(eyepiece, d(32, 8, 126, 50));
-    put(lamp, d(169, 25, 6, 6));
-    put(viewMode, d(166, 36, 40, 15));
-    engrave("VIEW MODE", 186, 61, 5.4f, Paint.Align.CENTER, true);
+    put(flashBtn, d(164, 11, 48, 15));
+    put(lamp, d(216, 28, 5, 5));
+    put(viewMode, d(164, 36, 48, 15));
+    engrave("VIEW MODE", 188, 60, 5.2f, Paint.Align.CENTER, true);
     put(film, d(226, 10, 250 + extra, 32));
     engrave("FILM SIMULATION", 351 + extra / 2, 54, 6.4f, Paint.Align.CENTER, true);
     put(shutterDial, d(494 + extra, 10, 124, 32));
-    shutterEngraving = engrave(isoMode ? "ISO" : "SHUTTER", 543 + extra, 54, 6.4f, Paint.Align.CENTER, true);
-    put(isoChip, d(588 + extra, 46, 28, 11));
+    shutterEngraving = engrave(isoMode ? "ISO" : "SHUTTER", 541 + extra, 54, 6.4f, Paint.Align.CENTER, true);
+    put(isoChip, d(586 + extra, 45, 32, 13));
+    isoHitRect.set(d(504 + extra, 43, 116, 20));
     put(exposure, d(636 + extra, 10, 116, 32));
     engrave("EXPOSURE  ±", 694 + extra, 54, 6.4f, Paint.Align.CENTER, true);
     put(power, d(772 + extra, 10, 66, 24));
@@ -564,11 +650,27 @@ final class CameraBack extends ViewGroup {
   private void styleIsoChip() {
     GradientDrawable g = new GradientDrawable();
     g.setCornerRadius(20 * u);
-    g.setStroke(Math.max(1, Math.round(.8f * u)), isoMode ? ORANGE : plateInk());
-    g.setColor(isoMode ? ORANGE : 0);
+    g.setStroke(Math.max(1, Math.round(.9f * u)), isoMode ? ORANGE : plateInk());
+    g.setColor(isoMode ? ORANGE : 0x18000000);
     isoChip.setBackground(g);
     isoChip.setTextColor(isoMode ? 0xffffffff : plateInk());
-    isoChip.setTextSize(TypedValue.COMPLEX_UNIT_PX, 6.2f * u);
+    isoChip.setTextSize(TypedValue.COMPLEX_UNIT_PX, 6.6f * u);
+  }
+
+  private void styleFlashBtn() {
+    boolean active = flashMode != ExposureMath.FLASH_OFF;
+    if (active) {
+      GradientDrawable g = new GradientDrawable();
+      g.setCornerRadius(4.2f * u);
+      g.setColor(ORANGE);
+      g.setStroke(Math.max(1, Math.round(.8f * u)), 0x66ffffff);
+      flashBtn.setBackground(g);
+      flashBtn.setTextColor(0xffffffff);
+      flashBtn.setTextSize(TypedValue.COMPLEX_UNIT_PX, 5.8f * u);
+    } else {
+      styleKey(flashBtn, 5.8f);
+      flashBtn.setTextColor(0xffe9e5da);
+    }
   }
 
   private TextView key(Context c, String label, boolean round, int id) {

@@ -55,7 +55,8 @@ public final class MainActivity extends ComponentActivity
   private TextView shutter;
   /** What the camera's screen shows: camera, q (quick menu), menu or play. */
   private String mode = "camera";
-  private int drive, dispMode, viewMode, finish, uiRotation, deviceRotation, afFeedback, isoSetting;
+  private int drive, dispMode, viewMode, finish, uiRotation, deviceRotation, afFeedback, isoSetting,
+      flashMode, onboardingStep;
   private long shutterNs;
   private boolean evf, powerOn = true, aeLock, isoDial, evCustom, sounds = true, showHistogram = true,
       showLevel = true, autoRotate = true, halfPressed, halfClosedOverlay, neutralHeld;
@@ -269,6 +270,9 @@ public final class MainActivity extends ComponentActivity
         });
     updateLabels();
     updateThumb();
+    if (!preferences.getBoolean("onboardingDone", false)) {
+      showOnboarding(0);
+    }
   }
 
   private void build() {
@@ -334,6 +338,7 @@ public final class MainActivity extends ComponentActivity
         });
     back.setFinish(finish);
     back.setIsoMode(isoDial);
+    back.setFlashMode(flashMode);
     back.setPhotoRatio(Framing.portraitRatio(ratio));
     root.addOnLayoutChangeListener(
         (v, l, t, r, b, ol, ot, or, ob) -> {
@@ -458,6 +463,7 @@ public final class MainActivity extends ComponentActivity
     if (r.fuji.sony()) return "s709";
     if (r.fuji == FujiRecipe.REGGIES_SUPERIA) return "SUP";
     if (r.fuji == FujiRecipe.KODAK_GOLD_200) return "GLD";
+    if (r.fuji == FujiRecipe.BRIGHT_KODAK) return "BKD";
     if (r.fuji == FujiRecipe.KODACHROME_64) return "K64";
     if (r.fuji == FujiRecipe.PACIFIC_BLUES) return "PAC";
     if (r.fuji == FujiRecipe.VIBRANT_ARIZONA) return "ARZ";
@@ -503,6 +509,8 @@ public final class MainActivity extends ComponentActivity
         return new int[] {0xff2f8f4e, 0xfff4f1e8, 0xffd9d4c6};
       case "GLD":
         return new int[] {0xfff2b51c, 0xff4a2a10, 0xffc0392b};
+      case "BKD":
+        return new int[] {0xfff7cf3d, 0xff2b1c0e, 0xffd94126};
       case "K64":
         return new int[] {0xfff4c430, 0xff8b1a1a, 0xffb22222};
       case "PAC":
@@ -542,7 +550,8 @@ public final class MainActivity extends ComponentActivity
         ev,
         tuning.effective(Recipe.ALL[recipe]),
         shutterNs,
-        isoSetting);
+        isoSetting,
+        flashMode);
   }
 
   private void selectRecipe(int id) {
@@ -576,6 +585,7 @@ public final class MainActivity extends ComponentActivity
     back.exposure.setIndex(evCustom ? EV_C : evIndex(ev));
     back.shutterDial.setIndex(isoDial ? indexOf(isoValues, isoSetting) : indexOf(shutterValues, shutterNs));
     back.setIsoMode(isoDial);
+    back.setFlashMode(flashMode);
     back.setPhotoRatio(Framing.portraitRatio(ratio));
     pushOsd();
     if ("q".equals(mode)) refreshQ();
@@ -1585,6 +1595,10 @@ public final class MainActivity extends ComponentActivity
       }
     }
     if (!afAreas.contains(afArea)) afArea = afAreas.get(0);
+    if (!caps.optBoolean("flashAvailable", false) && flashMode != ExposureMath.FLASH_OFF) {
+      flashMode = ExposureMath.FLASH_OFF;
+      if (back != null) back.setFlashMode(flashMode);
+    }
     sourceWidth = w;
     sourceHeight = h;
     ready = true;
@@ -1865,6 +1879,7 @@ public final class MainActivity extends ComponentActivity
   }
 
   private void openCamera() {
+    if ("onboarding".equals(page)) return;
     if (!resumed || !powerOn || !texture.isAvailable() || camera == null) return;
     if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
       if (!permissionAsked) {
@@ -1880,7 +1895,13 @@ public final class MainActivity extends ComponentActivity
   public void onRequestPermissionsResult(int code, String[] p, int[] result) {
     super.onRequestPermissionsResult(code, p, result);
     if (code == 7) {
-      if (result.length > 0 && result[0] == PackageManager.PERMISSION_GRANTED) openCamera();
+      boolean granted = result.length > 0 && result[0] == PackageManager.PERMISSION_GRANTED;
+      if ("onboarding".equals(page)) {
+        showOnboarding(onboardingStep);
+        if (granted) message("Camera permission granted.");
+        return;
+      }
+      if (granted) openCamera();
       else
         new AlertDialog.Builder(this)
             .setTitle("A camera needs a camera")
@@ -1988,7 +2009,11 @@ public final class MainActivity extends ComponentActivity
       return;
     }
     if (counting) cancelTimer();
-    else if ("detail".equals(page)) showGallery();
+    else if ("onboarding".equals(page)) {
+      if (onboardingStep > 0) showOnboarding(onboardingStep - 1);
+      else if (preferences.getBoolean("onboardingDone", false)) closeOnboarding();
+      else finish();
+    } else if ("detail".equals(page)) showGallery();
     else if (!"camera".equals(page)) closePanel();
     else finish();
   }
@@ -2059,6 +2084,432 @@ public final class MainActivity extends ComponentActivity
     }
     page = "camera";
     syncMagnifier();
+  }
+
+  private void closeOnboarding() {
+    preferences.edit().putBoolean("onboardingDone", true).apply();
+    closePanel();
+    if (resumed && texture != null && texture.isAvailable()) openCamera();
+  }
+
+  private View onboardingCard(String badge, String title, String detail) {
+    LinearLayout card = column();
+    card.setBackground(bg(0xffece9de, 10, LINE, 1));
+    card.setPadding(dp(14), dp(12), dp(14), dp(12));
+    TextView tag = text(badge, 9, ORANGE);
+    tag.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+    tag.setLetterSpacing(.12f);
+    card.addView(tag, new LinearLayout.LayoutParams(-1, -2));
+    TextView head = text(title, 15, INK);
+    head.setTypeface(Typeface.SERIF, Typeface.BOLD);
+    LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(-1, -2);
+    hlp.topMargin = dp(4);
+    card.addView(head, hlp);
+    TextView sub = paragraph(detail);
+    LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-1, -2);
+    slp.topMargin = dp(3);
+    card.addView(sub, slp);
+    return card;
+  }
+
+  /**
+   * Tactile rangefinder top-plate / film banner rendered natively on Canvas for the onboarding
+   * header so the real Android screen has the same craft and full-height visual balance as the
+   * design prototype.
+   */
+  private View onboardingBanner(int step) {
+    return new View(this) {
+      final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+      final Paint t = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+      @Override
+      protected void onDraw(Canvas c) {
+        float w = getWidth(), h = getHeight();
+        if (w <= 0 || h <= 0) return;
+        float r = dp(12);
+        // Dark anodized frame
+        p.setShader(null);
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(0xff1b1d19);
+        c.drawRoundRect(0, 0, w, h, r, r, p);
+
+        // Top metal plate according to current body finish (0 Silver, 1 Black, 2 Graphite)
+        int[] plateColors =
+            finish == 0
+                ? new int[] {0xfff0efe9, 0xffd5d4cc, 0xffbfbeb6}
+                : finish == 1
+                    ? new int[] {0xff3c3d3a, 0xff262724, 0xff191a18}
+                    : new int[] {0xff8f908c, 0xff70726d, 0xff5a5c57};
+        int plateInk = finish == 0 ? 0xff2c2e28 : 0xffeae6da;
+        float pad = dp(10), plateH = h * 0.64f;
+        p.setShader(
+            new LinearGradient(
+                0, pad, 0, pad + plateH, plateColors, new float[] {0f, .55f, 1f}, Shader.TileMode.CLAMP));
+        c.drawRoundRect(pad, pad, w - pad, pad + plateH, dp(8), dp(8), p);
+        p.setShader(null);
+
+        // Eyepiece window
+        p.setColor(0xff1c1e1a);
+        c.drawRoundRect(pad + dp(10), pad + dp(10), pad + dp(70), pad + dp(40), dp(5), dp(5), p);
+        p.setColor(0xff2f3b2c);
+        c.drawRoundRect(pad + dp(17), pad + dp(15), pad + dp(63), pad + dp(35), dp(3), dp(3), p);
+
+        // Flash pill
+        p.setColor(ORANGE);
+        c.drawRoundRect(pad + dp(78), pad + dp(22), pad + dp(122), pad + dp(38), dp(4), dp(4), p);
+        t.setColor(0xffffffff);
+        t.setTypeface(Typeface.MONOSPACE);
+        t.setFakeBoldText(true);
+        t.setTextAlign(Paint.Align.CENTER);
+        t.setTextSize(dp(8));
+        c.drawText("⚡ AUTO", pad + dp(100), pad + dp(33), t);
+
+        // Two knurled drums (Shutter/ISO + Film/EV)
+        float d1L = w * 0.46f, d1R = w * 0.70f, d2L = w * 0.73f, d2R = w - pad - dp(10);
+        p.setColor(0xff1f211d);
+        c.drawRoundRect(d1L, pad + dp(8), d1R, pad + dp(32), dp(4), dp(4), p);
+        c.drawRoundRect(d2L, pad + dp(8), d2R, pad + dp(32), dp(4), dp(4), p);
+
+        t.setColor(0xffff9a6c);
+        t.setTextSize(dp(9.5f));
+        c.drawText(step == 1 ? "1/500" : step == 2 ? "SAFE" : "500", (d1L + d1R) * .5f, pad + dp(23.5f), t);
+        t.setColor(0xffffd670);
+        c.drawText(step == 3 ? CameraBack.FINISHES[finish] : "BKD", (d2L + d2R) * .5f, pad + dp(23.5f), t);
+
+        t.setColor(plateInk);
+        t.setTextSize(dp(6.5f));
+        c.drawText("SHUTTER · ISO", (d1L + d1R) * .5f, pad + dp(44), t);
+        c.drawText(step == 3 ? "BODY FINISH" : "BRIGHT KODAK", (d2L + d2R) * .5f, pad + dp(44), t);
+
+        // Bottom caption strip inside dark chassis
+        t.setTextAlign(Paint.Align.LEFT);
+        t.setColor(0xfff4f1e8);
+        t.setTypeface(Typeface.SERIF);
+        t.setTextSize(dp(12));
+        c.drawText("grain.", pad + dp(6), h - dp(11), t);
+
+        t.setTextAlign(Paint.Align.RIGHT);
+        t.setTypeface(Typeface.MONOSPACE);
+        t.setColor(0xffe5be73);
+        t.setTextSize(dp(8));
+        String rightTag =
+            step == 0
+                ? "RAW · 3D LUT · NO CLOUD"
+                : step == 1
+                    ? "P / S / ISO / M · FLASH · AF-C"
+                    : step == 2 ? "1 PERMISSION · 100% ON DEVICE" : "READY TO SHOOT";
+        c.drawText(rightTag, w - pad - dp(6), h - dp(11), t);
+      }
+    };
+  }
+
+  /**
+   * Four-step first-install introduction: (0) Welcome & philosophy, (1) What Grain offers & does,
+   * (2) Camera permission & privacy, (3) Body finish & Get Started.
+   */
+  private void showOnboarding(int step) {
+    stopMagnifier();
+    onboardingStep = Math.max(0, Math.min(3, step));
+    if (panel != null) root.removeView(panel);
+    page = "onboarding";
+    panel = column();
+    panel.setBackgroundColor(PAPER);
+    panel.setClickable(true);
+    panel.setPadding(0, safeTop, 0, safeBottom);
+    root.addView(panel, new FrameLayout.LayoutParams(-1, -1));
+
+    // Top bar: brand + step counter + skip/close
+    LinearLayout top = row();
+    top.setGravity(Gravity.CENTER_VERTICAL);
+    top.setPadding(dp(22), dp(14), dp(22), dp(10));
+    TextView brand = text("grain.", 26, INK);
+    brand.setTypeface(Typeface.SERIF, Typeface.BOLD);
+    top.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
+    TextView stepBadge = text("0" + (onboardingStep + 1) + " / 04", 10, MUTED);
+    stepBadge.setTypeface(Typeface.MONOSPACE);
+    stepBadge.setLetterSpacing(.12f);
+    LinearLayout.LayoutParams sblp = new LinearLayout.LayoutParams(-2, -2);
+    sblp.rightMargin = dp(12);
+    top.addView(stepBadge, sblp);
+    boolean alreadyDone = preferences.getBoolean("onboardingDone", false);
+    if (onboardingStep < 3) {
+      TextView skip =
+          button(
+              alreadyDone ? "CLOSE" : "SKIP",
+              9.5f,
+              MUTED,
+              () -> {
+                if (alreadyDone) closeOnboarding();
+                else showOnboarding(2);
+              });
+      skip.setBackground(bg(0xffece9de, 16, LINE, 1));
+      skip.setPadding(dp(11), dp(5), dp(11), dp(5));
+      top.addView(skip, new LinearLayout.LayoutParams(-2, -2));
+    }
+    panel.addView(top, new LinearLayout.LayoutParams(-1, -2));
+
+    // Progress dots
+    LinearLayout dots = row();
+    dots.setPadding(dp(22), 0, dp(22), dp(10));
+    for (int i = 0; i < 4; i++) {
+      View bar = new View(this);
+      bar.setBackground(bg(i <= onboardingStep ? ORANGE : 0xffdcd9ce, 3, 0, 0));
+      LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(0, dp(3), 1);
+      if (i < 3) blp.rightMargin = dp(6);
+      dots.addView(bar, blp);
+    }
+    panel.addView(dots, new LinearLayout.LayoutParams(-1, -2));
+    View divider = new View(this);
+    divider.setBackgroundColor(LINE);
+    panel.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
+
+    panelScroll = new ScrollView(this);
+    panelScroll.setVerticalScrollBarEnabled(false);
+    panelScroll.setFillViewport(true);
+    panel.addView(panelScroll, new LinearLayout.LayoutParams(-1, 0, 1));
+    LinearLayout body = column();
+    body.setPadding(dp(22), dp(16), dp(22), dp(16));
+    panelScroll.addView(body, new FrameLayout.LayoutParams(-1, -1));
+
+    LinearLayout.LayoutParams bannerLp = new LinearLayout.LayoutParams(-1, dp(114));
+    bannerLp.bottomMargin = dp(14);
+    body.addView(onboardingBanner(onboardingStep), bannerLp);
+
+    String[] eyebrows = {
+      "WELCOME TO GRAIN",
+      "WHAT GRAIN OFFERS",
+      "PRIVACY & CAMERA ACCESS",
+      "READY FOR YOUR FIRST ROLL"
+    };
+    String[] headlines = {
+      "Not a filter.\nA real camera.",
+      "Every dial does\nreal sensor work.",
+      "One permission.\nPrivate on device.",
+      "Pick your body.\nStart shooting."
+    };
+    String[] leads = {
+      "Grain turns your phone into a tactile rangefinder back — developing photos directly from"
+          + " Camera2 ISP curves and sensor RAW with official film LUTs.",
+      "From instant everyday looks to darkroom-grade RAW recipes, manual shutter & ISO priority,"
+          + " flash, and focus tools — nothing is faked afterward.",
+      "Grain only asks for the camera so it can drive the sensor, lens, and flash. No account, no"
+          + " cloud uploads, no microphone, and no GPS tags.",
+      "Choose your camera finish below. Daylight 400 and all ISP stocks are ready right now; you"
+          + " can import official Fujifilm or Sony LUT packs anytime in MENU → I.Q."
+    };
+
+    TextView eye = text(eyebrows[onboardingStep], 9.5f, ORANGE);
+    eye.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+    eye.setLetterSpacing(.14f);
+    body.addView(eye, new LinearLayout.LayoutParams(-1, -2));
+
+    TextView title = text(headlines[onboardingStep], 30, INK);
+    title.setTypeface(Typeface.SERIF);
+    title.setLineSpacing(0, .98f);
+    LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(-1, -2);
+    tlp.topMargin = dp(8);
+    body.addView(title, tlp);
+
+    TextView lead = paragraph(leads[onboardingStep]);
+    LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(-1, -2);
+    llp.topMargin = dp(8);
+    llp.bottomMargin = dp(12);
+    body.addView(lead, llp);
+    body.addView(new View(this), new LinearLayout.LayoutParams(-1, 0, 1));
+
+    if (onboardingStep == 0) {
+      String[][] items = {
+        {
+          "01 · SENSOR RAW & ISP",
+          "True RAW development on device",
+          "Develops linear Bayer DNG data through color matrices, tone curves, grain, and official"
+              + " Fujifilm & Sony 3D LUTs."
+        },
+        {
+          "02 · TACTILE CAMERA BACK",
+          "Built for instinct, not menus",
+          "Dedicated Shutter/ISO dial, Exposure Comp drum, film memo holder, Q Quick Menu, and"
+              + " optical-style viewfinder mode."
+        },
+        {
+          "03 · ZERO HIDDEN AI",
+          "Every frame keeps a darkroom receipt",
+          "Records exact shutter time, ISO, white balance, dynamic-range headroom, focus plane,"
+              + " and LUT applied."
+        }
+      };
+      for (String[] it : items) {
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
+        clp.bottomMargin = dp(10);
+        body.addView(onboardingCard(it[0], it[1], it[2]), clp);
+      }
+    } else if (onboardingStep == 1) {
+      String[][] items = {
+        {
+          "FILMS & RECIPES",
+          "Daylight, Portra, Bright Kodak & more",
+          "4 instant ISP stocks plus published RAW recipes (Reggie’s Portra, Reggie’s Superia,"
+              + " Bright Kodak, Kodak Gold 200, Kodachrome 64, CineStill 800T, Tri-X 400, Sony s709)."
+        },
+        {
+          "EXPOSURE & FLASH",
+          "Live Shutter, ISO & 4-mode Flash",
+          "Shoot Program Auto (P), Shutter Priority (S), ISO Priority, or full Manual (M) with"
+              + " live preview brightness, plus Off / Auto / Fill / Torch flash."
+        },
+        {
+          "PRECISION FOCUS",
+          "AF-C Face Tracking, Peaking & Bracketing",
+          "Continuous subject tracking, hold-to-zoom 4×/8× Focus Check magnifier, manual focus"
+              + " peaking, and automated Focus Bracketing bursts."
+        }
+      };
+      for (String[] it : items) {
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
+        clp.bottomMargin = dp(10);
+        body.addView(onboardingCard(it[0], it[1], it[2]), clp);
+      }
+    } else if (onboardingStep == 2) {
+      boolean granted =
+          checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
+      LinearLayout permBox = column();
+      permBox.setBackground(bg(granted ? 0xffe4ecdc : 0xffece9de, 12, granted ? 0xff596b43 : LINE, 1));
+      permBox.setPadding(dp(16), dp(14), dp(16), dp(14));
+      TextView statusTag =
+          text(
+              granted ? "✓  CAMERA ACCESS GRANTED" : "REQUIRED · ANDROID CAMERA PERMISSION",
+              9.5f,
+              granted ? 0xff3f562c : ORANGE);
+      statusTag.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+      statusTag.setLetterSpacing(.12f);
+      permBox.addView(statusTag, new LinearLayout.LayoutParams(-1, -2));
+      TextView permHead =
+          text(
+              granted ? "Ready to open the shutter." : "Allow Grain to use your camera",
+              17,
+              INK);
+      permHead.setTypeface(Typeface.SERIF, Typeface.BOLD);
+      LinearLayout.LayoutParams phlp = new LinearLayout.LayoutParams(-1, -2);
+      phlp.topMargin = dp(6);
+      permBox.addView(permHead, phlp);
+      TextView permDesc =
+          paragraph(
+              "Used strictly for live framing, manual shutter/ISO/focus control, flash, and"
+                  + " saving photos to Pictures/Grain on this device.");
+      LinearLayout.LayoutParams pdlp = new LinearLayout.LayoutParams(-1, -2);
+      pdlp.topMargin = dp(4);
+      permBox.addView(permDesc, pdlp);
+      if (!granted) {
+        TextView grantBtn =
+            button(
+                "Allow Camera Access",
+                11.5f,
+                PAPER,
+                () -> {
+                  permissionAsked = true;
+                  requestPermissions(new String[] {Manifest.permission.CAMERA}, 7);
+                });
+        grantBtn.setBackground(bg(ORANGE, 8, 0, 0));
+        LinearLayout.LayoutParams gblp = new LinearLayout.LayoutParams(-1, dp(44));
+        gblp.topMargin = dp(12);
+        permBox.addView(grantBtn, gblp);
+      }
+      LinearLayout.LayoutParams pblp = new LinearLayout.LayoutParams(-1, -2);
+      pblp.bottomMargin = dp(10);
+      body.addView(permBox, pblp);
+
+      body.addView(
+          onboardingCard(
+              "PRIVACY PROMISE",
+              "Never uploaded. No telemetry.",
+              "• No microphone or contacts permission\n"
+                  + "• No GPS coordinates written into EXIF\n"
+                  + "• Photos stay in your device’s Pictures/Grain folder"));
+    } else {
+      TextView finishLabel = text("CAMERA BODY FINISH", 9.5f, MUTED);
+      finishLabel.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+      finishLabel.setLetterSpacing(.12f);
+      body.addView(finishLabel, new LinearLayout.LayoutParams(-1, -2));
+
+      LinearLayout finishRow = row();
+      LinearLayout.LayoutParams frlp = new LinearLayout.LayoutParams(-1, -2);
+      frlp.topMargin = dp(8);
+      frlp.bottomMargin = dp(14);
+      int[] swatchBg = {0xffe4e3dc, 0xff282926, 0xff6e706c};
+      int[] swatchInk = {0xff252820, 0xfff4f1e8, 0xfff4f1e8};
+      for (int i = 0; i < CameraBack.FINISHES.length; i++) {
+        final int idx = i;
+        boolean selected = finish == idx;
+        TextView chip =
+            button(
+                (selected ? "✓ " : "") + CameraBack.FINISHES[idx],
+                10.5f,
+                swatchInk[idx],
+                () -> {
+                  finish = idx;
+                  if (back != null) back.setFinish(finish);
+                  savePrefs();
+                  showOnboarding(3);
+                });
+        chip.setBackground(bg(swatchBg[idx], 8, selected ? ORANGE : LINE, selected ? 2 : 1));
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0, dp(44), 1);
+        if (i < 2) clp.rightMargin = dp(8);
+        finishRow.addView(chip, clp);
+      }
+      body.addView(finishRow, frlp);
+
+      LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2);
+      rlp.bottomMargin = dp(10);
+      body.addView(
+          onboardingCard(
+              "LOADED ROLL · READY NOW",
+              "Daylight 400 + Bright Kodak & RAW",
+              "Tap [ISO] beneath the top-left dial anytime to switch it between Shutter Speed and"
+                  + " ISO, or tap ⚡ on the top plate for Flash."),
+          rlp);
+      body.addView(
+          onboardingCard(
+              "OPTIONAL · OFFICIAL 3D LUTS",
+              "Import Fujifilm or Sony LUT zips later",
+              "Open MENU → I.Q. → DOWNLOAD LUTS / IMPORT LUT ZIP whenever you want to develop RAW"
+                  + " recipes like Reggie’s Portra or Bright Kodak."));
+    }
+
+    // Bottom navigation footer
+    View bottomLine = new View(this);
+    bottomLine.setBackgroundColor(LINE);
+    panel.addView(bottomLine, new LinearLayout.LayoutParams(-1, dp(1)));
+
+    LinearLayout footer = row();
+    footer.setGravity(Gravity.CENTER_VERTICAL);
+    footer.setPadding(dp(22), dp(12), dp(22), dp(16));
+    if (onboardingStep > 0) {
+      TextView prev =
+          button("← Back", 11, INK, () -> showOnboarding(onboardingStep - 1));
+      prev.setBackground(bg(0xffece9de, 8, LINE, 1));
+      LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(dp(92), dp(46));
+      plp.rightMargin = dp(10);
+      footer.addView(prev, plp);
+    }
+    boolean isLast = onboardingStep == 3;
+    String nextText =
+        onboardingStep == 0
+            ? "What Grain Offers →"
+            : onboardingStep == 1
+                ? "Camera Permission →"
+                : onboardingStep == 2 ? "Continue →" : "Get Started · Open Camera ◉";
+    TextView next =
+        button(
+            nextText,
+            11.5f,
+            PAPER,
+            () -> {
+              if (!isLast) showOnboarding(onboardingStep + 1);
+              else closeOnboarding();
+            });
+    next.setBackground(bg(isLast ? ORANGE : 0xff303c29, 8, 0, 0));
+    footer.addView(next, new LinearLayout.LayoutParams(0, dp(46), 1));
+    panel.addView(footer, new LinearLayout.LayoutParams(-1, -2));
   }
 
   private void showGallery() {
@@ -2352,6 +2803,12 @@ public final class MainActivity extends ComponentActivity
     showLevel = preferences.getBoolean("level", true);
     autoRotate = preferences.getBoolean("autoRotate", true);
     isoDial = preferences.getBoolean("isoDial", false);
+    shutterNs = Math.max(0L, preferences.getLong("shutterNs", 0L));
+    isoSetting = Math.max(0, preferences.getInt("isoSetting", 0));
+    flashMode =
+        Math.max(
+            ExposureMath.FLASH_OFF,
+            Math.min(ExposureMath.FLASH_TORCH, preferences.getInt("flashMode", 0)));
   }
 
   private void savePrefs() {
@@ -2386,7 +2843,10 @@ public final class MainActivity extends ComponentActivity
             .putBoolean("histogram", showHistogram)
             .putBoolean("level", showLevel)
             .putBoolean("autoRotate", autoRotate)
-            .putBoolean("isoDial", isoDial);
+            .putBoolean("isoDial", isoDial)
+            .putLong("shutterNs", shutterNs)
+            .putInt("isoSetting", isoSetting)
+            .putInt("flashMode", flashMode);
     for (int i = 0; i < strengths.length; i++) edit.putInt("strength" + i, strengths[i]);
     edit.apply();
   }
@@ -2729,30 +3189,25 @@ public final class MainActivity extends ComponentActivity
    */
   private double[] exposurePlan() {
     GrainCamera.Meter m = lastMeter;
-    double t = shutterNs, iso = isoSetting, shown = ev, warn = 0;
-    if (m != null && m.exposureNs > 0 && m.iso > 0) {
-      double neutral = m.neutralNsIso(), target = neutral * Math.pow(2, ev);
-      org.json.JSONArray times = capabilities.optJSONArray("exposureTimeRangeNs");
-      org.json.JSONArray isos = capabilities.optJSONArray("isoRange");
-      double tMin = times == null ? 1 : times.optLong(0), tMax = times == null ? 1e12 : times.optLong(1);
-      double iMin = isos == null ? 1 : isos.optInt(0), iMax = isos == null ? 1e6 : isos.optInt(1);
-      if (shutterNs > 0 && isoSetting > 0) shown = Math.log(t * iso / neutral) / Math.log(2);
-      else if (shutterNs > 0) {
-        double want = target / t;
-        iso = Math.max(iMin, Math.min(iMax, want));
-        if (want < iMin * .97 || want > iMax * 1.03) warn = 1;
-        shown = Math.log(t * iso / neutral) / Math.log(2);
-      } else if (isoSetting > 0) {
-        double want = target / iso;
-        t = Math.max(tMin, Math.min(tMax, want));
-        if (want < tMin * .97 || want > tMax * 1.03) warn = 1;
-        shown = Math.log(t * iso / neutral) / Math.log(2);
-      } else {
-        t = m.exposureNs;
-        iso = m.iso;
-      }
+    org.json.JSONArray times = capabilities.optJSONArray("exposureTimeRangeNs");
+    org.json.JSONArray isos = capabilities.optJSONArray("isoRange");
+    long tMin = times == null ? 10_000L : Math.max(1L, times.optLong(0, 10_000L));
+    long tMax =
+        times == null ? 1_000_000_000L : Math.max(tMin, times.optLong(1, 1_000_000_000L));
+    int iMin = isos == null ? 50 : Math.max(1, isos.optInt(0, 50));
+    int iMax = isos == null ? 12800 : Math.max(iMin, isos.optInt(1, 12800));
+    double neutral =
+        m != null && m.exposureNs > 0 && m.iso > 0
+            ? m.neutralNsIso()
+            : ExposureMath.DEFAULT_NEUTRAL_NS_ISO;
+    ExposureMath.Plan plan =
+        ExposureMath.planStill(shutterNs, isoSetting, ev, 0.0, neutral, tMin, tMax, iMin, iMax);
+    if (plan != null) {
+      return new double[] {plan.shutterNs, plan.iso, plan.shownEv, plan.outOfRange ? 1.0 : 0.0};
     }
-    return new double[] {t, iso, shown, warn};
+    double autoT = m != null && m.exposureNs > 0 ? m.exposureNs : 0.0;
+    double autoIso = m != null && m.iso > 0 ? m.iso : 0.0;
+    return new double[] {autoT, autoIso, ev, 0.0};
   }
 
   private String controlLabel(Recipe r, FujiRecipe.Tuning t, String name) {
@@ -2791,8 +3246,9 @@ public final class MainActivity extends ComponentActivity
     else if (afArea == GrainCamera.AF_FACE)
       o.icons.add(focusMode == FocusMath.FOCUS_AFS ? "AF-S" : "AF-C");
     else if (focusMode == FocusMath.FOCUS_AFS) o.icons.add("AF-S");
+    if (flashMode != ExposureMath.FLASH_OFF) o.icons.add(ExposureMath.FLASH_SHORT[flashMode]);
     double[] plan = exposurePlan();
-    o.mode = shutterNs > 0 && isoSetting > 0 ? "M" : shutterNs > 0 ? "S" : "P";
+    o.mode = ExposureMath.modeLabel(shutterNs, isoSetting);
     o.shutter = shutterText((long) plan[0], false);
     double aperture = capabilities.optDouble("aperture", 0);
     o.aperture = aperture > 0 ? String.format(Locale.US, "F%.1f", aperture) : "";
@@ -2861,9 +3317,15 @@ public final class MainActivity extends ComponentActivity
             readBattery();
             pushOsd();
           }
-          if (!showHistogram || !ready || !powerOn || back == null || !"camera".equals(mode)
-              || dispMode == 1 || texture == null || !texture.isAvailable())
-            return;
+          boolean manualActive = shutterNs > 0 || isoSetting > 0;
+          boolean wantHistogram = showHistogram && dispMode == 0;
+          if ((!wantHistogram && !manualActive)
+              || !ready
+              || !powerOn
+              || back == null
+              || !"camera".equals(mode)
+              || texture == null
+              || !texture.isAvailable()) return;
           if (histogramBitmap == null) {
             histogramBitmap = Bitmap.createBitmap(48, 64, Bitmap.Config.ARGB_8888);
             histogramPixels = new int[48 * 64];
@@ -2871,13 +3333,18 @@ public final class MainActivity extends ComponentActivity
           Bitmap b = texture.getBitmap(histogramBitmap);
           if (b == null) return;
           b.getPixels(histogramPixels, 0, 48, 0, 0, 48, 64);
-          Arrays.fill(histogramBins, 0);
-          for (int c : histogramPixels) {
-            int luma = (((c >> 16) & 255) * 54 + ((c >> 8) & 255) * 183 + (c & 255) * 19) >> 8;
-            histogramBins[Math.min(63, luma >> 2)]++;
+          if (manualActive && camera != null) {
+            camera.reportPreviewLuma(ExposureMath.meanLinearLuma(histogramPixels, 48, 64));
           }
-          back.state.histogram = histogramBins;
-          back.refresh();
+          if (wantHistogram) {
+            Arrays.fill(histogramBins, 0);
+            for (int c : histogramPixels) {
+              int luma = (((c >> 16) & 255) * 54 + ((c >> 8) & 255) * 183 + (c & 255) * 19) >> 8;
+              histogramBins[Math.min(63, luma >> 2)]++;
+            }
+            back.state.histogram = histogramBins;
+            back.refresh();
+          }
         }
       };
 
@@ -3239,6 +3706,9 @@ public final class MainActivity extends ComponentActivity
         savePrefs();
         applyViewMode(true);
         break;
+      case CameraBack.K_FLASH:
+        cycleFlash(1, true);
+        break;
       case CameraBack.K_POWER:
         setPower(value == 1);
         break;
@@ -3285,8 +3755,54 @@ public final class MainActivity extends ComponentActivity
     }
     if (isoDial) isoSetting = index <= 0 || index > isoValues.length ? 0 : isoValues[index - 1];
     else shutterNs = index <= 0 || index > shutterValues.length ? 0 : shutterValues[index - 1];
+    savePrefs();
     camera.update(snapshot());
     pushOsd();
+    if (back != null) {
+      String modeSub =
+          shutterNs > 0 && isoSetting > 0
+              ? "manual exposure (M)"
+              : shutterNs > 0
+                  ? "shutter priority (S)"
+                  : isoSetting > 0 ? "ISO priority" : "program auto (P)";
+      if (isoDial) {
+        back.toast(isoSetting == 0 ? "ISO  AUTO" : "ISO  " + isoSetting, modeSub);
+      } else {
+        back.toast(
+            shutterNs == 0 ? "SHUTTER  AUTO" : "SHUTTER  " + shutterText(shutterNs, false),
+            modeSub);
+      }
+    }
+  }
+
+  private void cycleFlash(int delta, boolean announce) {
+    if (ready && camera != null && !camera.flashAvailable()) {
+      flashMode = ExposureMath.FLASH_OFF;
+      savePrefs();
+      if (back != null) {
+        back.setFlashMode(flashMode);
+        back.toast(
+            "NO FLASH", front ? "front camera has no LED flash" : "flash unit unavailable");
+      }
+      pushOsd();
+      return;
+    }
+    flashMode = (flashMode + (delta < 0 ? 3 : 1)) % 4;
+    savePrefs();
+    if (back != null) back.setFlashMode(flashMode);
+    if (camera != null) camera.update(snapshot());
+    pushOsd();
+    if (announce && back != null) {
+      String sub =
+          flashMode == ExposureMath.FLASH_AUTO
+              ? "fires automatically in low light"
+              : flashMode == ExposureMath.FLASH_ON
+                  ? "always fires on capture"
+                  : flashMode == ExposureMath.FLASH_TORCH
+                      ? "continuous LED fill light"
+                      : "flash disabled";
+      back.toast("FLASH  " + ExposureMath.FLASH_NAMES[flashMode], sub);
+    }
   }
 
   private void shutterKey(int value) {
@@ -4006,6 +4522,12 @@ public final class MainActivity extends ComponentActivity
         items.add(new Item("DRIVE", () -> DRIVES[drive], d -> setDrive(drive + (d < 0 ? -1 : 1)), false));
         items.add(
             new Item(
+                "FLASH",
+                () -> ExposureMath.FLASH_NAMES[flashMode],
+                d -> cycleFlash(d < 0 ? -1 : 1, false),
+                false));
+        items.add(
+            new Item(
                 "BKT FRAMES",
                 () -> FocusMath.BKT_COUNTS[bktFramesIndex] + " FRAMES",
                 d -> {
@@ -4028,6 +4550,7 @@ public final class MainActivity extends ComponentActivity
             : "AUTO", d -> {
           shutterNs = 0;
           isoSetting = 0;
+          savePrefs();
           updateLabels();
           camera.update(snapshot());
         }, false));
@@ -4087,6 +4610,10 @@ public final class MainActivity extends ComponentActivity
         items.add(new Item("ALL PREFERENCES", () -> "›", d -> {
           closeOverlays();
           showSettings();
+        }, true));
+        items.add(new Item("INTRO GUIDE", () -> "OPEN ›", d -> {
+          closeOverlays();
+          showOnboarding(0);
         }, true));
         items.add(new Item("DIAGNOSTICS", () -> "›", d -> {
           closeOverlays();
