@@ -240,6 +240,24 @@ public class ExposureAndRecipeTest {
     assertEquals(-1, FocusMath.leverCardinal(0.0f, 0.18f, 0.32f, 3)); // releases cleanly
   }
 
+  @Test
+  public void playbackZoomMatrixFitsCenterAndClampsPan() {
+    // 1x zoom fits 3000x4000 inside 900x1200 with scale 0.3 and zero pan
+    float[] fit = FocusMath.playbackMatrixValues(900f, 1200f, 3000f, 4000f, 1.0f, 150f, -80f);
+    assertEquals(0.30f, fit[0], 1e-5f);
+    assertEquals(0f, fit[1], 1e-4f);
+    assertEquals(0f, fit[2], 1e-4f);
+    assertEquals(1.0f, fit[3], 1e-5f);
+    assertEquals(0f, fit[4], 1e-5f);
+
+    // 3x zoom -> scaled size 2700x3600, maxPanX = 900, maxPanY = 1200
+    float[] zoomed = FocusMath.playbackMatrixValues(900f, 1200f, 3000f, 4000f, 3.0f, 2000f, -2000f);
+    assertEquals(0.90f, zoomed[0], 1e-4f);
+    assertEquals(3.0f, zoomed[3], 1e-5f);
+    assertEquals(900f, zoomed[4], 1e-3f);
+    assertEquals(-1200f, zoomed[5], 1e-3f);
+  }
+
   private static Recipe findRecipe(String key) {
     for (Recipe r : Recipe.ALL) {
       if (r.fuji != null && key.equals(r.fuji.key)) return r;

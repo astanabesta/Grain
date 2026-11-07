@@ -218,51 +218,84 @@ private struct TrianglePointer: Shape {
 // MARK: - Rear Knurled Command Wheel
 
 public struct CommandWheelView: View {
+    let isContinuous: () -> Bool
+    let onSlide: (CGFloat) -> Void
     let onStep: (Int) -> Void
     @State private var accum: CGFloat = 0
+    @State private var prevX: CGFloat = 0
 
-    public init(onStep: @escaping (Int) -> Void) {
+    public init(
+        isContinuous: @escaping () -> Bool = { false },
+        onSlide: @escaping (CGFloat) -> Void = { _ in },
+        onStep: @escaping (Int) -> Void
+    ) {
+        self.isContinuous = isContinuous
+        self.onSlide = onSlide
         self.onStep = onStep
     }
 
     public var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color(white: 0.045))
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [Color(white: 0.08), Color(white: 0.24), Color(white: 0.08)],
-                        startPoint: .leading,
-                        endPoint: .trailing
+        GeometryReader { geo in
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color(white: 0.045))
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [Color(white: 0.08), Color(white: 0.24), Color(white: 0.08)],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
                     )
-                )
-                .padding(3)
-            Canvas { ctx, size in
-                var x: CGFloat = 8
-                while x < size.width - 7 {
-                    let r = CGRect(x: x, y: 5, width: 1.5, height: size.height - 10)
-                    ctx.fill(Path(r), with: .color(Color.white.opacity(0.18)))
-                    x += 4.5
-                }
-            }
-        }
-        .contentShape(Rectangle())
-        .gesture(
-            DragGesture(minimumDistance: 2)
-                .onChanged { val in
-                    let delta = val.translation.width - accum
-                    if abs(delta) >= 16 {
-                        let steps = Int((delta / 16).rounded(.towardZero))
-                        if steps != 0 {
-                            accum += CGFloat(steps) * 16
-                            UISelectionFeedbackGenerator().selectionChanged()
-                            onStep(steps)
-                        }
+                    .padding(3)
+                Canvas { ctx, size in
+                    var x: CGFloat = 8
+                    while x < size.width - 7 {
+                        let r = CGRect(x: x, y: 5, width: 1.5, height: size.height - 10)
+                        ctx.fill(Path(r), with: .color(Color.white.opacity(0.18)))
+                        x += 4.5
                     }
                 }
-                .onEnded { _ in accum = 0 }
-        )
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { val in
+                        let dx = val.translation.width - prevX
+                        prevX = val.translation.width
+                        if isContinuous() {
+                            if abs(dx) > 0.01 {
+                                onSlide(dx)
+                            }
+                            let delta = val.translation.width - accum
+                            if abs(delta) >= 20 {
+                                let steps = Int((delta / 20).rounded(.towardZero))
+                                accum += CGFloat(steps) * 20
+                                UISelectionFeedbackGenerator().selectionChanged()
+                            }
+                        } else {
+                            let delta = val.translation.width - accum
+                            if abs(delta) >= 16 {
+                                let steps = Int((delta / 16).rounded(.towardZero))
+                                if steps != 0 {
+                                    accum += CGFloat(steps) * 16
+                                    UISelectionFeedbackGenerator().selectionChanged()
+                                    onStep(steps)
+                                }
+                            }
+                        }
+                    }
+                    .onEnded { val in
+                        let totalMove = abs(val.translation.width) + abs(val.translation.height)
+                        if totalMove < 4 && geo.size.width > 0 {
+                            UISelectionFeedbackGenerator().selectionChanged()
+                            onStep(val.location.x < geo.size.width * 0.5 ? -1 : 1)
+                        }
+                        accum = 0
+                        prevX = 0
+                    }
+            )
+        }
     }
 }
 

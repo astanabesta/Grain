@@ -106,6 +106,85 @@ public class BlackoutViewfinderTest {
     assertEquals(View.GONE, back.shutter.getVisibility());
   }
 
+  @Test
+  public void commandSliderEmitsContinuousZoomDeltasInPlaybackAndDiscreteStepsOtherwise() {
+    Context ctx = RuntimeEnvironment.getApplication();
+    AtomicBoolean continuousMode = new AtomicBoolean(false);
+    AtomicInteger discreteSteps = new AtomicInteger(0);
+    final float[] slideSum = {0f};
+
+    CameraBack back =
+        new CameraBack(
+            ctx,
+            new CameraBack.Host() {
+              @Override
+              public void key(int key, int value) {
+                if (key == CameraBack.K_COMMAND) discreteSteps.addAndGet(value);
+              }
+
+              @Override
+              public boolean commandContinuousZoom() {
+                return continuousMode.get();
+              }
+
+              @Override
+              public void commandSlide(float deltaUnits) {
+                slideSum[0] += deltaUnits;
+              }
+
+              @Override
+              public void lcdTap(float rawX, float rawY, float x, float y) {}
+
+              @Override
+              public void lcdHold(float x, float y, boolean held) {}
+
+              @Override
+              public void pinch(float factor) {}
+
+              @Override
+              public void previewRect(RectF rect) {}
+            });
+
+    back.measure(
+        View.MeasureSpec.makeMeasureSpec(400, View.MeasureSpec.EXACTLY),
+        View.MeasureSpec.makeMeasureSpec(860, View.MeasureSpec.EXACTLY));
+    back.layout(0, 0, 400, 860);
+
+    // 1. In camera/menu mode (continuousMode == false), dragging emits discrete K_COMMAND steps
+    long now = SystemClock.uptimeMillis();
+    MotionEvent d1 = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, 20f, 12f, 0);
+    MotionEvent m1 = MotionEvent.obtain(now, now + 16, MotionEvent.ACTION_MOVE, 68f, 12f, 0);
+    MotionEvent u1 = MotionEvent.obtain(now, now + 32, MotionEvent.ACTION_UP, 68f, 12f, 0);
+    back.command.dispatchTouchEvent(d1);
+    back.command.dispatchTouchEvent(m1);
+    back.command.dispatchTouchEvent(u1);
+    d1.recycle();
+    m1.recycle();
+    u1.recycle();
+    assertTrue(discreteSteps.get() > 0);
+    assertEquals(0f, slideSum[0], 1e-4f);
+
+    // 2. In playback mode (continuousMode == true), dragging emits smooth commandSlide deltas
+    continuousMode.set(true);
+    discreteSteps.set(0);
+    MotionEvent d2 = MotionEvent.obtain(now + 50, now + 50, MotionEvent.ACTION_DOWN, 20f, 12f, 0);
+    MotionEvent m2 = MotionEvent.obtain(now + 50, now + 66, MotionEvent.ACTION_MOVE, 55f, 12f, 0);
+    MotionEvent m3 = MotionEvent.obtain(now + 50, now + 82, MotionEvent.ACTION_MOVE, 35f, 12f, 0);
+    MotionEvent u2 = MotionEvent.obtain(now + 50, now + 98, MotionEvent.ACTION_UP, 35f, 12f, 0);
+    back.command.dispatchTouchEvent(d2);
+    back.command.dispatchTouchEvent(m2);
+    assertTrue(slideSum[0] > 10f);
+    float zoomedInDelta = slideSum[0];
+    back.command.dispatchTouchEvent(m3);
+    assertTrue(slideSum[0] < zoomedInDelta);
+    back.command.dispatchTouchEvent(u2);
+    d2.recycle();
+    m2.recycle();
+    m3.recycle();
+    u2.recycle();
+    assertEquals(0, discreteSteps.get());
+  }
+
   private static void dispatchTap(View target, float x, float y) {
     long now = SystemClock.uptimeMillis();
     MotionEvent down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, x, y, 0);

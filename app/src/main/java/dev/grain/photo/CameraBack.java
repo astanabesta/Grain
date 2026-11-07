@@ -51,6 +51,14 @@ final class CameraBack extends ViewGroup {
 
     /** Continuous analog focus-lever velocity (vx, vy in [-1..1]) and frame delta (seconds). */
     default void leverGlide(float vx, float vy, float dtSec, boolean finished) {}
+
+    /** True when the rear command slider drives smooth continuous zoom (e.g. photo playback). */
+    default boolean commandContinuousZoom() {
+      return false;
+    }
+
+    /** Continuous horizontal motion on the rear command slider in design units (+ = right). */
+    default void commandSlide(float deltaUnits) {}
   }
 
   static final int K_Q = 1, K_OK = 2, K_DISP = 3, K_PLAY = 4, K_DRIVE = 5, K_AEL = 6, K_LEVER = 7,
@@ -1195,13 +1203,26 @@ final class CameraBack extends ViewGroup {
             float dx = e.getX() - lastX;
             phase += dx;
             acc += dx;
-            while (acc > step) {
-              acc -= step;
-              click(1);
-            }
-            while (acc < -step) {
-              acc += step;
-              click(-1);
+            if (host.commandContinuousZoom()) {
+              host.commandSlide(dx / Math.max(1f, u));
+              float hapticStep = 16 * u;
+              while (acc > hapticStep) {
+                acc -= hapticStep;
+                performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+              }
+              while (acc < -hapticStep) {
+                acc += hapticStep;
+                performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+              }
+            } else {
+              while (acc > step) {
+                acc -= step;
+                click(1);
+              }
+              while (acc < -step) {
+                acc += step;
+                click(-1);
+              }
             }
             invalidate();
           }

@@ -348,6 +348,36 @@ public final class FocusMath {
     return ny >= 0f ? 3 : 1;
   }
 
+  /**
+   * Computes FIT_CENTER-anchored playback zoom and clamped pan matrix parameters for the gallery
+   * viewer.
+   *
+   * @return {@code [scale, tx, ty, clampedZoom, clampedPanX, clampedPanY]}
+   */
+  public static float[] playbackMatrixValues(
+      float viewW, float viewH, float bmpW, float bmpH, float zoom, float panX, float panY) {
+    if (viewW <= 0f || viewH <= 0f || bmpW <= 0f || bmpH <= 0f) {
+      return new float[] {1f, 0f, 0f, 1f, 0f, 0f};
+    }
+    float z = Float.isFinite(zoom) ? Math.max(1.0f, Math.min(8.0f, zoom)) : 1.0f;
+    float fit = Math.min(viewW / bmpW, viewH / bmpH);
+    float scale = fit * z;
+    float sw = bmpW * scale, sh = bmpH * scale;
+    float cx, cy;
+    if (z <= 1.005f) {
+      cx = 0f;
+      cy = 0f;
+    } else {
+      float maxPanX = Math.max(0f, (sw - viewW) * 0.5f);
+      float maxPanY = Math.max(0f, (sh - viewH) * 0.5f);
+      cx = Float.isFinite(panX) ? Math.max(-maxPanX, Math.min(maxPanX, panX)) : 0f;
+      cy = Float.isFinite(panY) ? Math.max(-maxPanY, Math.min(maxPanY, panY)) : 0f;
+    }
+    float tx = (viewW - sw) * 0.5f + cx;
+    float ty = (viewH - sh) * 0.5f + cy;
+    return new float[] {scale, tx, ty, z, cx, cy};
+  }
+
   private static float clamp01(float v) {
     return Math.max(0f, Math.min(1f, v));
   }

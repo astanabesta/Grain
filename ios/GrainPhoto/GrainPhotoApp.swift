@@ -31,6 +31,7 @@ enum ActiveScreenMode {
     case camera
     case qMenu
     case mainMenu
+    case playback
 }
 
 struct RangefinderCameraScreen: View {
@@ -42,6 +43,12 @@ struct RangefinderCameraScreen: View {
     @State private var qTileIndex: Int = 0
     @State private var menuTabIndex: Int = 0
     @State private var menuRowIndex: Int = 0
+    @State private var playIndex: Int = 0
+    @State private var playZoom: CGFloat = 1.0
+    @State private var playPinchBase: CGFloat = 1.0
+    @State private var playPan: CGSize = .zero
+    @State private var playDragBase: CGSize = .zero
+    @State private var playShowReceipt: Bool = false
     @State private var showFilmLab = false
     @State private var showGallery = false
     @State private var showLutPicker = false
@@ -461,6 +468,10 @@ struct RangefinderCameraScreen: View {
                         )
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         .padding(6)
+                    } else if screenMode == .playback {
+                        inBezelPlaybackOverlay(area: CGSize(width: geo.size.width - 12, height: geo.size.height - 12))
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .padding(6)
                     }
                 } else {
                     Text("OFF")
@@ -595,18 +606,29 @@ struct RangefinderCameraScreen: View {
                 .frame(width: 58, height: 24)
 
                 VStack(spacing: 2) {
-                    CommandWheelView { steps in
-                        handleCommandWheel(steps: steps)
-                    }
+                    CommandWheelView(
+                        isContinuous: { screenMode == .playback },
+                        onSlide: { dx in
+                            zoomPlaybackByFactor(CGFloat(pow(2.0, Double(dx) / 135.0)))
+                        },
+                        onStep: { steps in
+                            handleCommandWheel(steps: steps)
+                        }
+                    )
                     .frame(height: 30)
-                    Text("COMMAND")
+                    Text(screenMode == .playback ? "COMMAND · ZOOM" : "COMMAND")
                         .font(.custom("AvenirNextCondensed-Bold", size: 8.5))
                         .tracking(1.0)
                         .foregroundColor(GrainPalette.mutedEngrave)
                 }
 
                 HardwareKeyButton("Q", round: true, active: screenMode == .qMenu, fontSize: 15) {
-                    screenMode = (screenMode == .qMenu) ? .camera : .qMenu
+                    if screenMode == .playback {
+                        screenMode = .camera
+                        showGallery = true
+                    } else {
+                        screenMode = (screenMode == .qMenu) ? .camera : .qMenu
+                    }
                 }
                 .frame(width: 44, height: 44)
             }
@@ -620,20 +642,35 @@ struct RangefinderCameraScreen: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     HardwareKeyButton(camera.driveSetting == .single ? "DRIVE" : camera.driveSetting.shortTag, active: camera.driveSetting != .single, fontSize: 9.5) {
-                        let all = DriveSetting.allCases
-                        let cur = all.firstIndex(of: camera.driveSetting) ?? 0
-                        camera.driveSetting = all[(cur + 1) % all.count]
-                        camera.showToast("DRIVE · \(camera.driveSetting.label)")
+                        if screenMode == .playback {
+                            deleteCurrentPlaybackPhoto()
+                        } else {
+                            let all = DriveSetting.allCases
+                            let cur = all.firstIndex(of: camera.driveSetting) ?? 0
+                            camera.driveSetting = all[(cur + 1) % all.count]
+                            camera.showToast("DRIVE · \(camera.driveSetting.label)")
+                        }
                     }
                     .frame(width: 58, height: 25)
 
-                    HardwareKeyButton("▶ PLAY", fontSize: 9.5) {
-                        showGallery = true
+                    HardwareKeyButton("▶ PLAY", active: screenMode == .playback, fontSize: 9.5) {
+                        if screenMode == .playback {
+                            screenMode = .camera
+                        } else if store.entries.isEmpty {
+                            camera.showToast("NO PHOTOS", subtitle: "Expose a frame first")
+                        } else {
+                            playIndex = 0
+                            resetPlaybackZoom()
+                            playShowReceipt = false
+                            screenMode = .playback
+                        }
                     }
                     .frame(width: 58, height: 25)
 
                     HardwareKeyButton("DISP/BACK", fontSize: 9.5) {
-                        if screenMode != .camera {
+                        if screenMode == .playback {
+                            playShowReceipt.toggle()
+                        } else if screenMode != .camera {
                             screenMode = .camera
                         } else {
                             camera.infoHidden.toggle()
@@ -645,7 +682,11 @@ struct RangefinderCameraScreen: View {
                 Spacer(minLength: 2)
 
                 ShutterReleaseButton(countdown: camera.countdownText, busy: camera.isCapturing) {
-                    camera.triggerShutter()
+                    if screenMode != .camera {
+                        screenMode = .camera
+                    } else {
+                        camera.triggerShutter()
+                    }
                 }
                 .frame(width: 108, height: 108)
 
@@ -665,7 +706,10 @@ struct RangefinderCameraScreen: View {
                     .frame(width: 72, height: 72)
 
                     HardwareKeyButton("MENU\nOK", round: true, active: screenMode == .mainMenu, fontSize: 10) {
-                        if screenMode == .mainMenu {
+                        if screenMode == .playback {
+                            screenMode = .camera
+                            showGallery = true
+                        } else if screenMode == .mainMenu {
                             screenMode = .camera
                         } else {
                             screenMode = .mainMenu
@@ -693,12 +737,155 @@ struct RangefinderCameraScreen: View {
         return CGSize(width: w, height: h)
     }
 
+    private func inBezelPlaybackOverlay(area: CGSize) -> some View {
+        let count = store.entries.count
+        let safeIdx = max(0, min(max(0, count - 1), playIndex))
+        let entry: RollEntry? = count > 0 ? store.entries[safeIdx] : nil
+
+        return ZStack {
+            Color.black
+            if let item = entry,
+               let data = try? Data(contentsOf: item.jpegURL),
+               let ui = UIImage(data: data) {
+                Image(uiImage: ui)
+                    .resizable()
+                    .scaledToFit()
+                    .scaleEffect(playZoom)
+                    .offset(playPan)
+                    .frame(width: area.width, height: area.height)
+                    .clipped()
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 4)
+                            .onChanged { val in
+                                if playZoom > 1.02 {
+                                    let maxX = max(0, (area.width * (playZoom - 1.0)) * 0.5)
+                                    let maxY = max(0, (area.height * (playZoom - 1.0)) * 0.5)
+                                    let nx = max(-maxX, min(maxX, playDragBase.width + val.translation.width))
+                                    let ny = max(-maxY, min(maxY, playDragBase.height + val.translation.height))
+                                    playPan = CGSize(width: nx, height: ny)
+                                }
+                            }
+                            .onEnded { val in
+                                if playZoom > 1.02 {
+                                    playDragBase = playPan
+                                } else if abs(val.translation.width) > 36 {
+                                    stepPlaybackPhoto(delta: val.translation.width < 0 ? 1 : -1)
+                                }
+                            }
+                    )
+                    .simultaneousGesture(
+                        MagnificationGesture()
+                            .onChanged { scale in
+                                let target = max(1.0, min(8.0, playPinchBase * scale))
+                                if playZoom > 0.01 {
+                                    zoomPlaybackByFactor(target / playZoom)
+                                }
+                            }
+                            .onEnded { _ in
+                                playPinchBase = playZoom
+                            }
+                    )
+                    .onTapGesture(count: 2) {
+                        if playZoom > 1.05 {
+                            resetPlaybackZoom()
+                        } else {
+                            playZoom = 2.5
+                            playPinchBase = 2.5
+                        }
+                    }
+
+                if playShowReceipt {
+                    ScrollView {
+                        Text(store.receiptText(for: item))
+                            .font(.system(size: 11.5))
+                            .foregroundColor(GrainPalette.warmIvory)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
+                    }
+                    .background(Color.black.opacity(0.84))
+                    .padding(.vertical, 26)
+                }
+
+                VStack {
+                    HStack {
+                        Text("\(safeIdx + 1) / \(count)   \(item.filmName.uppercased())\(playZoom > 1.02 ? String(format: "  ·  %.1f×", playZoom) : "")")
+                            .font(.custom("AvenirNextCondensed-Bold", size: 11))
+                            .foregroundColor(GrainPalette.warmIvory)
+                            .lineLimit(1)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.black.opacity(0.65))
+
+                    Spacer()
+
+                    Text("LEVER BROWSE · COMMAND ZOOM · DISP RECEIPT · DRIVE DEL · Q ALL")
+                        .font(.custom("AvenirNextCondensed-DemiBold", size: 8.8))
+                        .foregroundColor(GrainPalette.mutedEngrave)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                        .background(Color.black.opacity(0.68))
+                }
+            }
+        }
+    }
+
+    private func resetPlaybackZoom() {
+        playZoom = 1.0
+        playPinchBase = 1.0
+        playPan = .zero
+        playDragBase = .zero
+    }
+
+    private func zoomPlaybackByFactor(_ factor: CGFloat) {
+        let old = playZoom
+        var next = max(1.0, min(8.0, old * factor))
+        if next <= 1.015 {
+            next = 1.0
+            playPan = .zero
+            playDragBase = .zero
+        } else if old > 0.01 {
+            let ratio = next / old
+            playPan = CGSize(width: playPan.width * ratio, height: playPan.height * ratio)
+            playDragBase = playPan
+        }
+        playZoom = next
+        playPinchBase = next
+    }
+
+    private func stepPlaybackPhoto(delta: Int) {
+        guard !store.entries.isEmpty else { return }
+        let next = max(0, min(store.entries.count - 1, playIndex + (delta >= 0 ? 1 : -1)))
+        if next != playIndex {
+            playIndex = next
+            resetPlaybackZoom()
+            UISelectionFeedbackGenerator().selectionChanged()
+        }
+    }
+
+    private func deleteCurrentPlaybackPhoto() {
+        guard !store.entries.isEmpty else { return }
+        let idx = max(0, min(store.entries.count - 1, playIndex))
+        let id = store.entries[idx].id
+        store.deleteBatch(ids: [id])
+        resetPlaybackZoom()
+        if store.entries.isEmpty {
+            screenMode = .camera
+        } else {
+            playIndex = min(idx, store.entries.count - 1)
+        }
+    }
+
     private func handleCommandWheel(steps: Int) {
         switch screenMode {
         case .qMenu:
             stepQTile(qTileIndex, delta: steps, camera: camera)
         case .mainMenu:
             menuRowIndex = max(0, menuRowIndex + steps)
+        case .playback:
+            zoomPlaybackByFactor(CGFloat(pow(1.22, Double(steps))))
         case .camera:
             if camera.customEvMode {
                 camera.fineEv = max(-2.0, min(2.0, ((camera.fineEv + Float(steps) * 0.1) * 10).rounded() / 10))
@@ -739,6 +926,15 @@ struct RangefinderCameraScreen: View {
                 menuRowIndex = 0
             } else {
                 menuRowIndex = max(0, menuRowIndex + (dir == 1 ? -1 : 1))
+            }
+        case .playback:
+            if dir == 4 || dir == 1 {
+                stepPlaybackPhoto(delta: -1)
+            } else if dir == 2 || dir == 3 {
+                stepPlaybackPhoto(delta: 1)
+            } else {
+                screenMode = .camera
+                showGallery = true
             }
         case .camera:
             if dir == 0 {

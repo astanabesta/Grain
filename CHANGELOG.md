@@ -8,6 +8,14 @@ one was a separate APK install on the device.
 
 ---
 
+## v0.7.8 — Smooth Gallery Photo Zoom on Command Slider (`1×–8×`)
+
+- **Command slider zooms playback photos (`1.0× – 8.0×`)** — in `PLAY` mode (Android & iOS), sliding
+  the rear `COMMAND` bar smoothly zooms in and out on the current photo with tactile haptic detents
+  and `3200px` high-resolution decoding, while the Focus Lever continues browsing between frames.
+- **Zoomed drag-to-pan, pinch & double-tap** — drag with one finger while zoomed in to inspect sharpness,
+  grain, and halation anywhere in the frame, pinch to zoom, or double-tap to toggle `1.0× ↔ 2.5×`.
+
 ## v0.7.7 — Native iOS `.ipa` Port (Pro Bayer RAW + All-iPhone Scene-Linear Engine)
 
 - **Native Swift iOS app (`ios/`) & `Grain-iOS-v0.7.7.ipa`** — full iOS 16+ port built on `AVFoundation`,

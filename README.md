@@ -153,7 +153,7 @@ Developed from sensor `RAW_SENSOR` through Fujifilm's official F-Log2 LUTs. Ever
 | **LCD Preview** | Live Camera2 viewfinder cropped to `3:4`, `1:1`, or `9:16`. Tap to place focus; press-and-hold to open the **`4× / 8×` Focus Check loupe**; pinch to zoom `1×–5×`. |
 | **Film Dial** | Scrolls ISP looks, published `◆` RAW recipes, imported Fujifilm simulations, and Sony `s709`. Tap the active film or memo box to open the **Film Lab & Tuning Sheet**. |
 | **Shutter / ISO Dial** | Sets **Program (`A`)**, **Shutter Priority** (`1/4000 s` – `1 s`), **ISO Priority** (`50` – `12800` via the `ISO` toggle chip), or **Manual (`M`)** when both dials are off `A`. |
-| **EV Dial & Command Wheel** | `−2` to `+2 EV` in `1/3 EV` clicks; set EV to **`C`** to drive fine `0.1 EV` steps on the rear command wheel (otherwise controls zoom or steps manual focus in the loupe). |
+| **EV Dial & Command Wheel** | `−2` to `+2 EV` in `1/3 EV` clicks; set EV to **`C`** to drive fine `0.1 EV` steps on the rear command wheel (controls camera zoom in live view, steps manual focus in the loupe, and **smoothly zooms `1×–8×` on photos in `PLAY` gallery**). |
 | **Flash (`⚡`)** | Cycles **`OFF`**, **`ON`**, **`AUTO`**, and continuous **`TORCH`** fill light. |
 | **Focus Lever (Joystick)** | **360° analog thumb stick:** drag in any direction to glide the AF point smoothly at 60–120 Hz (press centre to re-centre); tilt & hold to navigate / auto-repeat **`Q`**, **`MENU`**, and **`PLAY`**. |
 | **`Q` Menu** | 16-tile quick grid (`Film`, `WB`, `WB R`, `WB B`, `DR`, `H Tone`, `S Tone`, `Color`, `Sharp`, `NR`, `Clarity`, `Grain`, `CCE`, `FX Blue`, `Dev`, `Face`). |
@@ -301,6 +301,7 @@ tools/                          SDK-free syntax/math verifier & desktop RAW CLI 
 
 | Version | Highlights |
 | --- | --- |
+| **v0.7.8** | **Smooth `1×–8×` gallery photo zoom** on the rear Command slider (with drag-to-pan, pinch & double-tap) while the Focus Lever browses frames |
 | **v0.7.7** | **Native iOS `.ipa` release** (`ios/` Swift + `AVFoundation` Bayer RAW & all-iPhone scene-linear engine) published alongside Android `.apk` |
 | **v0.7.6** | Enlarged **360° analog Focus Lever** (`74×74`, `2.6×` thumb cap) with 60/120Hz VSync AF gliding, zero-lag reversal, damped spring return & menu hold-repeat |
 | **v0.7.5** | Authentic **CineStill 800T (`800T`)** Vision3 tungsten + remjet-free red-orange halation & **Kodak 800 v3 (`K800`)** RAF-calibrated Kelvin fix |

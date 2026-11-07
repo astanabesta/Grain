@@ -76,6 +76,9 @@ public final class MainActivity extends ComponentActivity
   private final List<PhotoStore.Photo> playList = new ArrayList<>();
   private ImageView playImage;
   private TextView playInfo, playReceipt;
+  private float playZoom = 1f, playPanX = 0f, playPanY = 0f;
+  private final Matrix playMatrix = new Matrix();
+  private String playBaseInfo = "";
   private final List<TextView[]> qTiles = new ArrayList<>();
   private TextView qName, qValue, qKelvinValue;
   private LinearLayout qKelvinRow, menuList;
@@ -4518,6 +4521,18 @@ public final class MainActivity extends ComponentActivity
     }
   }
 
+  @Override
+  public boolean commandContinuousZoom() {
+    return powerOn && "play".equals(mode);
+  }
+
+  @Override
+  public void commandSlide(float deltaUnits) {
+    if ("play".equals(mode)) {
+      zoomPlayedByFactor((float) Math.pow(2.0, deltaUnits / 56.0));
+    }
+  }
+
   private void commandKey(int steps) {
     switch (mode) {
       case "q":
@@ -4527,7 +4542,7 @@ public final class MainActivity extends ComponentActivity
         stepMenu(steps);
         break;
       case "play":
-        browse(steps);
+        zoomPlayedByFactor((float) Math.pow(1.22, steps));
         break;
       default:
         if (evCustom) {
@@ -4660,6 +4675,10 @@ public final class MainActivity extends ComponentActivity
     playImage = null;
     playInfo = null;
     playReceipt = null;
+    playZoom = 1f;
+    playPanX = 0f;
+    playPanY = 0f;
+    playBaseInfo = "";
     syncMagnifier();
     pushOsd();
   }
@@ -5264,6 +5283,9 @@ public final class MainActivity extends ComponentActivity
                 playList.clear();
                 playList.addAll(list);
                 playIndex = 0;
+                playZoom = 1f;
+                playPanX = 0f;
+                playPanY = 0f;
                 mode = "play";
                 back.showOverlay(buildPlayback());
                 showPlayed();
@@ -5271,11 +5293,56 @@ public final class MainActivity extends ComponentActivity
         });
   }
 
+  private void zoomPlayedByFactor(float factor) {
+    if (!"play".equals(mode) || playImage == null) return;
+    float oldZoom = playZoom;
+    float target = Math.max(1f, Math.min(8f, oldZoom * factor));
+    if (target <= 1.015f) {
+      target = 1f;
+      playPanX = 0f;
+      playPanY = 0f;
+    } else if (oldZoom > 0.01f) {
+      float ratioScale = target / oldZoom;
+      playPanX *= ratioScale;
+      playPanY *= ratioScale;
+    }
+    playZoom = target;
+    applyPlayMatrix();
+    updatePlayHeader();
+  }
+
+  private void applyPlayMatrix() {
+    if (playImage == null) return;
+    android.graphics.drawable.Drawable d = playImage.getDrawable();
+    int vw = playImage.getWidth(), vh = playImage.getHeight();
+    if (d == null || vw <= 0 || vh <= 0) return;
+    int bw = d.getIntrinsicWidth(), bh = d.getIntrinsicHeight();
+    if (bw <= 0 || bh <= 0) return;
+    float[] m = FocusMath.playbackMatrixValues(vw, vh, bw, bh, playZoom, playPanX, playPanY);
+    playZoom = m[3];
+    playPanX = m[4];
+    playPanY = m[5];
+    playMatrix.reset();
+    playMatrix.postScale(m[0], m[0]);
+    playMatrix.postTranslate(m[1], m[2]);
+    playImage.setImageMatrix(playMatrix);
+  }
+
+  private void updatePlayHeader() {
+    if (playInfo == null) return;
+    if (playZoom > 1.02f) {
+      playInfo.setText(playBaseInfo + String.format(Locale.US, "  ·  %.1f×", playZoom));
+    } else {
+      playInfo.setText(playBaseInfo);
+    }
+  }
+
   private View buildPlayback() {
     FrameLayout box = new FrameLayout(this);
     box.setBackgroundColor(0xff000000);
     playImage = new ImageView(this);
-    playImage.setScaleType(ImageView.ScaleType.FIT_CENTER);
+    playImage.setScaleType(ImageView.ScaleType.MATRIX);
+    playImage.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> applyPlayMatrix());
     box.addView(playImage, new FrameLayout.LayoutParams(-1, -1));
     playInfo = text("", 8.5f, 0xfff4f1e8);
     playInfo.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
@@ -5284,7 +5351,11 @@ public final class MainActivity extends ComponentActivity
     playInfo.setSingleLine(true);
     playInfo.setEllipsize(android.text.TextUtils.TruncateAt.END);
     box.addView(playInfo, new FrameLayout.LayoutParams(-1, dp(24), Gravity.TOP));
-    TextView hint = text("◀ ▶ BROWSE · DISP RECEIPT · DRIVE DELETE · OK DETAILS · Q ALL", 6.5f, 0xffc9c4b8);
+    TextView hint =
+        text(
+            "LEVER BROWSE · COMMAND ZOOM · DISP RECEIPT · DRIVE DEL · OK MORE · Q ALL",
+            6.5f,
+            0xffc9c4b8);
     hint.setBackgroundColor(0x99000000);
     hint.setSingleLine(true);
     box.addView(hint, new FrameLayout.LayoutParams(-1, dp(18), Gravity.BOTTOM));
@@ -5297,6 +5368,16 @@ public final class MainActivity extends ComponentActivity
     FrameLayout.LayoutParams rp = new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER);
     rp.setMargins(dp(12), dp(30), dp(12), dp(24));
     box.addView(playReceipt, rp);
+    ScaleGestureDetector pinchDetector =
+        new ScaleGestureDetector(
+            this,
+            new ScaleGestureDetector.SimpleOnScaleGestureListener() {
+              @Override
+              public boolean onScale(ScaleGestureDetector detector) {
+                zoomPlayedByFactor(detector.getScaleFactor());
+                return true;
+              }
+            });
     GestureDetector gestures =
         new GestureDetector(
             this,
@@ -5307,8 +5388,19 @@ public final class MainActivity extends ComponentActivity
               }
 
               @Override
+              public boolean onScroll(MotionEvent a, MotionEvent b, float distanceX, float distanceY) {
+                if (playZoom > 1.01f && !pinchDetector.isInProgress()) {
+                  playPanX -= distanceX;
+                  playPanY -= distanceY;
+                  applyPlayMatrix();
+                  return true;
+                }
+                return false;
+              }
+
+              @Override
               public boolean onFling(MotionEvent a, MotionEvent b, float vx, float vy) {
-                if (Math.abs(vx) > Math.abs(vy)) {
+                if (playZoom <= 1.01f && Math.abs(vx) > Math.abs(vy)) {
                   browse(vx < 0 ? 1 : -1);
                   return true;
                 }
@@ -5323,12 +5415,30 @@ public final class MainActivity extends ComponentActivity
 
               @Override
               public boolean onDoubleTap(MotionEvent e) {
-                okKey();
+                if (playZoom > 1.05f) {
+                  playZoom = 1f;
+                  playPanX = 0f;
+                  playPanY = 0f;
+                  applyPlayMatrix();
+                  updatePlayHeader();
+                } else {
+                  float cx = playImage != null ? playImage.getWidth() * 0.5f : e.getX();
+                  float cy = playImage != null ? playImage.getHeight() * 0.5f : e.getY();
+                  playZoom = 2.5f;
+                  playPanX = (cx - e.getX()) * 1.5f;
+                  playPanY = (cy - e.getY()) * 1.5f;
+                  applyPlayMatrix();
+                  updatePlayHeader();
+                }
                 return true;
               }
             });
     box.setOnTouchListener(
         (v, e) -> {
+          if (v.getParent() != null && playZoom > 1.01f) {
+            v.getParent().requestDisallowInterceptTouchEvent(true);
+          }
+          pinchDetector.onTouchEvent(e);
           gestures.onTouchEvent(e);
           if (e.getActionMasked() == MotionEvent.ACTION_UP) v.performClick();
           return true;
@@ -5340,17 +5450,37 @@ public final class MainActivity extends ComponentActivity
     if (!"play".equals(mode) || playList.isEmpty() || playImage == null) return;
     playIndex = Math.max(0, Math.min(playList.size() - 1, playIndex));
     PhotoStore.Photo p = playList.get(playIndex);
+    playZoom = 1f;
+    playPanX = 0f;
+    playPanY = 0f;
     playImage.setImageDrawable(null);
-    loadImage(playImage, p.image, 1600);
+    final ImageView targetView = playImage;
+    files.execute(
+        () -> {
+          Bitmap bitmap = store.thumbnail(p.image, 3200);
+          runOnUiThread(
+              () -> {
+                if (!isDestroyed() && targetView == playImage && targetView.isAttachedToWindow()) {
+                  targetView.setImageBitmap(bitmap);
+                  applyPlayMatrix();
+                } else if (bitmap != null) {
+                  bitmap.recycle();
+                }
+              });
+        });
     JSONObject r = p.metadata.optJSONObject("recipe");
-    playInfo.setText(
-        (playIndex + 1) + " / " + playList.size() + "    "
+    playBaseInfo =
+        (playIndex + 1)
+            + " / "
+            + playList.size()
+            + "    "
             + (r == null ? "PHOTO" : r.optString("name").toUpperCase(Locale.ROOT))
             + (p.metadata.has("bracket") ? "  ·  FS BKT " + p.metadata.optString("bracket") : "")
             + (p.metadata.has("focusBracketSummary")
                 ? "  ·  FOCUS BKT " + p.metadata.optString("focusBracketSummary")
                 : "")
-            + (p.dng != null ? "  ·  DNG" : ""));
+            + (p.dng != null ? "  ·  DNG" : "");
+    updatePlayHeader();
     playReceipt.setText(receiptText(p));
   }
 
