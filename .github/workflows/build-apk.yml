@@ -123,6 +123,16 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
+      - name: Type-check the iOS sources
+        shell: bash
+        run: |
+          set +e
+          python3 tools/ios-typecheck.py
+          CODE=$?
+          if [ "$CODE" -ne 0 ]; then
+            echo "::error title=iOS type-check failed::swiftc could not resolve a name in the iOS sources"
+          fi
+          exit "$CODE"
       - name: Install XcodeGen if needed
         shell: bash
         run: |

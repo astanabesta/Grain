@@ -213,6 +213,9 @@ printf 'sdk.dir=%s\n' "$ANDROID_HOME" > local.properties
 # Run syntax/math smoke tests (no Android SDK needed)
 bash tools/check-source.sh
 
+# Type-check the iOS sources without a Mac (catches unresolved names)
+python3 tools/ios-typecheck.py
+
 # Run full unit test suite, Android Lint, and build release APK
 gradle :app:testDebugUnitTest :app:lintDebug :app:assembleRelease
 ```
@@ -265,7 +268,7 @@ app/src/test/java/dev/grain/photo/
   BlackoutViewfinderTest.java   Robolectric blackout eyepiece & touch-routing tests
   AppUpdaterTest.java           OTA release parsing & HyperOS/MIUI fallback tests
 docs/                           Deep-dive technical & calibration documentation
-tools/                          SDK-free syntax/math verifier & desktop RAW CLI harness
+tools/                          SDK-free syntax/math verifier, iOS type-check & desktop RAW CLI harness
 ```
 
 ---
