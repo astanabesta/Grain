@@ -322,6 +322,7 @@ public struct CameraMenuOverlayView: View {
                     let all = DriveSetting.allCases
                     let cur = all.firstIndex(of: camera.driveSetting) ?? 0
                     camera.driveSetting = all[(cur + 1) % all.count]
+                    camera.savePreferences()
                 },
                 MenuRow(title: "FLASH MODE", value: camera.flashSetting.label) {
                     let all = FlashSetting.allCases
@@ -702,6 +703,15 @@ public struct DarkroomGalleryView: View {
                     .foregroundColor(GrainPalette.warmIvory.opacity(0.88))
                     .lineLimit(1)
                     .truncationMode(.middle)
+                if entry.isHiRes {
+                    Text("36MP")
+                        .font(.custom("AvenirNextCondensed-Bold", size: 9.5))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1.5)
+                        .background(GrainPalette.orange.opacity(0.28))
+                        .foregroundColor(GrainPalette.warmIvory)
+                        .cornerRadius(3)
+                }
                 if entry.dngURL != nil {
                     Text("RAW")
                         .font(.custom("AvenirNextCondensed-Bold", size: 9.5))

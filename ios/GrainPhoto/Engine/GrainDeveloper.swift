@@ -364,6 +364,367 @@ public enum GrainDeveloper {
 
     // MARK: - Decoding (Hardware Bayer RAW DNG + Non-Pro iPhone Scene-Linear Fallback)
 
+    public static func decodeFrameForHiRes(
+        rawDngData: Data?,
+        fallbackImageData: Data?,
+        preferRaw: Bool
+    ) -> (width: Int, height: Int, rgb: [Float], usedRaw: Bool)? {
+        if preferRaw, let rawData = rawDngData {
+            if let rawFilter = CIRAWFilter(imageData: rawData, identifierHint: "com.adobe.raw-image") {
+                rawFilter.boostAmount = 0.0
+                rawFilter.boostShadowAmount = 0.0
+                rawFilter.localToneMapAmount = 0.0
+                rawFilter.colorNoiseReductionAmount = 0.25
+                // Minimal luminance NR on individual RAWs because 4-frame stacking cuts shot noise by 2x
+                // while preserving genuine optical sub-pixel detail.
+                rawFilter.luminanceNoiseReductionAmount = 0.04
+                rawFilter.sharpnessAmount = 0.0
+                if let ciImg = rawFilter.outputImage,
+                   let decoded = renderCIImageToLinearRec2020(ciImg, isAlreadyLinearRaw: true) {
+                    return (decoded.width, decoded.height, decoded.rgb, true)
+                }
+            }
+        }
+        if let imgData = fallbackImageData ?? rawDngData,
+           let decoded = decodeStandardImageToSceneLinearRec2020(imageData: imgData, maxDimension: 4200) {
+            return (decoded.width, decoded.height, decoded.rgb, false)
+        }
+        return nil
+    }
+
+    /// Low-memory strip-tiled 36 MP developer for `HiResAccumulator` (keeps peak RAM < ~365 MB on 3 GB iPhones).
+    public static func developHiRes(
+        accumulator: HiResAccumulator,
+        film: GrainFilm,
+        tuning: FilmTuning,
+        aspectRatio: String,
+        userEv: Float,
+        captureMeta: [String: Any]
+    ) -> DevelopedOutput? {
+        let startTime = CFAbsoluteTimeGetCurrent()
+        let width = accumulator.actualOutWidth
+        let height = accumulator.actualOutHeight
+        let frames = max(1, accumulator.framesAdded)
+        let usedTrueRaw = accumulator.usedTrueRaw
+        let shifts = accumulator.shiftsSummary
+        guard width > 16, height > 16, accumulator.accRgb.count == width * height * 3 else {
+            return nil
+        }
+
+        let (gainR, gainG, gainB) = whiteBalanceGains(film: film, tuning: tuning, usedTrueRaw: usedTrueRaw)
+        let drStops: Float = tuning.dynamicRange == 400 ? 1.0 : (tuning.dynamicRange == 200 ? 0.5 : 0.0)
+        let profileEv: Float = (film.sensorProfile == .cinestill800T ? -0.35 : 0.0)
+        let exposureScale = powf(2.0, userEv + profileEv - drStops * 0.35)
+        let invCode = 1.0 / (Float(frames) * HiResAccumulator.oneLinear)
+
+        // Precompute 1/8-scale linear Halation, Bloom & Clarity maps (~2 MB total)
+        let effHalation = max(tuning.halation, film.sensorProfile == .cinestill800T ? 4 : 0)
+        let effBloom = max(tuning.bloom, film.sensorProfile == .cinestill800T ? 2 : 0)
+        let qw = max(8, width / 8)
+        let qh = max(8, height / 8)
+        var qHalo = [Float](repeating: 0, count: qw * qh)
+        var qBloom = [Float](repeating: 0, count: qw * qh)
+        var qLuma = [Float](repeating: 0, count: qw * qh)
+        let thresh: Float = film.sensorProfile == .cinestill800T ? 0.42 : 0.58
+
+        accumulator.accRgb.withUnsafeBufferPointer { accPtr in
+            guard let aBase = accPtr.baseAddress else { return }
+            for qy in 0..<qh {
+                let sy = min(height - 1, qy * 8 + 3)
+                for qx in 0..<qw {
+                    let sx = min(width - 1, qx * 8 + 3)
+                    let o = (sy * width + sx) * 3
+                    let rl = Float(aBase[o]) * invCode * gainR * exposureScale
+                    let gl = Float(aBase[o + 1]) * invCode * gainG * exposureScale
+                    let bl = Float(aBase[o + 2]) * invCode * gainB * exposureScale
+                    let lum = 0.2126 * rl + 0.7152 * gl + 0.0722 * bl
+                    qLuma[qy * qw + qx] = min(1.0, sqrtf(max(0, lum)))
+                    if lum > thresh {
+                        let ex = lum - thresh
+                        qHalo[qy * qw + qx] = ex
+                        qBloom[qy * qw + qx] = ex * 0.65
+                    }
+                }
+            }
+        }
+
+        let haloBlur = effHalation > 0 ? boxBlur2D(qHalo, w: qw, h: qh, radius: max(2, min(qw, qh) / 34)) : nil
+        let bloomBlur = effBloom > 0 ? boxBlur2D(qBloom, w: qw, h: qh, radius: max(3, min(qw, qh) / 18)) : nil
+        let clarityBlur = tuning.clarity != 0 ? boxBlur2D(qLuma, w: qw, h: qh, radius: max(2, min(qw, qh) / 26)) : nil
+        let haloAmt = Float(effHalation) * (film.sensorProfile == .cinestill800T ? 0.082 : 0.055)
+        let bloomAmt = Float(effBloom) * 0.038
+        let clAmt = Float(tuning.clarity) * 0.058
+
+        let lut = LutVault.shared.lut(for: film.simulationKey)
+        let toneLUT = buildToneTable(film: film, tuning: tuning, drStops: drStops)
+        let isS709 = (film.kind == .sonyS709)
+        let isMono = (film.simulationKey == "ACROS")
+        let monoFilter = film.monochromeFilter
+        let colorStrength = tuning.color
+        let cce = tuning.colorChromeEffect
+        let fxb = tuning.colorChromeBlue
+        let profile = film.sensorProfile
+        let grainRough = tuning.grainRoughness
+        let grainLarge = tuning.grainSize > 0
+        let grainStrength: Float = grainRough > 0 ? ((grainRough == 2 ? 0.042 : 0.023) * (grainLarge ? 1.18 : 1.0)) : 0
+        let deconvAmt: Float = frames >= 4 ? (0.34 + Float(max(-2, tuning.sharpness)) * 0.04) : 0.18
+
+        // Allocate final 8-bit RGBA sRGB buffer (144 MB at 36 MP) and process in parallel 128-row strips
+        var rgbaOut = [UInt8](repeating: 255, count: width * height * 4)
+        let stripH = 128
+        let numStrips = (height + stripH - 1) / stripH
+
+        accumulator.accRgb.withUnsafeBufferPointer { accPtr in
+            rgbaOut.withUnsafeMutableBufferPointer { outPtr in
+                guard let aBase = accPtr.baseAddress, let oBase = outPtr.baseAddress else { return }
+
+                DispatchQueue.concurrentPerform(iterations: numStrips) { stripIdx in
+                    let ys = stripIdx * stripH
+                    let ye = min(height, ys + stripH)
+                    var rngSeed: UInt64 = UInt64(stripIdx * 73856093 ^ width * 19349663) &+ 0x9e3779b97f4a7c15
+
+                    @inline(__always)
+                    func nextGrain(gx: Int, gy: Int) -> Float {
+                        // Deterministic spatial hash at 2x2 / 3x3 clump scale so 36 MP film grain matches 35mm clump size
+                        var z = UInt64(gx &* 374761393 &+ gy &* 668265263) ^ rngSeed
+                        z = (z ^ (z >> 30)) &* 0xbf58476d1ce4e5b9
+                        z = (z ^ (z >> 27)) &* 0x94d049bb133111eb
+                        z = z ^ (z >> 31)
+                        let u1 = Float(z & 0xffff) / 65535.0
+                        let u2 = Float((z >> 16) & 0xffff) / 65535.0
+                        let u3 = Float((z >> 32) & 0xffff) / 65535.0
+                        return (u1 + u2 + u3) - 1.5
+                    }
+
+                    for y in ys..<ye {
+                        let yM1 = max(0, y - 1)
+                        let yP1 = min(height - 1, y + 1)
+                        let fy = (Float(y) + 0.5) / Float(height) * Float(qh) - 0.5
+                        let qy0 = max(0, min(qh - 1, Int(floorf(fy))))
+                        let qy1 = min(qh - 1, qy0 + 1)
+                        let wy = max(0, min(1, fy - Float(qy0)))
+
+                        for x in 0..<width {
+                            let xM1 = max(0, x - 1)
+                            let xP1 = min(width - 1, x + 1)
+                            let p = (y * width + x) * 3
+
+                            // Unpack + 1-pass edge-protected optical PSF deconvolution
+                            var rl = Float(aBase[p]) * invCode
+                            var gl = Float(aBase[p + 1]) * invCode
+                            var bl = Float(aBase[p + 2]) * invCode
+
+                            let blurG = 0.25 * Float(
+                                Int(aBase[(y * width + xM1) * 3 + 1]) +
+                                Int(aBase[(y * width + xP1) * 3 + 1]) +
+                                Int(aBase[(yM1 * width + x) * 3 + 1]) +
+                                Int(aBase[(yP1 * width + x) * 3 + 1])
+                            ) * invCode
+                            let det = gl - blurG
+                            let absD = abs(det)
+                            if absD > 0.0025 {
+                                let gate = min(1.0, (absD - 0.0025) / 0.012)
+                                let hiRoll: Float = gl >= 1.5 ? max(0, (2.0 - gl) / 0.5) : 1.0
+                                let boost = det * deconvAmt * gate * hiRoll
+                                rl = max(0, rl + boost)
+                                gl = max(0, gl + boost)
+                                bl = max(0, bl + boost)
+                            }
+
+                            rl = max(0, rl * gainR * exposureScale)
+                            gl = max(0, gl * gainG * exposureScale)
+                            bl = max(0, bl * gainB * exposureScale)
+
+                            let fx = (Float(x) + 0.5) / Float(width) * Float(qw) - 0.5
+                            let qx0 = max(0, min(qw - 1, Int(floorf(fx))))
+                            let qx1 = min(qw - 1, qx0 + 1)
+                            let wx = max(0, min(1, fx - Float(qx0)))
+
+                            if let hb = haloBlur {
+                                let h00 = hb[qy0 * qw + qx0], h10 = hb[qy0 * qw + qx1]
+                                let h01 = hb[qy1 * qw + qx0], h11 = hb[qy1 * qw + qx1]
+                                let hv = (h00 + (h10 - h00) * wx) * (1 - wy) + (h01 + (h11 - h01) * wx) * wy
+                                rl += hv * haloAmt * 1.00
+                                gl += hv * haloAmt * 0.27
+                                bl += hv * haloAmt * 0.04
+                            }
+                            if let bb = bloomBlur {
+                                let b00 = bb[qy0 * qw + qx0], b10 = bb[qy0 * qw + qx1]
+                                let b01 = bb[qy1 * qw + qx0], b11 = bb[qy1 * qw + qx1]
+                                let bv = (b00 + (b10 - b00) * wx) * (1 - wy) + (b01 + (b11 - b01) * wx) * wy
+                                rl += bv * bloomAmt * 1.04
+                                gl += bv * bloomAmt * 0.98
+                                bl += bv * bloomAmt * 0.90
+                            }
+
+                            let rLog: Float
+                            let gLog: Float
+                            let bLog: Float
+                            if isS709 {
+                                rLog = ColorMathEngine.sLog3Encode(rl)
+                                gLog = ColorMathEngine.sLog3Encode(gl)
+                                bLog = ColorMathEngine.sLog3Encode(bl)
+                            } else {
+                                rLog = applyToneTable(ColorMathEngine.fLog2Encode(rl), table: toneLUT)
+                                gLog = applyToneTable(ColorMathEngine.fLog2Encode(gl), table: toneLUT)
+                                bLog = applyToneTable(ColorMathEngine.fLog2Encode(bl), table: toneLUT)
+                            }
+
+                            var (rs, gs, bs) = lut.lookup(r: rLog, g: gLog, b: bLog)
+
+                            if isMono {
+                                var mono = 0.299 * rs + 0.587 * gs + 0.114 * bs
+                                if monoFilter == "Y" { mono = 0.38 * rs + 0.56 * gs + 0.06 * bs }
+                                else if monoFilter == "R" { mono = 0.62 * rs + 0.34 * gs + 0.04 * bs }
+                                else if monoFilter == "G" { mono = 0.20 * rs + 0.72 * gs + 0.08 * bs }
+                                rs = mono; gs = mono; bs = mono
+                            } else {
+                                var linR = ColorMathEngine.srgbDecode(rs)
+                                var linG = ColorMathEngine.srgbDecode(gs)
+                                var linB = ColorMathEngine.srgbDecode(bs)
+                                var (L, a, bCh) = ColorMathEngine.linearSrgbToOklab(r: linR, g: linG, b: linB)
+                                let chroma = hypotf(a, bCh)
+                                if chroma > 1e-4 {
+                                    let hue = atan2f(bCh, a)
+                                    let skinAlign = max(0, cosf(hue - 0.85))
+                                    let skinWeight = powf(skinAlign, 4.0) * min(1.0, chroma * 9.0)
+                                    var satGain: Float = 1.0 + colorStrength * 0.072
+                                    if skinWeight > 0.1 && colorStrength > 0 {
+                                        satGain = 1.0 + (satGain - 1.0) * (1.0 - 0.42 * skinWeight)
+                                    }
+                                    if cce > 0 {
+                                        let cceStrength: Float = cce == 2 ? 0.15 : 0.08
+                                        let dense = min(1.0, chroma * 6.2)
+                                        L = max(0, L * (1.0 - cceStrength * dense * (1.0 - 0.5 * skinWeight)))
+                                        satGain *= (1.0 + cceStrength * 0.45 * dense)
+                                    }
+                                    if fxb > 0 && bCh < -0.01 {
+                                        let blueWeight = min(1.0, (-bCh) * 7.5)
+                                        let fxbAmt: Float = fxb == 2 ? 0.16 : 0.09
+                                        L = max(0, L * (1.0 - fxbAmt * blueWeight))
+                                        satGain *= (1.0 + fxbAmt * 0.65 * blueWeight)
+                                    }
+                                    switch profile {
+                                    case .kodak800v3:
+                                        if hue > 1.65 && hue < 2.65 { satGain *= 0.88 }
+                                        a *= satGain; bCh *= satGain
+                                        let hiW = max(0, (L - 0.55) / 0.45)
+                                        bCh += 0.010 * hiW; a += 0.003 * hiW
+                                    case .leicaX:
+                                        satGain *= (1.06 - 0.08 * skinWeight)
+                                        a *= satGain; bCh *= satGain
+                                        L = max(0, min(1, L + (L - 0.50) * 0.045))
+                                    case .cinestill800T:
+                                        satGain *= 1.08
+                                        a *= satGain; bCh *= satGain
+                                        let shW = powf(max(0, 1.0 - L * 1.45), 1.4)
+                                        let hiW = powf(max(0, (L - 0.48) / 0.52), 1.2)
+                                        a -= 0.016 * shW; bCh -= 0.022 * shW
+                                        a += 0.010 * hiW; bCh += 0.020 * hiW
+                                    case .none:
+                                        a *= satGain; bCh *= satGain
+                                    }
+                                    (linR, linG, linB) = ColorMathEngine.oklabToLinearSrgb(L: L, a: a, b: bCh)
+                                    rs = ColorMathEngine.srgbEncode(linR)
+                                    gs = ColorMathEngine.srgbEncode(linG)
+                                    bs = ColorMathEngine.srgbEncode(linB)
+                                }
+                            }
+
+                            if let cb = clarityBlur {
+                                let lumS = 0.299 * rs + 0.587 * gs + 0.114 * bs
+                                let c00 = cb[qy0 * qw + qx0], c10 = cb[qy0 * qw + qx1]
+                                let c01 = cb[qy1 * qw + qx0], c11 = cb[qy1 * qw + qx1]
+                                let cBase = (c00 + (c10 - c00) * wx) * (1 - wy) + (c01 + (c11 - c01) * wx) * wy
+                                let delta = (lumS - cBase) * clAmt * (4.0 * lumS * (1.0 - lumS))
+                                rs = max(0, min(1, rs + delta))
+                                gs = max(0, min(1, gs + delta))
+                                bs = max(0, min(1, bs + delta))
+                            }
+
+                            if grainStrength > 0 {
+                                let clumpScale = grainLarge ? 3 : 2
+                                let gVal = nextGrain(gx: x / clumpScale, gy: y / clumpScale)
+                                let luma = 0.299 * rs + 0.587 * gs + 0.114 * bs
+                                let mask = 0.30 + 0.70 * (4.0 * luma * (1.0 - luma))
+                                let n = gVal * grainStrength * mask
+                                rs = max(0, min(1, rs + n))
+                                gs = max(0, min(1, gs + n * 0.96))
+                                bs = max(0, min(1, bs + n * 1.04))
+                            }
+
+                            let dOff = (y * width + x) * 4
+                            oBase[dOff] = UInt8(max(0, min(255, Int((rs * 255.0).rounded()))))
+                            oBase[dOff + 1] = UInt8(max(0, min(255, Int((gs * 255.0).rounded()))))
+                            oBase[dOff + 2] = UInt8(max(0, min(255, Int((bs * 255.0).rounded()))))
+                            oBase[dOff + 3] = 255
+                        }
+                    }
+                }
+            }
+        }
+
+        // Release the 216 MB UInt16 accumulator BEFORE encoding 36 MP JPEG
+        accumulator.accRgb.removeAll(keepingCapacity: false)
+
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        guard let provider = CGDataProvider(data: Data(rgbaOut) as CFData),
+              let cgImg = CGImage(
+                  width: width,
+                  height: height,
+                  bitsPerComponent: 8,
+                  bitsPerPixel: 32,
+                  bytesPerRow: width * 4,
+                  space: colorSpace,
+                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+                  provider: provider,
+                  decode: nil,
+                  shouldInterpolate: true,
+                  intent: .defaultIntent
+              ) else {
+            return nil
+        }
+        rgbaOut.removeAll(keepingCapacity: false)
+
+        var jpegData: Data?
+        autoreleasepool {
+            jpegData = encodeJpegWithExif(cgImage: cgImg, film: film, captureMeta: captureMeta)
+        }
+        guard let jpeg = jpegData else { return nil }
+        let uiImage = UIImage(cgImage: cgImg)
+        let elapsedMs = Int(((CFAbsoluteTimeGetCurrent() - startTime) * 1000.0).rounded())
+
+        let receipt: [String: Any] = [
+            "filmCode": film.code,
+            "filmName": film.name,
+            "simulation": film.simulationKey,
+            "lutSource": lut.isOfficial ? "official_cube_\(lut.size)" : "analytical_flog2_\(lut.size)",
+            "pipeline": usedTrueRaw ? "hires_4shot_bayer_raw_36mp" : "hires_4shot_scene_linear_36mp",
+            "hiResMode": "tripod_4shot_36mp",
+            "hiResFrames": frames,
+            "hiResShifts": shifts,
+            "sensorProfile": String(describing: film.sensorProfile),
+            "dimensions": "\(width)x\(height)",
+            "aspectRatio": aspectRatio,
+            "evCompensation": userEv,
+            "dynamicRange": tuning.dynamicRange == 0 ? "AUTO" : "DR\(tuning.dynamicRange)",
+            "wbMode": tuning.wbMode.rawValue,
+            "wbShift": "R\(tuning.wbShiftRed >= 0 ? "+" : "")\(tuning.wbShiftRed) B\(tuning.wbShiftBlue >= 0 ? "+" : "")\(tuning.wbShiftBlue)",
+            "highlightTone": tuning.highlightTone,
+            "shadowTone": tuning.shadowTone,
+            "color": tuning.color,
+            "clarity": tuning.clarity,
+            "grain": tuning.grainRoughness == 0 ? "OFF" : (tuning.grainRoughness == 2 ? "STRONG" : "WEAK"),
+            "halation": effHalation,
+            "bloom": effBloom,
+            "sourceURL": film.sourceURL,
+            "developMs": elapsedMs,
+            "capture": captureMeta
+        ]
+
+        return DevelopedOutput(jpegData: jpeg, previewImage: uiImage, receipt: receipt)
+    }
+
     private static func decodeRawDngToLinearRec2020(rawData: Data, maxDimension: Int) -> (width: Int, height: Int, rgb: [Float])? {
         guard let rawFilter = CIRAWFilter(imageData: rawData, identifierHint: "com.adobe.raw-image") else {
             return nil

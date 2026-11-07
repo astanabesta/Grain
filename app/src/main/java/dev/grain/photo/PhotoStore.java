@@ -437,8 +437,10 @@ public final class PhotoStore {
   public static String exportBaseName(Photo photo) {
     JSONObject r = photo.metadata == null ? null : photo.metadata.optJSONObject("recipe");
     String recipeName = r == null ? "" : r.optString("name", "");
+    boolean hiRes = photo.metadata != null && photo.metadata.has("hiResMode");
+    String label = hiRes ? (recipeName.isEmpty() ? "HiRes" : recipeName + "_HiRes") : recipeName;
     long savedAt = photo.metadata == null ? 0L : photo.metadata.optLong("savedAt", 0L);
-    return exportBaseName(recipeName, savedAt, photo.id);
+    return exportBaseName(label, savedAt, photo.id);
   }
 
   public static String exportFileName(Photo photo, boolean full) {

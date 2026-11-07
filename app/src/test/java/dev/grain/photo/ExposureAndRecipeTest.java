@@ -8,6 +8,8 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import dev.grain.photo.develop.FujiRecipe;
+import dev.grain.photo.develop.HiResMerger;
+import dev.grain.photo.develop.RawFrame;
 import java.util.Arrays;
 import org.junit.Test;
 
@@ -269,6 +271,47 @@ public class ExposureAndRecipeTest {
         PhotoStore.exportBaseName("Kodak Portra 800 v3", 1762583422123L, "1762583422123-a1b2c3d4");
     assertTrue(base, base.startsWith("Grain_Kodak_Portra_800_v3_"));
     assertTrue(base, base.endsWith("_a1b2"));
+  }
+
+  @Test
+  public void hiResMergerStacksSubPixelFramesAndTargets36Mp() {
+    int[] dims = HiResMerger.targetDimensions(4000, 3000);
+    assertEquals(0, dims[0] & 3);
+    assertEquals(0, dims[1] & 3);
+    long totalPx = (long) dims[0] * dims[1];
+    assertTrue("Expected ~36MP, got " + totalPx, totalPx >= 35_500_000L && totalPx <= 36_500_000L);
+
+    // Synthesize 4 Bayer RGGB frames (128x96 -> 256x192) with sub-pixel offsets & slanted edge
+    int w = 128, h = 96;
+    float[][] shifts = {{0f, 0f}, {0.45f, -0.30f}, {-0.35f, 0.50f}, {0.25f, 0.40f}};
+    HiResMerger.Accumulator acc = null;
+    for (int f = 0; f < 4; f++) {
+      short[] raw = new short[w * h];
+      for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+          float sx = x - shifts[f][0];
+          float sy = y - shifts[f][1];
+          // Smooth slanted edge + gentle gradient
+          float edge = 1f / (1f + (float) Math.exp(-(sx - 64f + 0.25f * (sy - 48f)) * 1.2f));
+          int c = (((y & 1) << 1) | (x & 1));
+          float chGain = c == 0 ? 0.72f : (c == 3 ? 0.55f : 0.90f);
+          float linear = (0.15f + 0.65f * edge) * chGain;
+          raw[y * w + x] = (short) Math.round(64f + linear * (1023f - 64f));
+        }
+      }
+      RawFrame rf = new RawFrame(raw, w, h, w);
+      rf.cfa = RawFrame.RGGB;
+      rf.noiseS = new double[] {1e-4, 1e-4, 1e-4, 1e-4};
+      rf.noiseO = new double[] {1e-5, 1e-5, 1e-5, 1e-5};
+      if (acc == null) acc = new HiResMerger.Accumulator(rf);
+      acc.addFrame(rf);
+    }
+    assertEquals(4, acc.framesAdded());
+    RawFrame merged = acc.finish();
+    assertEquals(256, merged.width);
+    assertEquals(192, merged.height);
+    assertTrue(merged.noiseS[0] < 3.5e-5);
+    assertTrue(acc.shiftsSummary().contains("f4:"));
   }
 
   private static Recipe findRecipe(String key) {

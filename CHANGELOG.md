@@ -8,6 +8,22 @@ one was a separate APK install on the device.
 
 ---
 
+## v0.8.0 — Tripod 4-Shot `~36 MP` High-Resolution Mode (`Android` + `iOS`)
+
+- **Selectable `HI-RES 4×` / `HI-RES 36MP` Drive Mode (`DRIVE` button & `SHOOTING MENU`)** —
+  stationary 4-shot super-resolution mode engineered specifically for tripod shooting across all
+  28 films & published recipes.
+- **4-second Tripod Settle Countdown + OIS Micro-Shift** — waits a full `4 s` after tapping the
+  shutter (cancellable by tapping shutter again) so finger and tripod vibration dampen completely,
+  locks AE & AF on Frame 1, and triggers calibrated micro-pulses (`Vibrator` / `UIImpactFeedbackGenerator`)
+  before Frames 2–4 (`+38 ms` settle) to nudge the spring-mounted OIS lens by ~`0.35–0.75 px` for
+  genuine sub-pixel phase diversity.
+- **Sub-Pixel Multi-Frame RAW Super-Resolution (`~36 MP`, `~6912 × 5184`)** — computes `4×4` tile
+  parabolic `0.05 px` sub-pixel registration, anti-ghost weights moving leaves/water back to the
+  anchor frame, cuts shadow photon shot noise by `2×` (`+1 EV` cleaner shadows), and develops the
+  merged `~36 MP` negative through Grain's full linear F-Log2 / S-Log3 + 3D LUT + `OKLab` pipeline
+  with low-RAM streaming accumulation & row-strip tiling (`Grain_<Recipe>_HiRes_<Date>_<Time>.jpg`).
+
 ## v0.7.10 — Recipe Name in Photo Filenames & File Info (`Android` + `iOS`)
 
 - **Recipe-named filenames (`Grain_<Recipe_Name>_<Date>_<Time>.jpg` / `.dng`)** — saved, exported,

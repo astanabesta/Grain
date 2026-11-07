@@ -392,7 +392,23 @@ struct RangefinderCameraScreen: View {
                                 }
                         }
 
-                        if let title = camera.toastTitle {
+                        if !camera.countdownText.isEmpty {
+                            VStack(spacing: 4) {
+                                Text(camera.countdownText)
+                                    .font(.custom("AvenirNextCondensed-Bold", size: 38))
+                                    .foregroundColor(GrainPalette.orange)
+                                    .shadow(color: .black.opacity(0.9), radius: 4)
+                                if camera.driveSetting == .hiRes4x {
+                                    Text(camera.countdownText.contains("/") ? "CAPTURING HI-RES" : (camera.countdownText == "36M" ? "MERGING 36MP" : "TRIPOD SETTLING"))
+                                        .font(.custom("AvenirNextCondensed-Bold", size: 10.5))
+                                        .tracking(1.1)
+                                        .foregroundColor(GrainPalette.warmIvory.opacity(0.9))
+                                }
+                            }
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 10)
+                            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.black.opacity(0.72)))
+                        } else if let title = camera.toastTitle {
                             VStack(spacing: 3) {
                                 Text(title)
                                     .font(.custom("AvenirNextCondensed-Bold", size: 14))
@@ -543,6 +559,13 @@ struct RangefinderCameraScreen: View {
                         .font(.custom("AvenirNextCondensed-Bold", size: 11))
                         .shadow(color: .black.opacity(0.8), radius: 2)
                     Spacer()
+                    if camera.driveSetting == .hiRes4x {
+                        Text("HR 36MP")
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(RoundedRectangle(cornerRadius: 3).fill(GrainPalette.orange.opacity(0.88)))
+                            .foregroundColor(.black)
+                    }
                     Text(camera.keepRawDng && camera.currentFilm.isRawPipeline ? "FINE+RAW" : "FINE")
                     Text(camera.aspectRatio)
                     Text("\(store.entries.count)")
@@ -648,6 +671,7 @@ struct RangefinderCameraScreen: View {
                             let all = DriveSetting.allCases
                             let cur = all.firstIndex(of: camera.driveSetting) ?? 0
                             camera.driveSetting = all[(cur + 1) % all.count]
+                            camera.savePreferences()
                             camera.showToast("DRIVE · \(camera.driveSetting.label)")
                         }
                     }

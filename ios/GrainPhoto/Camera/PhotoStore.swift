@@ -10,13 +10,15 @@ public struct RollEntry: Identifiable, Equatable {
     public let createdAt: Date
     public let filmCode: String
     public let filmName: String
+    public let isHiRes: Bool
 
     /// Human-readable filename containing the film recipe + timestamp (e.g. `Grain_Kodak_Portra_800_v3_20261108_143512_412.jpg`).
     public func exportFilename(ext: String) -> String {
         if id.hasPrefix("Grain_") && !id.hasPrefix("GRAIN_20") {
             return "\(id).\(ext)"
         }
-        let slug = PhotoStore.recipeSlug(filmName)
+        let baseSlug = PhotoStore.recipeSlug(filmName)
+        let slug = isHiRes ? (baseSlug.isEmpty ? "HiRes_36MP" : "\(baseSlug)_HiRes") : baseSlug
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd_HHmmss"
@@ -71,10 +73,14 @@ public final class PhotoStore: ObservableObject {
 
             var code = "GRAIN"
             var name = stem
+            var hiRes = stem.contains("_HiRes_")
             if let data = try? Data(contentsOf: json),
                let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 code = (obj["filmCode"] as? String) ?? code
                 name = (obj["filmName"] as? String) ?? name
+                if obj["hiResMode"] != nil {
+                    hiRes = true
+                }
             }
             loaded.append(
                 RollEntry(
@@ -84,7 +90,8 @@ public final class PhotoStore: ObservableObject {
                     receiptURL: json,
                     createdAt: created,
                     filmCode: code,
-                    filmName: name
+                    filmName: name,
+                    isHiRes: hiRes
                 )
             )
         }
@@ -130,7 +137,9 @@ public final class PhotoStore: ObservableObject {
         formatter.dateFormat = "yyyyMMdd_HHmmss_SSS"
         let stamp = formatter.string(from: Date())
         let filmLabel = (receipt["filmName"] as? String) ?? (receipt["filmCode"] as? String) ?? ""
-        let slug = Self.recipeSlug(filmLabel)
+        let isHiRes = (receipt["hiResMode"] as? String) != nil
+        let baseSlug = Self.recipeSlug(filmLabel)
+        let slug = isHiRes ? (baseSlug.isEmpty ? "HiRes_36MP" : "\(baseSlug)_HiRes") : baseSlug
         let stem = slug.isEmpty ? "Grain_\(stamp)" : "Grain_\(slug)_\(stamp)"
 
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
@@ -162,7 +171,8 @@ public final class PhotoStore: ObservableObject {
     }
 
     public func receiptText(for entry: RollEntry) -> String {
-        let header = "FILE   \(entry.exportFilename(ext: "jpg"))\(entry.dngURL != nil ? "\nRAW    \(entry.exportFilename(ext: "dng"))" : "")\nFILM   \(entry.filmName) (\(entry.filmCode))\n\n"
+        let modeLine = entry.isHiRes ? "\nMODE   HI-RES 36MP (4 FRAMES MERGED)" : ""
+        let header = "FILE   \(entry.exportFilename(ext: "jpg"))\(entry.dngURL != nil ? "\nRAW    \(entry.exportFilename(ext: "dng"))" : "")\nFILM   \(entry.filmName) (\(entry.filmCode))\(modeLine)\n\n"
         guard let data = try? Data(contentsOf: entry.receiptURL),
               let text = String(data: data, encoding: .utf8) else {
             return header + "{ \"film\": \"\(entry.filmName)\" }"
@@ -214,7 +224,8 @@ public final class PhotoStore: ObservableObject {
                         receiptURL: dstJson,
                         createdAt: item.createdAt,
                         filmCode: item.filmCode,
-                        filmName: item.filmName
+                        filmName: item.filmName,
+                        isHiRes: item.isHiRes
                     )
                 )
             }

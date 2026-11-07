@@ -59,7 +59,7 @@ Every exposure saves a machine-readable **JSON receipt** documenting what was re
 | **Phone-Sensor Calibration** | Dedicated CMOS-to-emulsion calibration on **Kodak 800 v3 (`K800`)**, **Leica X (`LCX`)**, and **CineStill 800T (`800T`)**: RAF-matched Kelvin white points, soft highlight shoulders, open Portra / grounded Leica & Vision3 shadow toes, scene-linear remjet-free red-orange halation, perceptual `OKLab` colour & `Color Chrome` pigment density, skin protection, foliage hue calibration, and hue-preserving gamut compression |
 | **Exposure & Flash** | Closed-loop **P / S / ISO / M** exposure solver (`1/4000 s` – `1 s`, `ISO 50–12800`), EV `−2…+2` (plus `0.1 EV` fine command-dial mode), AE-L, face-weighted metering, and hardware flash (`⚡ OFF / ON / AUTO / TORCH`) |
 | **Focus & Loupe** | Single / Zone / Centre / Face AF, sticky **AF-C face tracking**, AF lock, **30-step manual focus**, real-time **focus peaking**, and **`4× / 8×` Focus Check magnifier loupe** |
-| **Drive & Bracketing** | Single shot, `3 s` / `5 s` self-timer, **3-film simulation bracketing (`FS BKT`)**, and **3 / 5 / 7-frame focus bracketing (`FOCUS BKT`)** |
+| **Drive & Bracketing** | Single shot, `3 s` / `5 s` self-timer, **3-film simulation bracketing (`FS BKT`)**, **3 / 5 / 7-frame focus bracketing (`FOCUS BKT`)**, and **Tripod 4-Shot `~36 MP` High-Resolution Mode (`HI-RES 4×` / `HI-RES 36MP`)** |
 | **Darkroom Gallery** | Private on-device film roll, **multi-select batch delete** (with 7-second Undo) & **batch export** to `Pictures/Grain`, share sheet, and full per-photo technical receipts |
 | **Updates & Privacy** | Zero accounts, analytics, telemetry, or cloud uploads; optional SHA-256-verified in-app updates from GitHub Releases (with Xiaomi HyperOS / MIUI system-installer support) |
 
@@ -301,6 +301,7 @@ tools/                          SDK-free syntax/math verifier & desktop RAW CLI 
 
 | Version | Highlights |
 | --- | --- |
+| **v0.8.0** | **Tripod 4-Shot `~36 MP` High-Resolution Mode (`HI-RES 4×` / `HI-RES 36MP`)** on Android & iOS: `4 s` tripod settle countdown, haptic/Taptic OIS sub-pixel micro-shift, 4-frame RAW super-resolution merge (~`6912 × 5184`), and strip-tiled low-RAM film development |
 | **v0.7.10** | **Recipe-named photo & RAW filenames + EXIF descriptions** (`Grain_<Recipe_Name>_YYYYMMDD_HHMMSS.jpg` / `.dng`) in Apple Photos `ⓘ` File Info, Android Gallery, Share & Darkroom Roll |
 | **v0.7.9** | **iOS Bayer RAW capture hardening** (`photoQualityPrioritization = .speed` + `videoZoomFactor = 1.0` sensor crop) ensuring rock-solid 12MP `.dng` capture on **iPhone XR / XS & all iOS 16+ iPhones** |
 | **v0.7.8** | **Smooth `1×–8×` gallery photo zoom** on the rear Command slider (with drag-to-pan, pinch & double-tap) while the Focus Lever browses frames |

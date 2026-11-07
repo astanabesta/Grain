@@ -22,7 +22,9 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import dev.grain.photo.develop.CubeLut;
 import dev.grain.photo.develop.FujiRecipe;
+import dev.grain.photo.develop.HiResMerger;
 import dev.grain.photo.develop.LutPreview;
+import dev.grain.photo.develop.RawFrame;
 import dev.grain.photo.develop.TuningControl;
 import java.io.File;
 import java.util.*;
@@ -93,7 +95,9 @@ public final class MainActivity extends ComponentActivity
     50, 64, 80, 100, 125, 160, 200, 250, 320, 400, 500, 640, 800, 1000, 1250, 1600, 2000, 2500, 3200,
     4000, 5000, 6400, 8000, 10000, 12800
   };
-  private static final String[] DRIVES = {"SINGLE", "TIMER 3S", "TIMER 5S", "FS BKT", "FOCUS BKT"};
+  private static final String[] DRIVES = {
+    "SINGLE", "TIMER 3S", "TIMER 5S", "FS BKT", "FOCUS BKT", "HI-RES 4×"
+  };
   private static final String[] VIEW_MODES = {"EYE SENSOR", "EVF ONLY", "LCD ONLY"};
   private static final String[] EV_LABELS = {
     "−2", "−1⅔", "−1⅓", "−1", "−⅔", "−⅓", "0", "+⅓", "+⅔", "+1", "+1⅓", "+1⅔", "+2", "C"
@@ -145,6 +149,13 @@ public final class MainActivity extends ComponentActivity
   private float[] focusBracketPlan;
   private int focusBracketStep;
   private long focusBracketStartNs;
+  /** Tripod 4-Frame 36MP High-Resolution burst state. */
+  private boolean hiResActive, hiResSavedAeLock;
+  private int hiResStep;
+  private long hiResStartNs;
+  private HiResMerger.Accumulator hiResAccumulator;
+  private File hiResAnchorDng;
+  private byte[] hiResAnchorPhoneJpeg;
   /** In-app update state. */
   private boolean notifyUpdates = true, updateDownloading, updateFallbackTried;
   private String skippedUpdateTag = "", startupNotifiedTag = "";
@@ -1525,7 +1536,10 @@ public final class MainActivity extends ComponentActivity
     shutter.setText(String.valueOf(remaining));
     shutter.setContentDescription("Cancel timer");
     back.state.countdown = String.valueOf(remaining);
-    status.setText("Tap shutter again to cancel");
+    status.setText(
+        drive == 5
+            ? "Tripod settling (" + remaining + "s) · tap shutter to cancel"
+            : "Tap shutter again to cancel");
     main.postDelayed(() -> countdown(remaining - 1, token), 1000);
   }
 
@@ -1565,6 +1579,21 @@ public final class MainActivity extends ComponentActivity
       }
       back.toast("FOCUS BKT", "manual focus distance unavailable · single frame");
     }
+    if (drive == 5) {
+      if (r.raw && camera.rawAvailable()) {
+        hiResActive = true;
+        hiResStep = 0;
+        hiResStartNs = System.nanoTime();
+        hiResSavedAeLock = aeLock;
+        hiResAccumulator = null;
+        hiResAnchorDng = null;
+        hiResAnchorPhoneJpeg = null;
+        pushOsd();
+        runHiResStep();
+        return;
+      }
+      back.toast("HI-RES 4×", "develops from sensor RAW · shooting single frame");
+    }
     status.setText(
         r.raw
             ? (bracketFilms != null && bracketFilms.length > 1
@@ -1603,6 +1632,77 @@ public final class MainActivity extends ComponentActivity
     focusBracketPlan = null;
     focusBracketStep = 0;
     if (camera != null) camera.clearBracket();
+    saving = false;
+    busy = false;
+    if (shutter != null) {
+      shutter.setText("◉");
+      shutter.setContentDescription("Take photo");
+    }
+    pushOsd();
+  }
+
+  private void runHiResStep() {
+    if (!busy || !hiResActive || !resumed || !powerOn || camera == null) {
+      abortHiRes();
+      return;
+    }
+    final int step = hiResStep;
+    back.state.countdown = (step + 1) + "/4";
+    pushOsd();
+    Runnable fireCapture =
+        () -> {
+          if (!busy || !hiResActive || !resumed || !powerOn || camera == null) {
+            abortHiRes();
+            return;
+          }
+          status.setText("HI-RES " + (step + 1) + "/4 · capturing RAW quadrant shift…");
+          playShutterSound();
+          camera.capture(snapshot());
+        };
+    if (step == 0) {
+      if (camera.focusBracketingAvailable()) {
+        camera.prepareBracketStep(camera.currentFocusFraction(), 0, 4, fireCapture);
+      } else {
+        camera.setAeLock(true);
+        fireCapture.run();
+      }
+    } else {
+      pulseOisMicroShift(step);
+      main.postDelayed(fireCapture, 38);
+    }
+  }
+
+  /**
+   * Pulses a calibrated 14ms micro-vibration prior to frames 2..4 so the spring-mounted OIS lens
+   * element displaces by ~0.35-0.75 px even when locked rigidly on a tripod.
+   */
+  private void pulseOisMicroShift(int step) {
+    try {
+      Vibrator vib = getSystemService(Vibrator.class);
+      if (vib != null && vib.hasVibrator()) {
+        int amp = step == 1 ? 105 : step == 2 ? 145 : 125;
+        vib.vibrate(VibrationEffect.createOneShot(14, amp));
+      } else if (shutter != null) {
+        shutter.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+      }
+    } catch (Throwable ignored) {
+    }
+  }
+
+  private void abortHiRes() {
+    hiResActive = false;
+    hiResStep = 0;
+    hiResAccumulator = null;
+    if (hiResAnchorDng != null && hiResAnchorDng.exists() && !hiResAnchorDng.delete()) {
+      android.util.Log.w("Grain", "Temp HiRes DNG kept");
+    }
+    hiResAnchorDng = null;
+    hiResAnchorPhoneJpeg = null;
+    if (camera != null) {
+      camera.clearBracket();
+      camera.setAeLock(hiResSavedAeLock);
+    }
+    if (back != null) back.state.countdown = "";
     saving = false;
     busy = false;
     if (shutter != null) {
@@ -1678,6 +1778,21 @@ public final class MainActivity extends ComponentActivity
       focusBracketPlan = null;
       focusBracketStep = 0;
       if (camera != null) camera.clearBracket();
+    }
+    if (hiResActive) {
+      hiResActive = false;
+      hiResStep = 0;
+      hiResAccumulator = null;
+      if (hiResAnchorDng != null && hiResAnchorDng.exists() && !hiResAnchorDng.delete()) {
+        android.util.Log.w("Grain", "Temp HiRes DNG kept");
+      }
+      hiResAnchorDng = null;
+      hiResAnchorPhoneJpeg = null;
+      if (camera != null) {
+        camera.clearBracket();
+        camera.setAeLock(hiResSavedAeLock);
+      }
+      if (back != null) back.state.countdown = "";
     }
     saving = false;
     busy = false;
@@ -1805,6 +1920,143 @@ public final class MainActivity extends ComponentActivity
         manual != null && manual.has("developEv")
             ? (float) Math.max(-4, Math.min(4, manual.optDouble("developEv")))
             : settings.ev;
+    if (hiResActive) {
+      final int hStep = hiResStep;
+      status.setText(
+          hStep < 3
+              ? "HI-RES " + (hStep + 1) + "/4 · aligning RAW sub-pixels…"
+              : "HI-RES 4/4 · merging 36MP & developing " + filmName + "…");
+      files.execute(
+          () -> {
+            try {
+              if (hStep == 0) {
+                hiResAccumulator = new HiResMerger.Accumulator(capture.frame);
+                hiResAnchorDng = capture.dng;
+                hiResAnchorPhoneJpeg = keepRawFiles ? capture.phoneJpeg : null;
+              } else if (capture.dng != null && capture.dng.exists() && !capture.dng.delete()) {
+                android.util.Log.w("Grain", "Temp HiRes step DNG kept");
+              }
+              hiResAccumulator.addFrame(capture.frame);
+              if (hStep < 3) {
+                runOnUiThread(
+                    () -> {
+                      if (isDestroyed() || !hiResActive || !resumed || !powerOn) {
+                        abortHiRes();
+                        return;
+                      }
+                      hiResStep++;
+                      saving = false;
+                      runHiResStep();
+                    });
+                return;
+              }
+
+              // All 4 RAW frames accumulated: finalize 36MP RawFrame & free accumulator before developing
+              long mergeStart = System.nanoTime();
+              String shifts = hiResAccumulator.shiftsSummary();
+              RawFrame mergedFrame = hiResAccumulator.finish();
+              hiResAccumulator = null;
+              long mergeMs = (System.nanoTime() - mergeStart) / 1_000_000;
+
+              File keptDng = hiResAnchorDng;
+              byte[] keptPhone = hiResAnchorPhoneJpeg;
+              hiResAnchorDng = null;
+              hiResAnchorPhoneJpeg = null;
+
+              GrainCamera.RawCapture mergedCapture =
+                  new GrainCamera.RawCapture(
+                      mergedFrame,
+                      keptPhone,
+                      keptDng,
+                      capture.orientationDegrees,
+                      capture.uprightDegrees);
+
+              CubeLut lut = luts.load(film.filmSimulation);
+              long devStart = System.nanoTime();
+              RawDevelopment.Output out =
+                  RawDevelopment.develop(
+                      this,
+                      mergedCapture,
+                      film,
+                      tuned,
+                      lut,
+                      developEv,
+                      mergedFrame.exposureNs ^ System.nanoTime(),
+                      meterFaces);
+              long devMs = (System.nanoTime() - devStart) / 1_000_000;
+
+              receipt.put("hiResMode", "tripod_4shot_36mp");
+              receipt.put("hiResFrames", 4);
+              receipt.put("hiResShifts", shifts);
+              receipt.put("hiResMergeMs", mergeMs);
+              if (manual != null) receipt.put("developEv", developEv);
+              receipt.put("development", out.stats.put("totalMs", devMs));
+
+              PhotoStore.Photo saved =
+                  store.save(
+                      out.jpeg,
+                      settings.ratio,
+                      settings.zoom,
+                      settings.keepFull,
+                      receipt,
+                      keptDng,
+                      keptPhone);
+              if (keptDng != null && keptDng.exists() && !keptDng.delete()) {
+                android.util.Log.w("Grain", "Temp anchor DNG kept");
+              }
+              long totalSecMs = (System.nanoTime() - hiResStartNs) / 1_000_000;
+
+              runOnUiThread(
+                  () -> {
+                    if (isDestroyed()) return;
+                    hiResActive = false;
+                    hiResStep = 0;
+                    if (camera != null) {
+                      camera.clearBracket();
+                      camera.setAeLock(hiResSavedAeLock);
+                    }
+                    back.state.countdown = "";
+                    saving = false;
+                    busy = false;
+                    shutter.setText("◉");
+                    shutter.setContentDescription("Take photo");
+                    int w = saved.metadata.optInt("width"), h = saved.metadata.optInt("height");
+                    double mp = (w * (double) h) / 1_000_000.0;
+                    status.setText(
+                        String.format(
+                            Locale.US,
+                            "%d × %d (%.1f MP) · %s · 4-RAW Hi-Res (%.1f s)",
+                            w,
+                            h,
+                            mp,
+                            filmName,
+                            totalSecMs / 1000.0));
+                    updateThumb();
+                    syncMagnifier();
+                    message(
+                        String.format(
+                            Locale.US,
+                            "%.1f MP Hi-Res merged from 4 RAW frames · %s",
+                            mp,
+                            filmName));
+                  });
+            } catch (Throwable e) {
+              if (capture.dng != null && capture.dng.exists() && !capture.dng.delete()) {
+                android.util.Log.w("Grain", "Temp HiRes DNG kept");
+              }
+              String why =
+                  e instanceof OutOfMemoryError ? "not enough memory" : String.valueOf(e.getMessage());
+              runOnUiThread(
+                  () -> {
+                    abortHiRes();
+                    status.setText("Hi-Res merge failed · camera still ready");
+                    syncMagnifier();
+                    message("Hi-Res merge failed: " + why);
+                  });
+            }
+          });
+      return;
+    }
     int fStep = focusBracketPlan != null ? focusBracketStep : -1;
     int fTotal = focusBracketPlan != null ? focusBracketPlan.length : 0;
     status.setText(
@@ -2015,6 +2267,11 @@ public final class MainActivity extends ComponentActivity
     if (focusBracketPlan != null) {
       focusBracketPlan = null;
       focusBracketStep = 0;
+    }
+    if (hiResActive) {
+      hiResActive = false;
+      hiResStep = 0;
+      hiResAccumulator = null;
     }
     if (camera != null) {
       camera.clearBracket();
@@ -3257,7 +3514,7 @@ public final class MainActivity extends ComponentActivity
     if (timerSeconds != 3 && timerSeconds != 5) timerSeconds = 0;
     drive = preferences.getInt("drive", timerSeconds == 3 ? 1 : timerSeconds == 5 ? 2 : 0);
     if (drive < 0 || drive >= DRIVES.length) drive = 0;
-    timerSeconds = drive == 1 ? 3 : drive == 2 ? 5 : 0;
+    timerSeconds = drive == 1 ? 3 : drive == 2 ? 5 : drive == 5 ? 4 : 0;
     dispMode = Math.max(0, Math.min(1, preferences.getInt("disp", 0)));
     viewMode = Math.max(0, Math.min(2, preferences.getInt("viewMode", 0)));
     finish = Math.max(0, Math.min(2, preferences.getInt("finish", 0)));
@@ -3727,7 +3984,9 @@ public final class MainActivity extends ComponentActivity
                 ? "FS BKT"
                 : drive == 4
                     ? "BKT " + FocusMath.BKT_COUNTS[bktFramesIndex]
-                    : "◷ " + timerSeconds + "S";
+                    : drive == 5
+                        ? "HR 4×"
+                        : "◷ " + timerSeconds + "S";
     o.zoom = zoom > 1.04 ? String.format(Locale.US, "%.1f×", zoom) : "";
     o.updateAvailable = availableUpdate != null && !availableUpdate.tagName.equals(skippedUpdateTag);
     o.aeLock = aeLock;
@@ -4392,7 +4651,7 @@ public final class MainActivity extends ComponentActivity
   private void setDrive(int value) {
     if (counting) cancelTimer();
     drive = (value % DRIVES.length + DRIVES.length) % DRIVES.length;
-    timerSeconds = drive == 1 ? 3 : drive == 2 ? 5 : 0;
+    timerSeconds = drive == 1 ? 3 : drive == 2 ? 5 : drive == 5 ? 4 : 0;
     savePrefs();
     pushOsd();
   }
@@ -4413,9 +4672,11 @@ public final class MainActivity extends ComponentActivity
                     + " focus planes · "
                     + FocusMath.BKT_STEP_NAMES[bktStepMode].toLowerCase(Locale.ROOT)
                     + " step"
-                : drive == 0
-                    ? "one frame per press"
-                    : "self-timer · tap the shutter to cancel");
+                : drive == 5
+                    ? "4s tripod settle · merges 4 RAWs into 36MP"
+                    : drive == 0
+                        ? "one frame per press"
+                        : "self-timer · tap the shutter to cancel");
   }
 
   private void toggleAeLock() {
@@ -5476,6 +5737,7 @@ public final class MainActivity extends ComponentActivity
             + playList.size()
             + "    "
             + (r == null ? "PHOTO" : r.optString("name").toUpperCase(Locale.ROOT))
+            + (p.metadata.has("hiResMode") ? "  ·  HI-RES 36MP" : "")
             + (p.metadata.has("bracket") ? "  ·  FS BKT " + p.metadata.optString("bracket") : "")
             + (p.metadata.has("focusBracketSummary")
                 ? "  ·  FOCUS BKT " + p.metadata.optString("focusBracketSummary")
@@ -5509,6 +5771,9 @@ public final class MainActivity extends ComponentActivity
       String face = d.optString("faceExposure", "");
       if (!face.isEmpty()) receiptLine(s, "FACE", face.length() > 48 ? face.substring(0, 48) + "…" : face);
       if (d.has("totalMs")) receiptLine(s, "DEVELOPED", String.format(Locale.US, "%.1f s", d.optLong("totalMs") / 1000.0));
+    }
+    if (m.has("hiResMode")) {
+      receiptLine(s, "HI-RES", "4 RAW frames · " + m.optString("hiResShifts", ""));
     }
     receiptLine(s, "FS BKT", m.optString("bracket", ""));
     receiptLine(s, "FOCUS BKT", m.optString("focusBracketSummary", ""));

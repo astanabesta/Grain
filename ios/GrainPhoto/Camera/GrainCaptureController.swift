@@ -27,6 +27,7 @@ public enum DriveSetting: Int, CaseIterable {
     case timer5 = 2
     case filmBracket = 3
     case focusBracket = 4
+    case hiRes4x = 5
 
     public var label: String {
         switch self {
@@ -35,6 +36,7 @@ public enum DriveSetting: Int, CaseIterable {
         case .timer5: return "5s TIMER"
         case .filmBracket: return "FS BKT"
         case .focusBracket: return "FOCUS BKT"
+        case .hiRes4x: return "HI-RES 36MP"
         }
     }
 
@@ -45,6 +47,7 @@ public enum DriveSetting: Int, CaseIterable {
         case .timer5: return "5s"
         case .filmBracket: return "FS-B"
         case .focusBracket: return "FC-B"
+        case .hiRes4x: return "HR 4×"
         }
     }
 }
@@ -170,6 +173,7 @@ public final class GrainCaptureController: NSObject, ObservableObject {
     private let motionManager = CMMotionManager()
     private var inFlightDelegates: [Int64: PhotoCaptureHandler] = [:]
     private var meterTimer: Timer?
+    private var countdownTimer: Timer?
     private var toastWork: DispatchWorkItem?
     private var lastSceneProduct: Double = 0.008 * 100.0
     private var volumeObservation: NSKeyValueObservation?
@@ -502,14 +506,27 @@ public final class GrainCaptureController: NSObject, ObservableObject {
     // MARK: - Capture & Multi-Frame Bracketing
 
     public func triggerShutter() {
-        guard powerOn && !isCapturing else { return }
+        guard powerOn else { return }
+        if let activeTimer = countdownTimer {
+            activeTimer.invalidate()
+            countdownTimer = nil
+            countdownText = ""
+            isCapturing = false
+            showToast("TIMER CANCELLED")
+            return
+        }
+        guard !isCapturing else { return }
         switch driveSetting {
         case .single:
             captureSingleFrame(filmOverride: nil, lensPosOverride: nil)
         case .timer3:
-            runSelfTimer(seconds: 3)
+            runSelfTimer(seconds: 3) { [weak self] in
+                self?.captureSingleFrame(filmOverride: nil, lensPosOverride: nil)
+            }
         case .timer5:
-            runSelfTimer(seconds: 5)
+            runSelfTimer(seconds: 5) { [weak self] in
+                self?.captureSingleFrame(filmOverride: nil, lensPosOverride: nil)
+            }
         case .filmBracket:
             let count = FilmCatalog.all.count
             let f0 = currentFilm
@@ -520,14 +537,20 @@ public final class GrainCaptureController: NSObject, ObservableObject {
         case .focusBracket:
             showToast("FOCUS BRACKET", subtitle: "3 focus planes")
             captureFocusBracket(planes: [0.25, 0.52, 0.80])
+        case .hiRes4x:
+            showToast("HI-RES 36MP · 4s SETTLE", subtitle: "Keep tripod steady · tap shutter to cancel")
+            runSelfTimer(seconds: 4) { [weak self] in
+                self?.captureHiRes4xSequence()
+            }
         }
     }
 
-    private func runSelfTimer(seconds: Int) {
+    private func runSelfTimer(seconds: Int, onFire: @escaping () -> Void) {
         isCapturing = true
         var rem = seconds
         countdownText = "\(rem)"
-        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] t in
+        countdownTimer?.invalidate()
+        countdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] t in
             Task { @MainActor in
                 guard let self = self else { t.invalidate(); return }
                 rem -= 1
@@ -535,11 +558,185 @@ public final class GrainCaptureController: NSObject, ObservableObject {
                     self.countdownText = "\(rem)"
                 } else {
                     t.invalidate()
+                    self.countdownTimer = nil
                     self.countdownText = ""
                     self.isCapturing = false
-                    self.captureSingleFrame(filmOverride: nil, lensPosOverride: nil)
+                    onFire()
                 }
             }
+        }
+    }
+
+    private func captureHiRes4xSequence() {
+        isCapturing = true
+        let primaryFilm = currentFilm
+        let primaryTuning = tunings[primaryFilm.id] ?? FilmTuning.defaults(for: primaryFilm)
+        let ratio = aspectRatio
+        let ev = effectiveEv
+        let keepRaw = keepRawDng
+        let flash = flashSetting
+        let reqZoom = Float(max(1.0, min(5.0, zoomFactor)))
+        let accumulator = HiResAccumulator(aspectRatio: ratio, digitalZoom: reqZoom)
+        var anchorRawData: Data? = nil
+        var savedCaptureMeta: [String: Any] = [:]
+        var savedPreviewZoom: CGFloat? = nil
+
+        countdownText = "1/4"
+
+        // Lock AE, AF & unzoomed 1.0x sensor readout prior to Frame 1
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.bayerCaptureInFlight = true
+            if let dev = self.videoDevice, (try? dev.lockForConfiguration()) != nil {
+                if dev.videoZoomFactor != 1.0 {
+                    savedPreviewZoom = dev.videoZoomFactor
+                    dev.videoZoomFactor = 1.0
+                }
+                if dev.isExposureModeSupported(.locked) {
+                    dev.exposureMode = .locked
+                }
+                if dev.isFocusModeSupported(.locked) {
+                    dev.focusMode = .locked
+                }
+                dev.unlockForConfiguration()
+            }
+            if let conn = self.photoOutput.connection(with: .video), conn.videoScaleAndCropFactor != 1.0 {
+                conn.videoScaleAndCropFactor = 1.0
+            }
+
+            func finishAndCleanup(failedMessage: String?) {
+                self.sessionQueue.async {
+                    self.bayerCaptureInFlight = false
+                    if let prevZ = savedPreviewZoom, let dev = self.videoDevice,
+                       (try? dev.lockForConfiguration()) != nil {
+                        let maxZ = min(5.0, dev.activeFormat.videoMaxZoomFactor)
+                        dev.videoZoomFactor = max(1.0, min(maxZ, prevZ))
+                        dev.unlockForConfiguration()
+                    }
+                }
+                Task { @MainActor in
+                    self.countdownText = ""
+                    self.isCapturing = false
+                    self.applyExposureAndFocusState()
+                    if let msg = failedMessage {
+                        self.showToast("HI-RES FAILED", subtitle: msg)
+                    } else {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        self.showToast("36MP HI-RES SAVED", subtitle: "\(primaryFilm.name) · 4 frames merged")
+                    }
+                }
+            }
+
+            func fireStep(_ step: Int) {
+                Task { @MainActor in
+                    self.countdownText = "\(step + 1)/4"
+                    if step > 0 {
+                        // Taptic micro-pulse excites the spring-mounted OIS lens by ~0.35-0.75 px on a locked tripod
+                        let intensity: CGFloat = step == 1 ? 0.58 : (step == 2 ? 0.82 : 0.68)
+                        let gen = UIImpactFeedbackGenerator(style: .rigid)
+                        gen.prepare()
+                        gen.impactOccurred(intensity: intensity)
+                    }
+                }
+
+                let delay: TimeInterval = step == 0 ? 0.02 : 0.038
+                self.sessionQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    guard let self = self else { return }
+                    let rawTypes = self.photoOutput.availableRawPhotoPixelFormatTypes
+                    let bayerRaw = rawTypes.first(where: { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) })
+                    let settings: AVCapturePhotoSettings
+                    if primaryFilm.isRawPipeline, let rawFormat = bayerRaw {
+                        settings = AVCapturePhotoSettings(
+                            rawPixelFormatType: rawFormat,
+                            processedFormat: [AVVideoCodecKey: AVVideoCodecType.jpeg]
+                        )
+                        settings.photoQualityPrioritization = .speed
+                        settings.isHighResolutionPhotoEnabled = true
+                    } else {
+                        settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
+                        settings.isHighResolutionPhotoEnabled = true
+                        if #available(iOS 16.0, *) {
+                            settings.photoQualityPrioritization = .quality
+                        }
+                    }
+
+                    if step == 0 {
+                        if self.photoOutput.supportedFlashModes.contains(.on) && flash == .on {
+                            settings.flashMode = .on
+                        } else if self.photoOutput.supportedFlashModes.contains(.auto) && flash == .auto {
+                            settings.flashMode = .auto
+                        } else if self.photoOutput.supportedFlashModes.contains(.off) {
+                            settings.flashMode = .off
+                        }
+                        let devIso = Int((self.videoDevice?.iso ?? 100).rounded())
+                        let devSec = CMTimeGetSeconds(self.videoDevice?.exposureDuration ?? CMTimeMake(value: 1, timescale: 125))
+                        savedCaptureMeta = [
+                            "iso": devIso,
+                            "exposureSeconds": devSec,
+                            "aperture": self.apertureValue,
+                            "flash": flash.label
+                        ]
+                    } else if self.photoOutput.supportedFlashModes.contains(.off) {
+                        settings.flashMode = .off
+                    }
+
+                    let uid = settings.uniqueID
+                    let handler = PhotoCaptureHandler(uid: uid) { [weak self] rawData, processedData in
+                        guard let self = self else { return }
+                        Task { @MainActor in
+                            self.inFlightDelegates.removeValue(forKey: uid)
+                        }
+                        if step == 0 && keepRaw {
+                            anchorRawData = rawData
+                        }
+                        DispatchQueue.global(qos: .userInitiated).async {
+                            let ok = accumulator.addCapture(
+                                rawDngData: rawData,
+                                fallbackImageData: processedData,
+                                preferRaw: primaryFilm.isRawPipeline
+                            )
+                            if !ok {
+                                finishAndCleanup(failedMessage: "Frame \(step + 1) alignment failed")
+                                return
+                            }
+                            if step < 3 {
+                                fireStep(step + 1)
+                            } else {
+                                Task { @MainActor in
+                                    self.countdownText = "36M"
+                                    self.showToast("MERGING 36MP…", subtitle: primaryFilm.name)
+                                }
+                                if let out = GrainDeveloper.developHiRes(
+                                    accumulator: accumulator,
+                                    film: primaryFilm,
+                                    tuning: primaryTuning,
+                                    aspectRatio: ratio,
+                                    userEv: ev,
+                                    captureMeta: savedCaptureMeta
+                                ) {
+                                    PhotoStore.shared.saveCapture(
+                                        jpegData: out.jpegData,
+                                        rawDngData: anchorRawData,
+                                        keepRaw: keepRaw && anchorRawData != nil,
+                                        receipt: out.receipt
+                                    )
+                                    anchorRawData = nil
+                                    finishAndCleanup(failedMessage: nil)
+                                } else {
+                                    anchorRawData = nil
+                                    finishAndCleanup(failedMessage: "Could not encode 36MP image")
+                                }
+                            }
+                        }
+                    }
+                    Task { @MainActor in
+                        self.inFlightDelegates[uid] = handler
+                    }
+                    self.photoOutput.capturePhoto(with: settings, delegate: handler)
+                }
+            }
+
+            fireStep(0)
         }
     }
 
@@ -741,6 +938,7 @@ public final class GrainCaptureController: NSObject, ObservableObject {
         d.set(magnifierSetting.rawValue, forKey: "grain.magnifier")
         d.set(afArea.rawValue, forKey: "grain.afArea")
         d.set(focusMode.rawValue, forKey: "grain.focusMode")
+        d.set(driveSetting.rawValue, forKey: "grain.driveSetting")
         d.set(rollNote, forKey: "grain.rollNote")
         if let data = try? JSONEncoder().encode(tunings) {
             d.set(data, forKey: "grain.tunings")
@@ -762,6 +960,7 @@ public final class GrainCaptureController: NSObject, ObservableObject {
         magnifierSetting = MagnifierSetting(rawValue: d.integer(forKey: "grain.magnifier")) ?? .hold4x
         afArea = AfAreaSetting(rawValue: d.integer(forKey: "grain.afArea")) ?? .single
         focusMode = FocusModeSetting(rawValue: d.integer(forKey: "grain.focusMode")) ?? .afc
+        driveSetting = DriveSetting(rawValue: d.integer(forKey: "grain.driveSetting")) ?? .single
         rollNote = d.string(forKey: "grain.rollNote") ?? ""
         if let data = d.data(forKey: "grain.tunings"),
            let decoded = try? JSONDecoder().decode([String: FilmTuning].self, from: data) {
