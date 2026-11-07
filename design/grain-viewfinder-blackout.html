@@ -1,0 +1,1117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Grain — Blackout Viewfinder Prototype</title>
+<style>
+  :root {
+    --bg: #090908;
+    --panel: #131311;
+    --border: rgba(255, 255, 255, 0.09);
+    --text: #f2efe8;
+    --muted: #8e8b82;
+    --accent: #e2622f;
+    --green: #63d36e;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  body {
+    background: radial-gradient(circle at 50% 18%, #171714 0%, #070706 72%);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 20px 16px 28px;
+    gap: 16px;
+  }
+
+  .topbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    max-width: 780px;
+  }
+
+  .seg-group {
+    display: inline-flex;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 3px;
+    gap: 2px;
+  }
+
+  .seg-btn {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    padding: 6px 13px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background 150ms ease, color 150ms ease;
+  }
+
+  .seg-btn:hover {
+    color: var(--text);
+  }
+
+  .seg-btn.active {
+    background: #262622;
+    color: var(--text);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  }
+
+  .seg-btn.accent-active {
+    background: var(--accent);
+    color: #ffffff;
+  }
+
+  .stage {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Hardware phone chassis + physical volume shutter key */
+  .phone-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .vol-rail {
+    position: absolute;
+    right: -13px;
+    top: 132px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    z-index: 6;
+  }
+
+  .hw-btn {
+    width: 10px;
+    height: 52px;
+    border-radius: 0 5px 5px 0;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-left: none;
+    background: linear-gradient(180deg, #32322e, #181816);
+    cursor: pointer;
+    position: relative;
+    transition: transform 90ms ease, background 120ms ease;
+  }
+
+  .hw-btn:hover {
+    background: linear-gradient(180deg, #45453f, #22221f);
+  }
+
+  .hw-btn:active {
+    transform: translateX(-2px);
+    background: var(--accent);
+  }
+
+  .hw-label {
+    position: absolute;
+    left: 16px;
+    top: 50%;
+    transform: translateY(-50%);
+    white-space: nowrap;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--muted);
+    background: rgba(18, 18, 16, 0.9);
+    border: 1px solid var(--border);
+    padding: 3px 8px;
+    border-radius: 6px;
+    pointer-events: none;
+  }
+
+  .phone {
+    width: 356px;
+    height: 765px;
+    border-radius: 42px;
+    padding: 10px;
+    background: linear-gradient(145deg, #2b2b28 0%, #10100e 55%, #1c1c19 100%);
+    box-shadow:
+      0 28px 70px rgba(0, 0, 0, 0.78),
+      0 0 0 1px rgba(255, 255, 255, 0.1),
+      inset 0 1px 1px rgba(255, 255, 255, 0.14);
+    position: relative;
+    transition: width 240ms cubic-bezier(0.22, 1, 0.36, 1), height 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .screen {
+    width: 100%;
+    height: 100%;
+    border-radius: 33px;
+    overflow: hidden;
+    position: relative;
+    background: #000000;
+  }
+
+  canvas#camCanvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    cursor: pointer;
+  }
+
+  .hint-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    max-width: 680px;
+    text-align: center;
+    font-size: 12.5px;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+
+  .pill-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 12px;
+    border-radius: 999px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition: background 150ms ease, box-shadow 150ms ease;
+  }
+
+  .dot.live {
+    background: var(--accent);
+    box-shadow: 0 0 8px rgba(226, 98, 47, 0.75);
+  }
+
+  @media (max-width: 520px) {
+    .hw-label {
+      display: none;
+    }
+    .phone {
+      width: 320px;
+      height: 688px;
+    }
+  }
+</style>
+</head>
+<body>
+
+  <div class="topbar">
+    <div class="seg-group" role="tablist" aria-label="Viewfinder blackout layout">
+      <button class="seg-btn active" data-layout="frame" type="button">Option A · Screen Area Only</button>
+      <button class="seg-btn" data-layout="eyepiece" type="button">Option B · Top-Left Eyepiece Only</button>
+      <button class="seg-btn" data-layout="optical" type="button">Option C · Compact Optical Window</button>
+    </div>
+
+    <div class="seg-group" aria-label="Controls in blackout">
+      <button class="seg-btn active" id="hudToggle" type="button">OSD: Pure Clean</button>
+      <button class="seg-btn" id="shutterRingToggle" type="button">Shutter Ring: Hidden</button>
+    </div>
+
+    <div class="seg-group" aria-label="Quick toggle">
+      <button class="seg-btn accent-active" id="toggleBlackoutBtn" type="button">Tap Viewfinder to Test</button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="phone-wrap">
+      <div class="phone" id="phone">
+        <div class="screen">
+          <canvas id="camCanvas" width="800" height="1720"></canvas>
+        </div>
+      </div>
+
+      <div class="vol-rail">
+        <button class="hw-btn" id="volUpBtn" title="Volume Up — Shoot Photo">
+          <span class="hw-label">Vol + (Shoot)</span>
+        </button>
+        <button class="hw-btn" id="volDownBtn" title="Volume Down — Shoot Photo"></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="hint-bar">
+    <span class="pill-status">
+      <span class="dot" id="modeDot"></span>
+      <span id="modeText">Camera Body View — Click the top-left Viewfinder (or preview) to go Blackout</span>
+    </span>
+    <span id="subHint">In Blackout: everything turns pure #000000 except the live preview window. Tap inside preview to focus · Tap black area to return.</span>
+  </div>
+
+<script>
+(function () {
+  const canvas = document.getElementById("camCanvas");
+  const ctx = canvas.getContext("2d");
+
+  const W = 400;
+  const H = 860;
+  const SCALE = 2; // crisp 2x retina canvas (800x1720)
+
+  // Exact CameraBack.java portrait geometry (400 x 860 grid)
+  const RECTS = {
+    eyepiece: { x: 16, y: 12, w: 112, h: 46, r: 11 },
+    eyepieceGlass: { x: 24, y: 19, w: 96, h: 32, r: 6 },
+    lamp: { x: 137, y: 27, w: 6, h: 6 },
+    viewMode: { x: 136, y: 40, w: 40, h: 15 },
+    flashBtn: { x: 183, y: 40, w: 46, h: 15 },
+    power: { x: 316, y: 10, w: 66, h: 24 },
+    shutterDial: { x: 16, y: 68, w: 176, h: 32 },
+    isoChip: { x: 158, y: 103, w: 34, h: 13 },
+    evDial: { x: 208, y: 68, w: 176, h: 32 },
+    filmDial: { x: 16, y: 120, w: 368, h: 30 },
+    bezel: { x: 21, y: 166, w: 358, h: 472, r: 13 },
+    screen: { x: 28, y: 173, w: 344, h: 458, r: 3 },
+    // 3:4 photo image fitted inside screen (344 wide -> 458.6 -> 343.5 x 458)
+    image: { x: 28.25, y: 173, w: 343.5, h: 458, r: 3 },
+    // Option C compact centered optical rangefinder window
+    optical: { x: 36, y: 210, w: 328, h: 246, r: 8 },
+    ael: { x: 18, y: 654, w: 54, h: 22 },
+    command: { x: 84, y: 650, w: 222, h: 30 },
+    q: { x: 332, y: 645, w: 46, h: 46 },
+    memo: { x: 16, y: 700, w: 54, h: 134 },
+    drive: { x: 84, y: 706, w: 54, h: 24 },
+    play: { x: 84, y: 745, w: 54, h: 24 },
+    disp: { x: 78, y: 784, w: 66, h: 24 },
+    shutter: { x: 160, y: 698, w: 116, h: 116 },
+    lever: { x: 302, y: 700, w: 56, h: 56 },
+    ok: { x: 304, y: 770, w: 52, h: 52 }
+  };
+
+  const FILMS = [
+    { code: "BKD", name: "Bright Kodak", tint: [255, 224, 172], warmth: 0.16, contrast: 1.06 },
+    { code: "CC",  name: "Classic Chrome", tint: [216, 222, 214], warmth: 0.04, contrast: 1.12 },
+    { code: "NC",  name: "Classic Neg.", tint: [238, 198, 174], warmth: 0.11, contrast: 1.14 },
+    { code: "AC",  name: "Acros", tint: [225, 225, 225], warmth: 0.0, bw: true }
+  ];
+
+  let state = {
+    blackout: false,
+    blackoutProgress: 0, // 0 = camera back, 1 = pure black around viewfinder
+    layout: "frame",     // "frame" | "eyepiece" | "optical"
+    cleanHud: true,
+    showGhostShutter: false,
+    filmIdx: 0,
+    afX: 0.52,
+    afY: 0.46,
+    afLockedAt: 0,
+    shutterFlash: 0,
+    framesLeft: 36,
+    eyepiecePulse: 1
+  };
+
+  // Pre-build subtle leatherette & film grain pattern offscreen
+  const leatherCanvas = document.createElement("canvas");
+  leatherCanvas.width = 96;
+  leatherCanvas.height = 96;
+  (function buildLeather() {
+    const lctx = leatherCanvas.getContext("2d");
+    lctx.fillStyle = "#1b1c19";
+    lctx.fillRect(0, 0, 96, 96);
+    for (let i = 0; i < 900; i++) {
+      const x = (i * 37) % 96;
+      const y = (i * 73) % 96;
+      lctx.fillStyle = i % 3 === 0 ? "rgba(255,255,255,0.045)" : "rgba(0,0,0,0.28)";
+      lctx.fillRect(x, y, 1.5, 1.5);
+    }
+  })();
+
+  const grainCanvas = document.createElement("canvas");
+  grainCanvas.width = 140;
+  grainCanvas.height = 140;
+  const gctx = grainCanvas.getContext("2d");
+  function refreshGrain() {
+    const img = gctx.createImageData(140, 140);
+    const d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const v = (Math.random() * 255) | 0;
+      d[i] = v;
+      d[i + 1] = v;
+      d[i + 2] = v;
+      d[i + 3] = 24;
+    }
+    gctx.putImageData(img, 0, 0);
+  }
+  refreshGrain();
+
+  function roundRectPath(c, x, y, w, h, r) {
+    const rr = Math.min(r, w / 2, h / 2);
+    c.beginPath();
+    c.moveTo(x + rr, y);
+    c.arcTo(x + w, y, x + w, y + h, rr);
+    c.arcTo(x + w, y + h, x, y + h, rr);
+    c.arcTo(x, y + h, x, y, rr);
+    c.arcTo(x, y, x + w, y, rr);
+    c.closePath();
+  }
+
+  function lerp(a, b, t) {
+    return a + (b - a) * t;
+  }
+
+  function activeBlackoutRect() {
+    if (state.layout === "eyepiece") {
+      // Top-left viewfinder window enlarged slightly for clear optical framing while staying in the top-left eyepiece position
+      return { x: 16, y: 12, w: 136, h: 92, r: 9 };
+    }
+    if (state.layout === "optical") {
+      return RECTS.optical;
+    }
+    return RECTS.image;
+  }
+
+  function currentPreviewRect() {
+    const t = state.blackoutProgress;
+    const target = activeBlackoutRect();
+    return {
+      x: lerp(RECTS.image.x, target.x, t),
+      y: lerp(RECTS.image.y, target.y, t),
+      w: lerp(RECTS.image.w, target.w, t),
+      h: lerp(RECTS.image.h, target.h, t),
+      r: lerp(RECTS.image.r, target.r, t)
+    };
+  }
+
+  // Live animated golden-hour street/window scene rendered inside whichever preview rectangle is active
+  function drawLiveScene(c, rect, now) {
+    const film = FILMS[state.filmIdx];
+    c.save();
+    roundRectPath(c, rect.x, rect.y, rect.w, rect.h, rect.r);
+    c.clip();
+
+    const gx = rect.x;
+    const gy = rect.y;
+    const gw = rect.w;
+    const gh = rect.h;
+
+    // Sky / warm architectural backdrop
+    const sky = c.createLinearGradient(gx, gy, gx, gy + gh);
+    if (film.bw) {
+      sky.addColorStop(0, "#d8d8d6");
+      sky.addColorStop(0.48, "#8c8c88");
+      sky.addColorStop(1, "#1e1e1d");
+    } else if (film.code === "BKD") {
+      sky.addColorStop(0, "#f5d7a1");
+      sky.addColorStop(0.45, "#d89a62");
+      sky.addColorStop(1, "#231b18");
+    } else if (film.code === "CC") {
+      sky.addColorStop(0, "#cad4d0");
+      sky.addColorStop(0.46, "#8fa09a");
+      sky.addColorStop(1, "#1c2220");
+    } else {
+      sky.addColorStop(0, "#dfbfa2");
+      sky.addColorStop(0.46, "#9e7c6c");
+      sky.addColorStop(1, "#1d1819");
+    }
+    c.fillStyle = sky;
+    c.fillRect(gx, gy, gw, gh);
+
+    // Subtle breathing handheld camera micro-sway so it feels like a real live sensor feed
+    const swayX = Math.sin(now * 0.0013) * gw * 0.012;
+    const swayY = Math.cos(now * 0.0017) * gh * 0.009;
+
+    c.save();
+    c.translate(swayX, swayY);
+
+    // Sun glow
+    const sunX = gx + gw * 0.68;
+    const sunY = gy + gh * 0.28;
+    const sun = c.createRadialGradient(sunX, sunY, gw * 0.02, sunX, sunY, gw * 0.52);
+    sun.addColorStop(0, film.bw ? "rgba(255,255,255,0.85)" : "rgba(255,244,214,0.88)");
+    sun.addColorStop(0.4, film.bw ? "rgba(220,220,220,0.22)" : "rgba(255,196,120,0.26)");
+    sun.addColorStop(1, "rgba(0,0,0,0)");
+    c.fillStyle = sun;
+    c.fillRect(gx - 30, gy - 30, gw + 60, gh + 60);
+
+    // Distant city / roofline silhouettes
+    c.fillStyle = film.bw ? "#3d3d3b" : "#3a2e2a";
+    c.fillRect(gx - 20, gy + gh * 0.44, gw * 0.34, gh * 0.56);
+    c.fillRect(gx + gw * 0.27, gy + gh * 0.36, gw * 0.24, gh * 0.64);
+    c.fillRect(gx + gw * 0.74, gy + gh * 0.40, gw * 0.32, gh * 0.60);
+
+    // Warm lit cafe / apartment windows
+    c.fillStyle = film.bw ? "rgba(240,240,236,0.55)" : "rgba(255,214,142,0.62)";
+    for (let r = 0; r < 4; r++) {
+      for (let col = 0; col < 3; col++) {
+        c.fillRect(
+          gx + gw * (0.31 + col * 0.06),
+          gy + gh * (0.41 + r * 0.065),
+          gw * 0.032,
+          gh * 0.036
+        );
+      }
+    }
+
+    // Diagonal golden-hour shadow across street foreground
+    c.fillStyle = film.bw ? "#171716" : "#181412";
+    c.beginPath();
+    c.moveTo(gx - 20, gy + gh * 0.68);
+    c.lineTo(gx + gw + 20, gy + gh * 0.58);
+    c.lineTo(gx + gw + 20, gy + gh + 20);
+    c.lineTo(gx - 20, gy + gh + 20);
+    c.closePath();
+    c.fill();
+
+    // Streetlight reflection streak
+    const streak = c.createLinearGradient(gx + gw * 0.55, gy + gh * 0.62, gx + gw * 0.25, gy + gh);
+    streak.addColorStop(0, film.bw ? "rgba(255,255,255,0.26)" : "rgba(255,198,128,0.34)");
+    streak.addColorStop(1, "rgba(0,0,0,0)");
+    c.fillStyle = streak;
+    c.beginPath();
+    c.moveTo(gx + gw * 0.52, gy + gh * 0.62);
+    c.lineTo(gx + gw * 0.72, gy + gh * 0.60);
+    c.lineTo(gx + gw * 0.44, gy + gh + 10);
+    c.lineTo(gx + gw * 0.14, gy + gh + 10);
+    c.closePath();
+    c.fill();
+
+    // Walking subject silhouette in sunlit alley
+    const walk = Math.sin(now * 0.0032) * 2.2;
+    const sx = gx + gw * 0.58;
+    const sy = gy + gh * 0.56;
+    const scale = gw / 343.5;
+    c.fillStyle = "#100e0d";
+    c.beginPath();
+    c.arc(sx, sy - 22 * scale, 7.5 * scale, 0, Math.PI * 2);
+    c.fill();
+    roundRectPath(c, sx - 10 * scale, sy - 13 * scale, 20 * scale, 34 * scale, 6 * scale);
+    c.fill();
+    c.lineWidth = 5 * scale;
+    c.strokeStyle = "#100e0d";
+    c.lineCap = "round";
+    c.beginPath();
+    c.moveTo(sx - 4 * scale, sy + 20 * scale);
+    c.lineTo(sx - (7 + walk) * scale, sy + 46 * scale);
+    c.moveTo(sx + 4 * scale, sy + 20 * scale);
+    c.lineTo(sx + (7 + walk) * scale, sy + 46 * scale);
+    c.stroke();
+
+    // Long rim-lit shadow of subject
+    c.fillStyle = "rgba(0,0,0,0.42)";
+    c.beginPath();
+    c.moveTo(sx - 8 * scale, sy + 46 * scale);
+    c.lineTo(sx + 9 * scale, sy + 46 * scale);
+    c.lineTo(sx - 48 * scale, sy + 92 * scale);
+    c.lineTo(sx - 66 * scale, sy + 88 * scale);
+    c.closePath();
+    c.fill();
+
+    // Overhead tram / power wire
+    c.strokeStyle = "rgba(18,16,15,0.55)";
+    c.lineWidth = Math.max(0.8, 1.1 * scale);
+    c.beginPath();
+    c.moveTo(gx - 10, gy + gh * 0.22);
+    c.quadraticCurveTo(gx + gw * 0.5, gy + gh * 0.27, gx + gw + 10, gy + gh * 0.17);
+    c.stroke();
+
+    c.restore();
+
+    // Subtle film vignette + real-time grain
+    const vig = c.createRadialGradient(
+      gx + gw / 2, gy + gh / 2, Math.min(gw, gh) * 0.28,
+      gx + gw / 2, gy + gh / 2, Math.max(gw, gh) * 0.72
+    );
+    vig.addColorStop(0, "rgba(0,0,0,0)");
+    vig.addColorStop(1, "rgba(0,0,0,0.42)");
+    c.fillStyle = vig;
+    c.fillRect(gx, gy, gw, gh);
+
+    const pat = c.createPattern(grainCanvas, "repeat");
+    if (pat) {
+      c.fillStyle = pat;
+      c.fillRect(gx, gy, gw, gh);
+    }
+
+    // AF focus box inside preview
+    const afAge = now - state.afLockedAt;
+    const afActive = afAge < 1600;
+    const hudVisible = !state.blackout || !state.cleanHud || afActive;
+    if (hudVisible) {
+      const ax = gx + state.afX * gw;
+      const ay = gy + state.afY * gh;
+      const box = Math.max(12, Math.min(gw, gh) * 0.09);
+      c.strokeStyle = afActive ? "#63d36e" : "rgba(244,241,232,0.78)";
+      c.lineWidth = 1.3;
+      c.strokeRect(ax - box / 2, ay - box / 2, box, box);
+      c.beginPath();
+      c.moveTo(ax - 3, ay);
+      c.lineTo(ax + 3, ay);
+      c.moveTo(ax, ay - 3);
+      c.lineTo(ax, ay + 3);
+      c.stroke();
+    }
+
+    // Optional minimal HUD or normal camera OSD
+    const normalOsdAlpha = 1 - state.blackoutProgress * (state.cleanHud ? 1 : 0);
+    if (normalOsdAlpha > 0.02 && gw > 180) {
+      c.save();
+      c.globalAlpha = normalOsdAlpha;
+      // Rule-of-thirds subtle lines
+      c.strokeStyle = "rgba(255,255,255,0.22)";
+      c.lineWidth = 0.7;
+      for (let i = 1; i <= 2; i++) {
+        c.beginPath();
+        c.moveTo(gx + (gw * i) / 3, gy);
+        c.lineTo(gx + (gw * i) / 3, gy + gh);
+        c.moveTo(gx, gy + (gh * i) / 3);
+        c.lineTo(gx + gw, gy + (gh * i) / 3);
+        c.stroke();
+      }
+
+      // Top OSD bar inside image
+      c.font = "700 8.5px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+      c.fillStyle = "#f4f1e8";
+      c.strokeStyle = "rgba(244,241,232,0.8)";
+      c.lineWidth = 0.9;
+      const codeW = c.measureText(film.code).width + 7;
+      roundRectPath(c, gx + 8, gy + 8, codeW, 12, 2);
+      c.stroke();
+      c.fillText(film.code, gx + 11.5, gy + 17);
+      c.fillText(film.name, gx + 13 + codeW, gy + 17);
+
+      c.textAlign = "right";
+      c.fillText("JPG   3:4   " + state.framesLeft, gx + gw - 10, gy + 17);
+
+      // Bottom OSD exposure bar
+      const yb = gy + gh - 10;
+      c.textAlign = "left";
+      roundRectPath(c, gx + 8, yb - 9.5, 13, 12, 1.5);
+      c.fillStyle = "#f4f1e8";
+      c.fill();
+      c.fillStyle = "#111111";
+      c.fillText("P", gx + 11.5, yb - 0.5);
+
+      c.fillStyle = "#f4f1e8";
+      c.fillText("1/250   F1.8", gx + 27, yb - 0.5);
+      c.textAlign = "right";
+      c.fillText("ISO 160", gx + gw - 10, yb - 0.5);
+      c.restore();
+    }
+
+    // If Option B (top-left eyepiece peephole), draw crisp optical brightline corners inside viewfinder
+    if (state.blackoutProgress > 0.4 && (state.layout === "eyepiece" || state.layout === "optical") && !state.cleanHud) {
+      c.save();
+      c.globalAlpha = state.blackoutProgress * 0.72;
+      c.strokeStyle = "rgba(244,241,232,0.82)";
+      c.lineWidth = 1.1;
+      const m = 8;
+      const len = 12;
+      // 4 brightline rangefinder corners
+      c.beginPath();
+      c.moveTo(gx + m, gy + m + len); c.lineTo(gx + m, gy + m); c.lineTo(gx + m + len, gy + m);
+      c.moveTo(gx + gw - m - len, gy + m); c.lineTo(gx + gw - m, gy + m); c.lineTo(gx + gw - m, gy + m + len);
+      c.moveTo(gx + m, gy + gh - m - len); c.lineTo(gx + m, gy + gh - m); c.lineTo(gx + m + len, gy + gh - m);
+      c.moveTo(gx + gw - m - len, gy + gh - m); c.lineTo(gx + gw - m, gy + gh - m); c.lineTo(gx + gw - m, gy + gh - m - len);
+      c.stroke();
+      c.restore();
+    }
+
+    // Shutter curtain flash
+    if (state.shutterFlash > 0.01) {
+      c.fillStyle = "rgba(0,0,0," + Math.min(0.92, state.shutterFlash) + ")";
+      c.fillRect(gx, gy, gw, gh);
+    }
+
+    c.restore();
+
+    // Hairline glass edge in blackout mode so dark edges still feel like real optical glass
+    if (state.blackoutProgress > 0.05) {
+      c.save();
+      c.strokeStyle = "rgba(255,255,255," + (0.09 * state.blackoutProgress) + ")";
+      c.lineWidth = 0.8;
+      roundRectPath(c, rect.x + 0.4, rect.y + 0.4, rect.w - 0.8, rect.h - 0.8, rect.r);
+      c.stroke();
+      c.restore();
+    }
+  }
+
+  function drawDrum(c, r, labels, activeIndex) {
+    c.save();
+    c.fillStyle = "#6f6e69";
+    roundRectPath(c, r.x - 2, r.y - 2, r.w + 4, r.h + 4, 7);
+    c.fill();
+
+    // Orange index triangle above drum
+    c.fillStyle = "#e2622f";
+    c.beginPath();
+    c.moveTo(r.x + r.w / 2 - 3.6, r.y - 7);
+    c.lineTo(r.x + r.w / 2 + 3.6, r.y - 7);
+    c.lineTo(r.x + r.w / 2, r.y - 2.6);
+    c.closePath();
+    c.fill();
+
+    const grad = c.createLinearGradient(r.x, r.y, r.x + r.w, r.y);
+    grad.addColorStop(0, "#8c8b85");
+    grad.addColorStop(0.5, "#f4f3ee");
+    grad.addColorStop(1, "#97968f");
+    c.fillStyle = grad;
+    roundRectPath(c, r.x, r.y, r.w, r.h, 5.5);
+    c.fill();
+
+    // Knurling ticks
+    c.strokeStyle = "rgba(0,0,0,0.14)";
+    c.lineWidth = 0.8;
+    for (let x = r.x + 5; x < r.x + r.w - 4; x += 4.5) {
+      c.beginPath();
+      c.moveTo(x, r.y + 2);
+      c.lineTo(x, r.y + 6);
+      c.moveTo(x, r.y + r.h - 6);
+      c.lineTo(x, r.y + r.h - 2);
+      c.stroke();
+    }
+
+    c.font = "700 8.5px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+    c.textAlign = "center";
+    const step = r.w / 5;
+    for (let offset = -2; offset <= 2; offset++) {
+      const idx = (activeIndex + offset + labels.length) % labels.length;
+      const lx = r.x + r.w / 2 + offset * step * 0.86;
+      c.fillStyle = offset === 0 ? "#d4502a" : "rgba(42,44,39,0.68)";
+      c.fillText(labels[idx], lx, r.y + r.h / 2 + 3);
+    }
+    c.restore();
+  }
+
+  function drawKeyPill(c, r, label, round, active) {
+    c.save();
+    const g = c.createLinearGradient(0, r.y, 0, r.y + r.h);
+    if (active) {
+      g.addColorStop(0, "#e2622f");
+      g.addColorStop(1, "#b84419");
+    } else {
+      g.addColorStop(0, "#4a4b47");
+      g.addColorStop(1, "#1e1f1c");
+    }
+    c.fillStyle = g;
+    roundRectPath(c, r.x, r.y, r.w, r.h, round ? r.h / 2 : 999);
+    c.fill();
+    c.strokeStyle = "#050505";
+    c.lineWidth = 1;
+    c.stroke();
+
+    c.fillStyle = active ? "#ffffff" : "#e9e5da";
+    c.font = (round && label === "Q" ? "700 13px " : "700 6.5px ") +
+      "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+    c.textAlign = "center";
+    c.fillText(label, r.x + r.w / 2, r.y + r.h / 2 + (round && label === "Q" ? 4.5 : 2.3));
+    c.restore();
+  }
+
+  function drawCameraBody(c, now) {
+    // Leatherette lower body
+    const pat = c.createPattern(leatherCanvas, "repeat");
+    c.fillStyle = pat || "#1c1d1a";
+    c.fillRect(0, 0, W, H);
+
+    // Silver brushed top plate (0..158)
+    const plateH = 158;
+    const plate = c.createLinearGradient(0, 0, 0, plateH);
+    plate.addColorStop(0, "#f4f3ee");
+    plate.addColorStop(0.45, "#dfded7");
+    plate.addColorStop(0.8, "#c4c3bc");
+    plate.addColorStop(1, "#e3e2dc");
+    c.fillStyle = plate;
+    c.fillRect(0, 0, W, plateH);
+
+    const shadow = c.createLinearGradient(0, plateH, 0, plateH + 12);
+    shadow.addColorStop(0, "rgba(0,0,0,0.55)");
+    shadow.addColorStop(1, "rgba(0,0,0,0)");
+    c.fillStyle = shadow;
+    c.fillRect(0, plateH, W, 12);
+
+    // Top-left Viewfinder Eyepiece (the main trigger!)
+    const ep = RECTS.eyepiece;
+    const epGrad = c.createLinearGradient(0, ep.y, 0, ep.y + ep.h);
+    epGrad.addColorStop(0, "#34352f");
+    epGrad.addColorStop(1, "#0c0d0b");
+    c.fillStyle = epGrad;
+    roundRectPath(c, ep.x, ep.y, ep.w, ep.h, ep.r);
+    c.fill();
+
+    c.fillStyle = "#050505";
+    roundRectPath(c, ep.x + 5, ep.y + 5, ep.w - 10, ep.h - 10, 8);
+    c.fill();
+
+    const glass = c.createLinearGradient(ep.x, ep.y + 9, ep.x + ep.w, ep.y + ep.h - 9);
+    glass.addColorStop(0, "#31465a");
+    glass.addColorStop(0.5, "#0d141b");
+    glass.addColorStop(1, "#1c2a36");
+    c.fillStyle = glass;
+    roundRectPath(c, ep.x + 10, ep.y + 10, ep.w - 20, ep.h - 20, 5);
+    c.fill();
+
+    // Subtle glass reflection
+    c.fillStyle = "rgba(255,255,255,0.18)";
+    c.beginPath();
+    c.moveTo(ep.x + 14, ep.y + 12);
+    c.lineTo(ep.x + ep.w * 0.45, ep.y + 12);
+    c.lineTo(ep.x + ep.w * 0.30, ep.y + ep.h - 12);
+    c.lineTo(ep.x + 14, ep.y + ep.h - 12);
+    c.closePath();
+    c.fill();
+
+    // Subtle interactive invitation pulse around eyepiece before first click
+    if (state.eyepiecePulse > 0) {
+      const pulse = 0.45 + 0.45 * Math.sin(now * 0.005);
+      c.save();
+      c.strokeStyle = "rgba(226, 98, 47, " + (pulse * state.eyepiecePulse) + ")";
+      c.lineWidth = 1.6;
+      roundRectPath(c, ep.x - 2.5, ep.y - 2.5, ep.w + 5, ep.h + 5, ep.r + 2);
+      c.stroke();
+      c.restore();
+    }
+
+    // Indicator lamp
+    c.fillStyle = "#63d36e";
+    c.beginPath();
+    c.arc(RECTS.lamp.x + 3, RECTS.lamp.y + 3, 3, 0, Math.PI * 2);
+    c.fill();
+
+    drawKeyPill(c, RECTS.viewMode, "EYE", false, false);
+    drawKeyPill(c, RECTS.flashBtn, "⚡ OFF", false, false);
+
+    // Power switch
+    const pw = RECTS.power;
+    c.fillStyle = "#1d1e1b";
+    roundRectPath(c, pw.x, pw.y + 4.5, pw.w, pw.h - 9, (pw.h - 9) / 2);
+    c.fill();
+    c.fillStyle = "#f2f1ec";
+    roundRectPath(c, pw.x + pw.w - 28, pw.y, 28, pw.h, 5);
+    c.fill();
+    c.fillStyle = "#e2622f";
+    c.fillRect(pw.x + pw.w - 14.8, pw.y + 6, 1.8, pw.h - 12);
+
+    // Plate engravings
+    c.fillStyle = "#3a3c37";
+    c.font = "700 5.5px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+    c.textAlign = "center";
+    c.fillText("FLASH", 206, 35);
+    c.fillText("23MM F1.8", 274, 30);
+    c.textAlign = "left";
+    c.fillText("OFF", 318, 45);
+    c.textAlign = "right";
+    c.fillText("ON", 382, 45);
+
+    // Dials
+    drawDrum(c, RECTS.shutterDial, ["1/60", "1/125", "A", "1/250", "1/500"], 3);
+    drawDrum(c, RECTS.evDial, ["-1", "-0.3", "0", "+0.3", "+0.7"], 2);
+    drawDrum(
+      c,
+      RECTS.filmDial,
+      FILMS.map((f) => f.code + " · " + f.name.toUpperCase()),
+      state.filmIdx
+    );
+
+    c.fillStyle = "#3a3c37";
+    c.font = "700 6.5px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+    c.textAlign = "center";
+    c.fillText("SHUTTER", 96, 112);
+    c.fillText("EXPOSURE ±", 296, 112);
+
+    // ISO chip
+    c.strokeStyle = "#3a3c37";
+    c.lineWidth = 0.9;
+    roundRectPath(c, RECTS.isoChip.x, RECTS.isoChip.y, RECTS.isoChip.w, RECTS.isoChip.h, 99);
+    c.stroke();
+    c.fillText("ISO", RECTS.isoChip.x + RECTS.isoChip.w / 2, RECTS.isoChip.y + 9);
+
+    // Rear LCD bezel
+    c.fillStyle = "#0a0a09";
+    roundRectPath(c, RECTS.bezel.x, RECTS.bezel.y, RECTS.bezel.w, RECTS.bezel.h, RECTS.bezel.r);
+    c.fill();
+    c.strokeStyle = "rgba(255,255,255,0.14)";
+    c.lineWidth = 1;
+    roundRectPath(c, RECTS.bezel.x + 0.5, RECTS.bezel.y + 0.5, RECTS.bezel.w - 1, RECTS.bezel.h - 1, RECTS.bezel.r - 0.5);
+    c.stroke();
+
+    // Lower controls
+    drawKeyPill(c, RECTS.ael, "AEL/AFL", false, false);
+
+    // Command dial
+    const cmd = RECTS.command;
+    const cmdG = c.createLinearGradient(0, cmd.y, 0, cmd.y + cmd.h);
+    cmdG.addColorStop(0, "#2b2c29");
+    cmdG.addColorStop(1, "#080807");
+    c.fillStyle = cmdG;
+    roundRectPath(c, cmd.x, cmd.y, cmd.w, cmd.h, 7);
+    c.fill();
+
+    drawKeyPill(c, RECTS.q, "Q", true, false);
+    drawKeyPill(c, RECTS.drive, "DRIVE", false, false);
+    drawKeyPill(c, RECTS.play, "PLAY", false, false);
+    drawKeyPill(c, RECTS.disp, "DISP / BACK", false, false);
+    drawKeyPill(c, RECTS.ok, "MENU / OK", true, false);
+
+    // Lower body engravings
+    c.fillStyle = "#a8a59b";
+    c.font = "700 5.8px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+    c.textAlign = "center";
+    c.fillText("COMMAND", 195, 693);
+    c.textAlign = "left";
+    c.fillText("DRIVE", 86, 702);
+    c.fillText("PLAY", 86, 741);
+
+    // Film memo pocket
+    const mm = RECTS.memo;
+    c.fillStyle = "#0c0d0b";
+    roundRectPath(c, mm.x, mm.y, mm.w, mm.h, 6);
+    c.fill();
+    c.fillStyle = "#d9a33f";
+    roundRectPath(c, mm.x + 6, mm.y + 6, mm.w - 12, mm.h - 12, 2);
+    c.fill();
+    c.save();
+    c.translate(mm.x + mm.w / 2 + 3, mm.y + mm.h / 2);
+    c.rotate(-Math.PI / 2);
+    c.fillStyle = "#2b2418";
+    c.font = "700 9px Georgia, serif";
+    c.textAlign = "center";
+    c.fillText(FILMS[state.filmIdx].name, 0, 0);
+    c.restore();
+
+    // Focus joystick lever
+    const lv = RECTS.lever;
+    c.fillStyle = "#222320";
+    c.beginPath();
+    c.arc(lv.x + lv.w / 2, lv.y + lv.h / 2, lv.w / 2, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = "#454641";
+    c.beginPath();
+    c.arc(lv.x + lv.w / 2, lv.y + lv.h / 2, lv.w * 0.23, 0, Math.PI * 2);
+    c.fill();
+
+    // Silver-collar orange shutter button
+    const sh = RECTS.shutter;
+    const scx = sh.x + sh.w / 2;
+    const scy = sh.y + sh.h / 2;
+    const sr = sh.w / 2;
+    c.fillStyle = "#dcdad3";
+    c.beginPath();
+    c.arc(scx, scy, sr, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = "#111110";
+    c.beginPath();
+    c.arc(scx, scy, sr * 0.79, 0, Math.PI * 2);
+    c.fill();
+    const btnGrad = c.createRadialGradient(scx - 10, scy - 12, 4, scx, scy, sr * 0.65);
+    btnGrad.addColorStop(0, "#ff8d55");
+    btnGrad.addColorStop(1, "#c4441c");
+    c.fillStyle = btnGrad;
+    c.beginPath();
+    c.arc(scx, scy, sr * 0.63, 0, Math.PI * 2);
+    c.fill();
+  }
+
+  function render(now) {
+    // Smooth interpolation toward target blackout state
+    const target = state.blackout ? 1 : 0;
+    state.blackoutProgress += (target - state.blackoutProgress) * 0.22;
+    if (Math.abs(target - state.blackoutProgress) < 0.002) {
+      state.blackoutProgress = target;
+    }
+    if (state.shutterFlash > 0) {
+      state.shutterFlash *= 0.78;
+    }
+    if ((now | 0) % 3 === 0) refreshGrain();
+
+    ctx.save();
+    ctx.scale(SCALE, SCALE);
+
+    // Base fill
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(0, 0, W, H);
+
+    // Draw camera body underneath when not fully blacked out
+    if (state.blackoutProgress < 0.999) {
+      ctx.save();
+      ctx.globalAlpha = 1 - state.blackoutProgress;
+      drawCameraBody(ctx, now);
+      ctx.restore();
+    }
+
+    // Pure #000000 blackout mask everywhere outside the active preview window
+    if (state.blackoutProgress > 0.001) {
+      ctx.fillStyle = "rgba(0,0,0," + state.blackoutProgress.toFixed(3) + ")";
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // Live camera preview ONLY inside the active viewfinder/preview rectangle
+    const pRect = currentPreviewRect();
+    drawLiveScene(ctx, pRect, now);
+
+    // Optional whisper-subtle shutter ring in blackout mode if toggled on
+    if (state.blackoutProgress > 0.25 && state.showGhostShutter) {
+      const sh = RECTS.shutter;
+      const scx = sh.x + sh.w / 2;
+      const scy = sh.y + sh.h / 2;
+      ctx.save();
+      ctx.globalAlpha = state.blackoutProgress * 0.36;
+      ctx.strokeStyle = "#f2efe8";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.arc(scx, scy, 34, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(scx, scy, 27, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(226, 98, 47, 0.28)";
+      ctx.fill();
+      ctx.restore();
+    }
+
+    ctx.restore();
+    requestAnimationFrame(render);
+  }
+
+  function syncUiLabels() {
+    const dot = document.getElementById("modeDot");
+    const modeText = document.getElementById("modeText");
+    const toggleBtn = document.getElementById("toggleBlackoutBtn");
+    if (state.blackout) {
+      dot.classList.add("live");
+      const layoutName =
+        state.layout === "frame"
+          ? "Screen Area Cutout"
+          : state.layout === "eyepiece"
+          ? "Top-Left Eyepiece Cutout"
+          : "Compact Optical Cutout";
+      modeText.textContent = "Blackout Viewfinder Active (" + layoutName + ") — Everything else is pure #000000";
+      toggleBtn.textContent = "Exit Blackout Viewfinder";
+    } else {
+      dot.classList.remove("live");
+      modeText.textContent = "Camera Body View — Click the top-left Viewfinder (or preview) to go Blackout";
+      toggleBtn.textContent = "Enter Blackout Viewfinder";
+    }
+  }
+
+  function toggleBlackout(force) {
+    state.blackout = typeof force === "boolean" ? force : !state.blackout;
+    state.eyepiecePulse = 0;
+    syncUiLabels();
+  }
+
+  function triggerShoot() {
+    state.shutterFlash = 1;
+    state.framesLeft = Math.max(1, state.framesLeft - 1);
+  }
+
+  function hit(r, x, y) {
+    return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+  }
+
+  canvas.addEventListener("click", function (e) {
+    const bounds = canvas.getBoundingClientRect();
+    const x = ((e.clientX - bounds.left) / bounds.width) * W;
+    const y = ((e.clientY - bounds.top) / bounds.height) * H;
+
+    if (!state.blackout) {
+      // Clicking top-left Viewfinder Eyepiece -> enters Blackout Viewfinder
+      if (hit(RECTS.eyepiece, x, y)) {
+        toggleBlackout(true);
+        return;
+      }
+      // Clicking film dial cycles film recipe
+      if (hit(RECTS.filmDial, x, y)) {
+        state.filmIdx = (state.filmIdx + 1) % FILMS.length;
+        return;
+      }
+      // Clicking shutter shoots
+      if (hit(RECTS.shutter, x, y)) {
+        triggerShoot();
+        return;
+      }
+      // Clicking inside LCD preview focuses — or if Option A, let user also see focus lock
+      if (hit(RECTS.image, x, y)) {
+        state.afX = Math.max(0.12, Math.min(0.88, (x - RECTS.image.x) / RECTS.image.w));
+        state.afY = Math.max(0.12, Math.min(0.88, (y - RECTS.image.y) / RECTS.image.h));
+        state.afLockedAt = performance.now();
+        return;
+      }
+    } else {
+      const pRect = currentPreviewRect();
+      // If optional ghost shutter ring is shown and tapped, shoot
+      if (state.showGhostShutter && hit(RECTS.shutter, x, y)) {
+        triggerShoot();
+        return;
+      }
+      // Tapping inside the live viewfinder rectangle locks focus at that point
+      if (hit(pRect, x, y)) {
+        state.afX = Math.max(0.14, Math.min(0.86, (x - pRect.x) / pRect.w));
+        state.afY = Math.max(0.14, Math.min(0.86, (y - pRect.y) / pRect.h));
+        state.afLockedAt = performance.now();
+        return;
+      }
+      // Tapping anywhere in the blacked-out area returns to the normal camera body
+      toggleBlackout(false);
+    }
+  });
+
+  // Top bar layout options
+  document.querySelectorAll("[data-layout]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      document.querySelectorAll("[data-layout]").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.layout = btn.getAttribute("data-layout");
+      toggleBlackout(true);
+    });
+  });
+
+  const hudToggle = document.getElementById("hudToggle");
+  hudToggle.addEventListener("click", function () {
+    state.cleanHud = !state.cleanHud;
+    hudToggle.textContent = state.cleanHud ? "OSD: Pure Clean" : "OSD: Frame Info";
+    hudToggle.classList.toggle("active", state.cleanHud);
+  });
+
+  const shutterRingToggle = document.getElementById("shutterRingToggle");
+  shutterRingToggle.addEventListener("click", function () {
+    state.showGhostShutter = !state.showGhostShutter;
+    shutterRingToggle.textContent = state.showGhostShutter
+      ? "Shutter Ring: Subtle"
+      : "Shutter Ring: Hidden";
+    shutterRingToggle.classList.toggle("active", state.showGhostShutter);
+  });
+
+  document.getElementById("toggleBlackoutBtn").addEventListener("click", function () {
+    toggleBlackout();
+  });
+
+  document.getElementById("volUpBtn").addEventListener("click", triggerShoot);
+  document.getElementById("volDownBtn").addEventListener("click", triggerShoot);
+
+  syncUiLabels();
+  requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>

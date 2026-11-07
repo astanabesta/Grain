@@ -199,6 +199,7 @@ final class CameraBack extends ViewGroup {
     evf = value;
     requestLayout();
     body.invalidate();
+    osd.invalidate();
   }
 
   void setFinish(int value) {
@@ -467,9 +468,9 @@ final class CameraBack extends ViewGroup {
     else if (landscape) layoutLandscape(w, h, ratio);
     else layoutPortrait(w, h, ratio);
     boolean screenParts = !evf;
-    for (View v : new View[] {eyepiece, lamp, viewMode, flashBtn, power, film, shutterDial, exposure, isoChip, memo, ael, command, drive, play, lever, ok, disp})
+    for (View v : new View[] {eyepiece, lamp, viewMode, flashBtn, power, film, shutterDial, exposure, isoChip, memo, ael, command, q, drive, play, lever, ok, disp, shutter})
       v.setVisibility(screenParts ? VISIBLE : GONE);
-    evfBack.setVisibility(evf ? VISIBLE : GONE);
+    evfBack.setVisibility(GONE);
     put(body, new RectF(0, 0, w, h));
     if (u != styledU) {
       // Only when the scale changes: restyling inside measure must not request another layout.
@@ -591,24 +592,40 @@ final class CameraBack extends ViewGroup {
   }
 
   private void layoutEvf(int w, int h, double ratio) {
-    ox = 0;
-    oy = 0;
     plateHeight = 0;
-    RectF area;
     if (landscape) {
-      u = Math.min(h / 400f, w / 860f);
-      area = new RectF(118 * u, 30 * u, w - 128 * u, h - 40 * u);
-      fit(area, ratio, image);
-      put(shutter, new RectF(w - 98 * u, h / 2f - 38 * u, w - 22 * u, h / 2f + 38 * u));
-      put(evfBack, new RectF(16 * u, 14 * u, 104 * u, 40 * u));
-      put(q, new RectF(w - 72 * u, 16 * u, w - 26 * u, 62 * u));
+      if (w / 860f <= h / 400f) {
+        u = w / 860f;
+        oy = (h - 400 * u) / 2;
+      } else {
+        u = h / 400f;
+        oy = 0;
+      }
+      ox = 0;
+      image.set(d(32, 8, 152, 102));
     } else {
-      u = Math.min(w / 400f, h / 860f);
-      area = new RectF(8 * u, 50 * u, w - 8 * u, h - 132 * u);
-      fit(area, ratio, image);
-      put(shutter, new RectF(w / 2f - 40 * u, h - 112 * u, w / 2f + 40 * u, h - 32 * u));
-      put(evfBack, new RectF(16 * u, h - 86 * u, 104 * u, h - 60 * u));
-      put(q, new RectF(w - 70 * u, h - 96 * u, w - 24 * u, h - 50 * u));
+      if (w / 400f <= h / 860f) {
+        u = w / 400f;
+        ox = 0;
+      } else {
+        u = h / 860f;
+        ox = (w - 400 * u) / 2;
+      }
+      oy = 0;
+      RectF vf = d(16, 12, 136, 92);
+      WindowInsets rootInsets = getRootWindowInsets();
+      DisplayCutout cutout = rootInsets != null ? rootInsets.getDisplayCutout() : null;
+      if (cutout != null) {
+        Rect vfRound = roundRect(vf);
+        for (Rect cr : cutout.getBoundingRects()) {
+          if (Rect.intersects(cr, vfRound) && cr.bottom < h / 4) {
+            float hVf = vf.height();
+            vf.top = cr.bottom + 4 * u;
+            vf.bottom = vf.top + hVf;
+          }
+        }
+      }
+      image.set(vf);
     }
     put(osd, new RectF(0, 0, w, h));
     overlayRect.set(image);
@@ -806,13 +823,34 @@ final class CameraBack extends ViewGroup {
     @Override
     protected void onDraw(Canvas c) {
       float w = getWidth(), h = getHeight();
-      c.save();
-      if (!image.isEmpty()) c.clipOutRect(image);
       if (evf) {
+        c.save();
+        if (!image.isEmpty()) {
+          Path hole = new Path();
+          hole.addRoundRect(image, 7 * u, 7 * u, Path.Direction.CW);
+          c.clipOutPath(hole);
+        }
         c.drawColor(0xff000000);
         c.restore();
+        if (!image.isEmpty()) {
+          p.setShader(null);
+          p.setStyle(Paint.Style.STROKE);
+          p.setStrokeWidth(Math.max(1, .8f * u));
+          p.setColor(0x1affffff);
+          c.drawRoundRect(
+              image.left + .4f * u,
+              image.top + .4f * u,
+              image.right - .4f * u,
+              image.bottom - .4f * u,
+              7 * u,
+              7 * u,
+              p);
+          p.setStyle(Paint.Style.FILL);
+        }
         return;
       }
+      c.save();
+      if (!image.isEmpty()) c.clipOutRect(image);
       p.setShader(null);
       p.setColor(0xff1c1d1a);
       c.drawRect(0, 0, w, h, p);
@@ -1608,6 +1646,7 @@ final class CameraBack extends ViewGroup {
     private final ScaleGestureDetector scale;
     private float downX, downY, holdX, holdY;
     private boolean multi, holding;
+    private long evfFocusAt;
     private final Runnable holdTask;
 
     Osd(Context c) {
@@ -1634,9 +1673,14 @@ final class CameraBack extends ViewGroup {
           };
     }
 
+    private void syncImg() {
+      img.set(image.left - getLeft(), image.top - getTop(), image.right - getLeft(), image.bottom - getTop());
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     @Override
     public boolean onTouchEvent(MotionEvent e) {
+      syncImg();
       scale.onTouchEvent(e);
       switch (e.getActionMasked()) {
         case MotionEvent.ACTION_DOWN:
@@ -1676,9 +1720,18 @@ final class CameraBack extends ViewGroup {
           float dx = e.getX() - downX, dy = e.getY() - downY;
           if (multi || scale.isInProgress()) return true;
           if (Math.hypot(dx, dy) < 16 * density) {
-            if (img.contains(e.getX(), e.getY()) && img.width() > 0)
+            if (img.contains(e.getX(), e.getY()) && img.width() > 0) {
+              if (evf) {
+                evfFocusAt = SystemClock.uptimeMillis();
+                invalidate();
+                postInvalidateDelayed(1650);
+              }
               host.lcdTap(
                   e.getRawX(), e.getRawY(), (e.getX() - img.left) / img.width(), (e.getY() - img.top) / img.height());
+            } else if (evf) {
+              performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+              host.key(K_EVF_BACK, 0);
+            }
           } else if (Math.abs(dx) > 60 * density && Math.abs(dx) > 2 * Math.abs(dy))
             host.key(K_SWIPE, dx < 0 ? 1 : -1);
           return true;
@@ -1726,7 +1779,7 @@ final class CameraBack extends ViewGroup {
     @Override
     protected void onDraw(Canvas c) {
       float w = getWidth(), h = getHeight();
-      img.set(image.left - getLeft(), image.top - getTop(), image.right - getLeft(), image.bottom - getTop());
+      syncImg();
       OsdState o = state;
       if (!on) {
         p.setColor(0xff000000);
@@ -1734,7 +1787,46 @@ final class CameraBack extends ViewGroup {
         return;
       }
       long now = SystemClock.uptimeMillis();
-      float k = evf ? 1.18f : 1, fs = 8.4f * u * k, pad = 7 * u * k;
+      if (evf) {
+        if (img.width() <= 0 || img.height() <= 0) return;
+        c.save();
+        path.reset();
+        path.addRoundRect(img, 7 * u, 7 * u, Path.Direction.CW);
+        c.clipPath(path);
+        if (o.peak != null) {
+          c.drawBitmap(o.peak, null, img, null);
+        }
+        boolean tapAf = now - evfFocusAt < 1600;
+        if (tapAf || o.afState != 0) {
+          float ax = o.afArea == GrainCamera.AF_CENTER ? img.centerX() : img.left + o.afX * img.width();
+          float ay = o.afArea == GrainCamera.AF_CENTER ? img.centerY() : img.top + o.afY * img.height();
+          float box = Math.max(10 * u, Math.min(img.width(), img.height()) * .18f);
+          p.setStyle(Paint.Style.STROKE);
+          p.setStrokeWidth(Math.max(1, 1.2f * u));
+          p.setColor(o.afState == 3 ? 0xffff5a3c : GREEN);
+          c.drawRect(ax - box / 2f, ay - box / 2f, ax + box / 2f, ay + box / 2f, p);
+          p.setStrokeWidth(Math.max(1, .9f * u));
+          c.drawLine(ax - 2.4f * u, ay, ax + 2.4f * u, ay, p);
+          c.drawLine(ax, ay - 2.4f * u, ax, ay + 2.4f * u, p);
+          p.setStyle(Paint.Style.FILL);
+        }
+        if (o.mag != null) {
+          c.drawBitmap(o.mag, null, img, null);
+        }
+        if (!o.countdown.isEmpty()) {
+          text(c, o.countdown, img.centerX(), img.centerY() + 9 * u, 24 * u, 0xffff8d55, Paint.Align.CENTER);
+        }
+        if (o.busy) {
+          float run = (now % 1400) / 1400f, seg = img.width() * .28f;
+          float sx = img.left - seg + (img.width() + seg) * run;
+          p.setColor(ORANGE);
+          c.drawRect(Math.max(img.left, sx), img.bottom - 1.8f * u, Math.min(img.right, sx + seg), img.bottom, p);
+          postInvalidateDelayed(40);
+        }
+        c.restore();
+        return;
+      }
+      float k = 1, fs = 8.4f * u, pad = 7 * u;
       int white = 0xfff4f1e8;
       if (o.grid && img.width() > 0) {
         p.setColor(0x60ffffff);

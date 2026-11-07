@@ -2031,7 +2031,9 @@ public final class MainActivity extends ComponentActivity
 
   @Override
   public boolean onKeyDown(int code, KeyEvent event) {
-    if ((code == KeyEvent.KEYCODE_VOLUME_UP || code == KeyEvent.KEYCODE_VOLUME_DOWN)
+    if ((code == KeyEvent.KEYCODE_VOLUME_UP
+            || code == KeyEvent.KEYCODE_VOLUME_DOWN
+            || code == KeyEvent.KEYCODE_CAMERA)
         && "camera".equals(page)) {
       if (event.getRepeatCount() == 0) {
         if (!"camera".equals(mode)) closeOverlays();
@@ -2047,7 +2049,7 @@ public final class MainActivity extends ComponentActivity
       closeOverlays();
       return;
     }
-    if ("camera".equals(page) && evf && viewMode != 1) {
+    if ("camera".equals(page) && evf) {
       setEvf(false);
       return;
     }
@@ -4145,8 +4147,12 @@ public final class MainActivity extends ComponentActivity
         commandKey(value);
         break;
       case CameraBack.K_EYE:
-        if (viewMode == 2) back.toast("LCD ONLY", "VIEW MODE → EYE SENSOR to use the viewfinder");
-        else setEvf(!evf);
+        if (viewMode == 2) {
+          viewMode = 0;
+          savePrefs();
+          back.viewMode.setText("EYE");
+        }
+        setEvf(!evf);
         break;
       case CameraBack.K_VIEW_MODE:
         viewMode = (viewMode + 1) % VIEW_MODES.length;
@@ -4491,6 +4497,9 @@ public final class MainActivity extends ComponentActivity
 
   private void setEvf(boolean on) {
     if (on == evf || back == null) return;
+    if (on && !"camera".equals(mode)) {
+      closeOverlays();
+    }
     if (!on && viewMode == 1) {
       viewMode = 0;
       savePrefs();
