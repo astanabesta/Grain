@@ -8,3 +8,8 @@ local.properties
 .DS_Store
 
 .checks/
+ios/Payload/
+ios/*.ipa
+ios/*.xcodeproj/
+ios/Resources/Info.plist
+

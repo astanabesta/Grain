@@ -1,0 +1,59 @@
+name: GrainPhoto
+options:
+  bundleIdPrefix: dev.grain
+  deploymentTarget:
+    iOS: "16.0"
+  xcodeVersion: "16.0"
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    MARKETING_VERSION: "0.7.7"
+    CURRENT_PROJECT_VERSION: "28"
+    CODE_SIGN_IDENTITY: ""
+    CODE_SIGNING_REQUIRED: "NO"
+    CODE_SIGNING_ALLOWED: "NO"
+    ENABLE_BITCODE: "NO"
+
+targets:
+  GrainPhoto:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: GrainPhoto
+      - path: Resources/Assets.xcassets
+    info:
+      path: Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Grain
+        CFBundleName: GrainPhoto
+        CFBundleIdentifier: dev.grain.photo
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSRequiresIPhoneOS: true
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        UIStatusBarHidden: true
+        UIViewControllerBasedStatusBarAppearance: true
+        UIRequiresFullScreen: true
+        UIUserInterfaceStyle: Dark
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSCameraUsageDescription: "Grain uses the camera to frame and expose photographs with film simulations and RAW/scene-linear development."
+        NSPhotoLibraryAddUsageDescription: "Grain saves selected darkroom photographs to your Photos library only when you tap Save."
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.grain.photo
+        PRODUCT_NAME: GrainPhoto
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_FILE: Resources/Info.plist

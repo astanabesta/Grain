@@ -1,18 +1,15 @@
-## Grain Photo vVERSION — Enlarged 360° Analog Focus Lever (120Hz VSync Glide, Hold-Repeat & Spring Return)
+## Grain Photo vVERSION — Native iOS `.ipa` Release + Android `.apk`
 
-- **Already have Grain installed (v0.7.1+):** Open Grain (or **MENU → SET UP → APP UPDATE**) to install **vVERSION** directly inside the app.
-- **First-time install:** Download and install **Grain-vVERSION.apk** below.
+- **Android (`Grain-vVERSION.apk`):** Install directly inside Grain (**MENU → SET UP → APP UPDATE**) or download **`Grain-vVERSION.apk`** below.
+- **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** Download **`Grain-iOS-vVERSION.ipa`** below and install onto any iPhone (iOS 16+) using **[Sideloadly](https://sideloadly.io/)**, **[AltStore](https://altstore.io/)**, or **[SideStore](https://sidestore.io/)** with your free Apple ID.
 
-### What's new in v0.7.6
+### What's new in v0.7.7
 
-#### 1. Larger, Tactile Fujifilm Focus Lever (`74×74` / `2.6×` Thumb-Cap Area)
-- Enlarged the focus joystick from `56×56` to **`74×74`** design units (`72×72` in landscape) with a much larger concave micro-knurled thumb cap (`2.6×` larger thumb-cap surface area), recessed gimbal cup, dynamic stem shadow, and active amber directional chevron glow.
+#### 1. Native iOS Edition (`Grain-iOS-vVERSION.ipa`) — Pro Bayer RAW + All-iPhone Scene-Linear Engine
+- Full native Swift / SwiftUI / `AVFoundation` / `CoreImage` / `OKLab` port of Grain in `ios/`:
+  - **Works on ALL iPhones (iOS 16+):** Captures hardware **Bayer RAW DNG** on RAW-capable Pro iPhones *and* runs a Display-P3 / sRGB inverse-shoulder **scene-linear F-Log2 pipeline** on standard non-Pro iPhones so every film simulation and recipe works across the entire iPhone lineup.
+  - **All 28 Films & Calibrated Recipes:** Includes all 4 instant looks, all 11 published `◆` recipes (**Reggie's Portra**, **Reggie's Superia**, **Kodak Gold 200**, **Bright Kodak**, **Kodak 800 v3 `K800`**, **Leica X `LCX`**, **Kodachrome 64**, **Pacific Blues**, **Vibrant Arizona**, **CineStill 800T `800T`** with red-orange halation, **Kodak Tri-X 400**), 12 Fujifilm simulations, and **Sony `s709`** — ready out of the box *and* upgradable with official `.zip` / `.cube` LUT packs in `MENU → I.Q.`.
+  - **Full Rangefinder Hardware UI:** Tactile Shutter / ISO / EV / Film drum dials, **72pt 360° ProMotion 120Hz analog Focus Lever**, **Pure Blackout Optical Viewfinder** (top-left eyepiece window + hardware volume-button shutter), **`4× / 8×` Focus Check loupe**, **FS & Focus Bracketing**, and **Darkroom Gallery with Multi-Select Batch Delete (7s Undo) & Save**.
 
-#### 2. Fluid 360° Analog VSync AF Gliding + Zero-Lag Reversal
-- Replaced tap-only 4-direction jumps with a **true 360-degree analog thumb stick** driven by `Choreographer` at the display's native refresh rate (`60 / 90 / 120 Hz`):
-  - **Dual-slope precision curve:** Gentle thumb tilt creeps with pinpoint precision; full tilt glides smoothly across any diagonal or cardinal angle.
-  - **Floating-origin leash:** Reversing thumb direction responds immediately with zero deadzone travel.
-  - **Smart AF unlock & HAL pacing:** Steering the joystick automatically unlocks from `AF_CENTER` / active `AF_FACE` into steerable `AF_SINGLE`, updates the OSD reticle every VSync frame, paces live Camera2 AF cleanly while moving, and locks crisp focus on release with a damped mechanical spring-back animation.
-  - **Menu / Q / Gallery hold-to-repeat:** Tilting in `Q`, `MENU`, or `PLAY` steps immediately (no waiting for lift-off) and smoothly auto-repeats while held with diagonal hysteresis.
-
-Signed with the project's personal key (certificate SHA-256 `6e073ef6…`). `SHA256SUMS.txt` verifies the APK download.
+#### 2. Unified Android + iOS Release Pipeline
+- Every release now publishes **`Grain-vVERSION.apk`**, **`Grain-iOS-vVERSION.ipa`**, and a unified **`SHA256SUMS.txt`**.

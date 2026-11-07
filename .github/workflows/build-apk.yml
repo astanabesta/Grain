@@ -1,4 +1,4 @@
-name: Build and Release Grain APK
+name: Build and Release Grain (Android APK & iOS IPA)
 on:
   workflow_dispatch:
   push:
@@ -9,12 +9,11 @@ permissions:
 concurrency:
   group: grain-${{ github.ref }}
   cancel-in-progress: true
+
 jobs:
   android:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-java@v5
@@ -36,9 +35,6 @@ jobs:
           gradle-version: '8.13'
       - name: Signing key location
         run: echo "GRAIN_KEYSTORE=$HOME/grain-signing/grain.keystore" >> "$GITHUB_ENV"
-      # One personal key for every build, so a new APK installs over the old one. It is created
-      # once, on main, and kept in the Actions cache (refreshed by every build). The optional
-      # GRAIN_DEBUG_KEYSTORE_BASE64 secret overrides it.
       - name: Restore personal signing key
         uses: actions/cache/restore@v4
         with:
@@ -98,8 +94,6 @@ jobs:
           PY
           fi
           exit "$CODE"
-      # Dev branches: upload camera-back screenshots (CameraBackScreensTest) as a workflow artifact
-      # instead of creating extra branches or bot commits in the repository.
       - name: Upload camera-back screenshots (dev branches)
         if: always() && startsWith(github.ref, 'refs/heads/dev/')
         uses: actions/upload-artifact@v4
@@ -110,12 +104,102 @@ jobs:
           retention-days: 14
       - uses: actions/upload-artifact@v4
         with:
-          name: grain-photo-${{ github.run_number }}
+          name: grain-android-apk
           path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 14
-      - name: Publish Grain GitHub Release with APK
-        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: grain-build-reports-${{ github.run_number }}
+          path: |
+            build.log
+            app/build/reports/
+            app/build/test-results/
+          if-no-files-found: ignore
+
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install XcodeGen if needed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+          xcodebuild -version
+      - name: Generate Xcode project and build unsigned iOS .ipa
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          VERSION=$(sed -n "s/.*versionName '\([^']*\)'.*/\1/p" app/build.gradle | head -1)
+          VCODE=$(sed -n "s/.*versionCode \([0-9][0-9]*\).*/\1/p" app/build.gradle | head -1)
+          cd ios
+          xcodegen generate
+          xcodebuild -project GrainPhoto.xcodeproj \
+            -scheme GrainPhoto \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$VCODE" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee ios-build.log
+          CODE=${PIPESTATUS[0]}
+          if [ "$CODE" -ne 0 ]; then
+            python3 - <<'PY'
+          from pathlib import Path
+          lines = Path('ios-build.log').read_text(errors='replace').splitlines()
+          errs = [l for l in lines if ': error:' in l or 'error:' in l.lower()][-25:]
+          msg = '\n'.join(errs if errs else lines[-50:])[-3500:]
+          print('::error title=iOS Xcode build issue::' + msg.replace('%','%25').replace('\r','%0D').replace('\n','%0A'))
+          PY
+            exit "$CODE"
+          fi
+          rm -rf Payload Grain-iOS.ipa
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/GrainPhoto.app Payload/
+          codesign --force --deep --sign - Payload/GrainPhoto.app
+          zip -qry Grain-iOS.ipa Payload
+          ls -lh Grain-iOS.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grain-ios-ipa
+          path: ios/Grain-iOS.ipa
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: grain-ios-build-log-${{ github.run_number }}
+          path: ios/ios-build.log
+          if-no-files-found: ignore
+
+  publish:
+    needs: [android, ios]
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: grain-android-apk
+          path: artifacts/android
+      - uses: actions/download-artifact@v4
+        with:
+          name: grain-ios-ipa
+          path: artifacts/ios
+      - name: Publish GitHub Release with Android APK & iOS IPA
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -127,12 +211,15 @@ jobs:
           TAG="v$VERSION"
           mkdir -p release-files
           APK="release-files/Grain-$TAG.apk"
-          cp app/build/outputs/apk/release/app-release.apk "$APK"
-          (cd release-files && sha256sum "Grain-$TAG.apk" > SHA256SUMS.txt)
+          IPA="release-files/Grain-iOS-$TAG.ipa"
+          cp artifacts/android/app-release.apk "$APK"
+          cp artifacts/ios/Grain-iOS.ipa "$IPA"
+          (cd release-files && sha256sum "Grain-$TAG.apk" "Grain-iOS-$TAG.ipa" > SHA256SUMS.txt)
+          cat release-files/SHA256SUMS.txt
           sed "s/vVERSION/$TAG/g" .github/release-notes.md > release-files/RELEASE_NOTES.md
+
           PUBLISHED=0
           : > release-files/publication.log
-          # Re-publishing a version from a newer commit replaces that release and moves its tag.
           REL_TARGET=$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq '.target_commitish' 2>/dev/null || true)
           if [ -n "$REL_TARGET" ] && [ "$REL_TARGET" != "$GITHUB_SHA" ]; then
             echo "Replacing $TAG (was $REL_TARGET)" >> release-files/publication.log
@@ -153,8 +240,9 @@ jobs:
           done
           for ATTEMPT in 1 2 3 4 5; do
             sleep "$((ATTEMPT * 4))"
-            if gh release upload "$TAG" "$APK" release-files/SHA256SUMS.txt --clobber >> release-files/publication.log 2>&1; then
-              if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "Grain-$TAG.apk"; then
+            if gh release upload "$TAG" "$APK" "$IPA" release-files/SHA256SUMS.txt --clobber >> release-files/publication.log 2>&1; then
+              NAMES=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+              if echo "$NAMES" | grep -qx "Grain-$TAG.apk" && echo "$NAMES" | grep -qx "Grain-iOS-$TAG.ipa"; then
                 PUBLISHED=1
                 break
               fi
@@ -162,21 +250,6 @@ jobs:
           done
           cat release-files/publication.log
           if [ "$PUBLISHED" -ne 1 ]; then
-            python3 - <<'PYERR'
-          from pathlib import Path
-          text=Path('release-files/publication.log').read_text(errors='replace')[-3000:]
-          print('::error title=Release publication::'+text.replace('%','%25').replace('\r','%0D').replace('\n','%0A'))
-          PYERR
             exit 1
           fi
-          printf '### Download the APK\n\n[Grain %s release](https://github.com/%s/releases/tag/%s)\n' "$TAG" "$GH_REPO" "$TAG" >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: grain-build-reports-${{ github.run_number }}
-          path: |
-            build.log
-            release-files/publication.log
-            app/build/reports/
-            app/build/test-results/
-          if-no-files-found: ignore
+          printf '### Download Grain %s\n\n- [Android APK & iOS IPA Release](https://github.com/%s/releases/tag/%s)\n' "$TAG" "$GH_REPO" "$TAG" >> "$GITHUB_STEP_SUMMARY"

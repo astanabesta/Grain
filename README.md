@@ -2,15 +2,16 @@
 
 # Grain Photo
 
-**A tactile Android camera that develops film from sensor RAW.**
+**A tactile Android & iOS camera that develops film from sensor RAW.**
 
-Rangefinder-inspired controls, capture-time Camera2 ISP looks, and Fujifilm & Sony film pipelines developed on-device from linear Bayer RAW.
+Rangefinder-inspired controls, capture-time ISP looks, and Fujifilm & Sony film pipelines developed on-device from linear RAW / scene-linear light.
 
 [▶ Watch Grain on the phone](https://github.com/user-attachments/assets/8a401c48-bb28-4abb-abd6-3a3d80443ecc)
 
 [![Build and release](https://github.com/astanabesta/Grain/actions/workflows/build-apk.yml/badge.svg?branch=main)](https://github.com/astanabesta/Grain/actions/workflows/build-apk.yml)
 [![Latest release](https://img.shields.io/github/v/release/astanabesta/Grain?include_prereleases&label=release&color=b5532a)](https://github.com/astanabesta/Grain/releases/latest)
-[![Android](https://img.shields.io/badge/Android-10%2B-3ddc84?logo=android&logoColor=white)](#compatibility-and-test-status)
+[![Android](https://img.shields.io/badge/Android-10%2B-3ddc84?logo=android&logoColor=white)](#download--install)
+[![iOS](https://img.shields.io/badge/iOS-16%2B%20(.ipa)-ffffff?logo=apple&logoColor=black)](#download--install)
 
 </div>
 
@@ -66,11 +67,17 @@ Every exposure saves a machine-readable **JSON receipt** documenting what was re
 
 ## Download & Install
 
-**Latest release:** [![Latest release](https://img.shields.io/github/v/release/astanabesta/Grain?include_prereleases&label=Grain%20APK&color=b5532a)](https://github.com/astanabesta/Grain/releases/latest) — [**Download latest APK & `SHA256SUMS.txt`**](https://github.com/astanabesta/Grain/releases/latest) · [All releases](https://github.com/astanabesta/Grain/releases)
+**Latest release:** [![Latest release](https://img.shields.io/github/v/release/astanabesta/Grain?include_prereleases&label=Grain%20APK%20%26%20IPA&color=b5532a)](https://github.com/astanabesta/Grain/releases/latest) — [**Download Android `.apk`, iOS `.ipa` & `SHA256SUMS.txt`**](https://github.com/astanabesta/Grain/releases/latest) · [All releases](https://github.com/astanabesta/Grain/releases)
 
+### Android (`Grain-v*.apk`)
 1. Open the [**latest release**](https://github.com/astanabesta/Grain/releases/latest), download **`Grain-v*.apk`**, and install it.
 2. Grant **Camera** permission on first launch (the only runtime permission Grain requests).
 3. Follow the 4-step **Intro Guide** (replayable anytime via `MENU → SET UP → INTRO GUIDE`).
+
+### iPhone / iOS (`Grain-iOS-v*.ipa` · Free Sideload)
+1. Download **`Grain-iOS-v*.ipa`** from the [**latest release**](https://github.com/astanabesta/Grain/releases/latest).
+2. Sideload onto any iPhone (**iOS 16.0+**) using **[Sideloadly](https://sideloadly.io/)**, **[AltStore](https://altstore.io/)**, or **[SideStore](https://sidestore.io/)** with a regular free Apple ID (trust your Apple ID developer profile once under `Settings → General → VPN & Device Management`).
+3. **Pro & standard iPhones supported:** Uses hardware **Bayer RAW DNG** on Pro iPhones and a **scene-linear Display-P3/sRGB F-Log2 fallback** on non-Pro iPhones — all 28 films work immediately out of the box and can also load official `.zip` / `.cube` LUT packs in `MENU → I.Q.`.
 
 ### Updating an Existing Install
 
@@ -294,6 +301,7 @@ tools/                          SDK-free syntax/math verifier & desktop RAW CLI 
 
 | Version | Highlights |
 | --- | --- |
+| **v0.7.7** | **Native iOS `.ipa` release** (`ios/` Swift + `AVFoundation` Bayer RAW & all-iPhone scene-linear engine) published alongside Android `.apk` |
 | **v0.7.6** | Enlarged **360° analog Focus Lever** (`74×74`, `2.6×` thumb cap) with 60/120Hz VSync AF gliding, zero-lag reversal, damped spring return & menu hold-repeat |
 | **v0.7.5** | Authentic **CineStill 800T (`800T`)** Vision3 tungsten + remjet-free red-orange halation & **Kodak 800 v3 (`K800`)** RAF-calibrated Kelvin fix |
 | **v0.7.4** | Added **Kodak 800 v3 (`K800`)** & **Leica X (`LCX`)** with phone-sensor tone, highlight, shadow & perceptual `OKLab` colour calibration |

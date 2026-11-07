@@ -8,6 +8,20 @@ one was a separate APK install on the device.
 
 ---
 
+## v0.7.7 — Native iOS `.ipa` Port (Pro Bayer RAW + All-iPhone Scene-Linear Engine)
+
+- **Native Swift iOS app (`ios/`) & `Grain-iOS-v0.7.7.ipa`** — full iOS 16+ port built on `AVFoundation`,
+  `CoreImage` (`CIRAWFilter` Extended Linear Rec.2020), and `SwiftUI`, supporting both hardware **Bayer
+  RAW DNG** on Pro iPhones and **scene-linear Display-P3/sRGB shoulder-expanded F-Log2 development** on
+  standard non-Pro iPhones.
+- **Feature parity across all 28 films & controls** — ships all 11 published recipes (including sensor-
+  calibrated `Kodak 800 v3`, `Leica X`, and `CineStill 800T` red-orange halation), pure-Swift `.zip`/`.cube`
+  LUT importer + out-of-the-box analytical F-Log2 LUTs, 120Hz `CADisplayLink` 360° analog Focus Lever,
+  Pure Blackout Optical Viewfinder with hardware volume shutter, `4×/8×` magnifier loupe, and multi-select
+  gallery batch Delete (7s Undo) & Save.
+- **Unified CI release workflow** — `.github/workflows/build-apk.yml` builds Android (`ubuntu-24.04`) and
+  iOS (`macos-15` + XcodeGen/Xcode) in parallel and publishes both `.apk` and `.ipa` with `SHA256SUMS.txt`.
+
 ## v0.7.6 — Enlarged 360° Analog Focus Lever (VSync AF Glide & Hold-Repeat)
 
 - **Larger, tactile Fujifilm focus stick** — enlarged `CameraBack.Lever` from `56×56` to **`74×74`**
