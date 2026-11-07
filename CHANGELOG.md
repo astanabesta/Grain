@@ -8,6 +8,24 @@ one was a separate APK install on the device.
 
 ---
 
+## v0.8.2 — The Preview Read-Back Can No Longer Crash Grain (`Android`)
+
+- **The real cause of the focus peaking crash, found and fixed** — Turning on `PEAKING` and then
+  leaving the menu could take Grain down. The culprit was not the peaking code but the **live
+  histogram**, which reads the same preview pixels and had no guard at all. Reading a `TextureView`
+  back needs its hardware layer, and Android throws instead of returning nothing when it cannot get
+  one — a window that opens right after the view tree changes, when closing the menu re-lays out the
+  camera back and rebuilds the preview surface. The histogram resumed its read-back in exactly that
+  window. All three preview readers — the **histogram**, the **focus loupe** and the **peaking** —
+  now go through one shared, guarded read-back: a frame that cannot be read is simply a frame with
+  no histogram, no loupe image and no peaking overlay.
+- **The read-back is also held off after the view tree changes**, and a bitmap that comes back the
+  wrong size is rejected instead of being read past its end.
+- **Grain now remembers its own crashes** — If Grain crashes, the next launch shows the crash
+  report on screen with a **Copy** button, so a crash is something you can send rather than guess
+  at. The report carries the exception, the stack trace, the Android version and the exact device,
+  and the last one also stays available in `MENU → SET UP → DIAGNOSTICS`.
+
 ## v0.8.1 — Two Tripod High-Resolution Modes (`36 MP` / `48 MP`) & Focus Peaking Fix (`Android` + `iOS`)
 
 - **Focus peaking no longer crashes** — Turning on `PEAKING` could take the app down. The preview

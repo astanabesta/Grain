@@ -194,7 +194,7 @@ Full mathematical derivations and calibration measurements are documented in **[
 - **Requirements:** Android 10+ (API 29+, targeting API 36). `◆` RAW films require Camera2 `RAW_SENSOR` support on the active rear lens.
 - **Automated suite:**
   - **1,278** SDK-free pure-Java crop, tone-curve, preview, focus, and exposure smoke tests (`tools/check-source.sh`).
-  - **89** JUnit & Robolectric tests covering F-Log2 / S-Log3 round-trips, DNG Planckian/Bradford colour math, noise measurement, bit-identical golden hashes, sensor-calibrated tone/colour/halation invariants, analog focus-lever physics, blackout viewfinder geometry, exposure planning, Hi-Res merge sizing, and OTA update verification.
+  - **94** JUnit & Robolectric tests covering F-Log2 / S-Log3 round-trips, DNG Planckian/Bradford colour math, noise measurement, bit-identical golden hashes, sensor-calibrated tone/colour/halation invariants, analog focus-lever physics, blackout viewfinder geometry, exposure planning, Hi-Res merge sizing, preview read-back safety, and OTA update verification.
   - GitHub Actions runs `:app:testDebugUnitTest`, `:app:lintDebug`, and `:app:assembleRelease` before publishing every release.
 
 ---
@@ -288,6 +288,7 @@ tools/                          SDK-free syntax/math verifier, iOS type-check & 
 - **Digital zoom (`1×–5×`):** Crops the active primary sensor rather than switching physical auxiliary lenses or proprietary 200 MP remosaic modes.
 - **Stills only:** Grain is a dedicated still-photography camera (no video recording).
 - **Camera2 HAL capabilities vary by phone:** Check `MENU → SET UP → DIAGNOSTICS` to inspect what your device's HAL advertises (`RAW_SENSOR`, manual sensor range, `LENS_FOCUS_DISTANCE`, AF regions, face detect modes).
+- **Grain remembers its own crashes:** If the app ever crashes, the next launch shows the report on screen with a **Copy** button — exception, stack trace, Android version and device — so a crash is something you can send instead of guess at. The last report also stays in `MENU → SET UP → DIAGNOSTICS`.
 - **Film asks for a LUT:** Import Fujifilm's F-Log2 `.zip` or Sony's `s709Cubes.zip` via `MENU → I.Q. → IMPORT LUT ZIP`.
 - **Update blocked by Xiaomi HyperOS / MIUI:** Grain automatically falls back to Android's system package installer via `FileProvider`; allow installation from Grain once if prompted.
 
@@ -304,6 +305,7 @@ tools/                          SDK-free syntax/math verifier, iOS type-check & 
 
 | Version | Highlights |
 | --- | --- |
+| **v0.8.2** | **The preview read-back can no longer crash Grain** — all three preview readers (histogram, focus loupe, peaking) now share one guarded read-back, so a frame that cannot be read is simply a frame with no overlay. Grain also now shows its own crash report on the next launch, with a **Copy** button |
 | **v0.8.1** | **Two Tripod High-Resolution Modes (`HI-RES 1 36MP` / `HI-RES 2 48MP`)** on Android & iOS — the existing `~36 MP` merge plus a new `~48 MP` (`~8000 × 6000`) merge from the same 4-frame sub-pixel registration — and a **fix for the focus-peaking crash** (preview read-back can no longer take the app down) |
 | **v0.8.0** | **Tripod 4-Shot `~36 MP` High-Resolution Mode (`HI-RES 4×` / `HI-RES 36MP`)** on Android & iOS: `4 s` tripod settle countdown, haptic/Taptic OIS sub-pixel micro-shift, 4-frame RAW super-resolution merge (~`6912 × 5184`), and strip-tiled low-RAM film development |
 | **v0.7.10** | **Recipe-named photo & RAW filenames + EXIF descriptions** (`Grain_<Recipe_Name>_YYYYMMDD_HHMMSS.jpg` / `.dng`) in Apple Photos `ⓘ` File Info, Android Gallery, Share & Darkroom Roll |

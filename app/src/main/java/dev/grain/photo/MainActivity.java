@@ -198,6 +198,7 @@ public final class MainActivity extends ComponentActivity
   @Override
   public void onCreate(Bundle saved) {
     super.onCreate(saved);
+    CrashLog.install(this);
     preferences = getSharedPreferences("grain", MODE_PRIVATE);
     tuning = new RecipeTuning(preferences);
     Arrays.fill(strengths, 80);
@@ -2252,6 +2253,8 @@ public final class MainActivity extends ComponentActivity
     super.onResume();
     resumed = true;
     immersive();
+    // The preview surface is rebuilt while the activity comes back; give it a moment.
+    settlePreview();
     if (orientationListener != null && orientationListener.canDetectOrientation())
       orientationListener.enable();
     if (texture != null && texture.isAvailable()) openCamera();
@@ -2267,6 +2270,15 @@ public final class MainActivity extends ComponentActivity
             || SystemClock.elapsedRealtime() - lastUpdateCheckMs > 15 * 60_000L)) {
       main.removeCallbacks(startupUpdateTask);
       main.postDelayed(startupUpdateTask, 1800);
+    }
+    if (!crashShown) {
+      crashShown = true;
+      // If the last run ended in a crash, show the report so the user can send it.
+      main.postDelayed(
+          () -> {
+            if (!isFinishing() && !isDestroyed()) CrashLog.showPending(this);
+          },
+          1200);
     }
   }
 
@@ -3441,7 +3453,14 @@ public final class MainActivity extends ComponentActivity
   }
 
   private void showDiagnostics() {
-    showJson("Camera diagnostics", capabilities);
+    try {
+      JSONObject j = new JSONObject(capabilities.toString());
+      String crash = CrashLog.lastCrash(this);
+      j.put("lastCrash", crash == null || crash.isEmpty() ? "none" : crash);
+      showJson("Camera diagnostics", j);
+    } catch (Exception e) {
+      showJson("Camera diagnostics", capabilities);
+    }
   }
 
   private void exportTestFiles(PhotoStore.Photo photo) {
@@ -3847,6 +3866,12 @@ public final class MainActivity extends ComponentActivity
   private int[] peakPixels, peakLuma, peakOut;
   /** Consecutive failed preview read-backs; peaking gives up after {@link #PEAK_MAX_FAILURES}. */
   private int peakFailures;
+  /** True when the last {@link #readPreview} failed rather than simply having nothing to read. */
+  private boolean lastReadFailed;
+  /** The recorded crash report is shown once, on the first resume after a crash. */
+  private boolean crashShown;
+  /** The preview read-back is held off until this time; see {@link #settlePreview()}. */
+  private long previewSettleUntil;
 
   private static String shutterText(long ns, boolean dial) {
     if (ns <= 0) return "";
@@ -4077,7 +4102,7 @@ public final class MainActivity extends ComponentActivity
             histogramBitmap = Bitmap.createBitmap(48, 64, Bitmap.Config.ARGB_8888);
             histogramPixels = new int[48 * 64];
           }
-          Bitmap b = texture.getBitmap(histogramBitmap);
+          Bitmap b = readPreview(histogramBitmap);
           if (b == null) return;
           b.getPixels(histogramPixels, 0, 48, 0, 0, 48, 64);
           if (manualActive && camera != null) {
@@ -4094,6 +4119,44 @@ public final class MainActivity extends ComponentActivity
           }
         }
       };
+
+  /**
+   * Reads the live preview back into {@code target}, or returns null when there is nothing to read.
+   *
+   * <p>Reading a TextureView back needs its hardware layer, and the platform throws instead of
+   * returning null when it cannot get one — the menu overlay can be up, the surface can be torn
+   * down, the camera session can be restarting. It can also hand back a bitmap of a different size
+   * if the preview was resized underneath us. None of that is worth taking the app down for.
+   *
+   * <p>The histogram, the loupe and the peaking all read the same pixels, so they all come through
+   * here: they simply get nothing on the frames they cannot read.
+   */
+  private Bitmap readPreview(Bitmap target) {
+    lastReadFailed = false;
+    try {
+      if (texture == null || target == null) return null;
+      if (!PreviewMath.canReadBack(
+          SystemClock.uptimeMillis(),
+          previewSettleUntil,
+          texture.isAvailable(),
+          texture.getWidth(),
+          texture.getHeight()))
+        return null;
+      Bitmap b = texture.getBitmap(target);
+      if (b == null) return null;
+      if (!PreviewMath.fitsTarget(b.getWidth(), b.getHeight(), target.getWidth(), target.getHeight()))
+        return null;
+      return b;
+    } catch (Throwable t) {
+      lastReadFailed = true;
+      return null;
+    }
+  }
+
+  /** Holds the preview read-back off for a moment after the view tree changes. */
+  private void settlePreview() {
+    previewSettleUntil = SystemClock.uptimeMillis() + PREVIEW_SETTLE_MS;
+  }
 
   private void startPeaking() {
     main.removeCallbacks(peakingTask);
@@ -4128,23 +4191,49 @@ public final class MainActivity extends ComponentActivity
             }
             return;
           }
-          if (peakBitmap == null) {
-            peakBitmap = Bitmap.createBitmap(PEAK_W, PEAK_H, Bitmap.Config.ARGB_8888);
-            peakPixels = new int[PEAK_W * PEAK_H];
-            peakLuma = new int[PEAK_W * PEAK_H];
-            peakOut = new int[PEAK_W * PEAK_H];
-          }
-          // The preview TextureView only gets a size once the camera back has reported its LCD
-          // rectangle. Until then it is 0x0 and there is nothing to read back.
-          if (texture.getWidth() <= 0 || texture.getHeight() <= 0) return;
-          Bitmap b;
           try {
-            b = texture.getBitmap(peakBitmap);
-          } catch (RuntimeException e) {
-            // Reading a TextureView back needs its hardware layer, and getBitmap throws instead of
-            // returning null when it cannot get one — the menu overlay can be up, or the surface can
-            // be torn down mid-frame. Peaking is an aid, not the camera: it must never take the app
-            // down with it.
+            if (peakBitmap == null) {
+              peakBitmap = Bitmap.createBitmap(PEAK_W, PEAK_H, Bitmap.Config.ARGB_8888);
+              peakPixels = new int[PEAK_W * PEAK_H];
+              peakLuma = new int[PEAK_W * PEAK_H];
+              peakOut = new int[PEAK_W * PEAK_H];
+            }
+            Bitmap b = readPreview(peakBitmap);
+            if (b == null) {
+              // The preview could not be read back this frame. Peaking is an aid, not the camera: it
+              // must never take the app down with it, so after a run of failures it switches off.
+              if (lastReadFailed && ++peakFailures > PEAK_MAX_FAILURES) {
+                peakFailures = 0;
+                peaking = false;
+                savePrefs();
+                stopPeaking();
+                back.toast("PEAKING", "preview read-back unavailable on this device");
+              }
+              return;
+            }
+            peakFailures = 0;
+            b.getPixels(peakPixels, 0, PEAK_W, 0, 0, PEAK_W, PEAK_H);
+            for (int i = 0; i < peakPixels.length; i++) {
+              int c = peakPixels[i];
+              peakLuma[i] = (((c >> 16) & 255) * 54 + ((c >> 8) & 255) * 183 + (c & 255) * 19) >> 8;
+            }
+            for (int y = 0; y < PEAK_H; y++) {
+              int yU = Math.min(PEAK_H - 1, y + 1) * PEAK_W, yD = Math.max(0, y - 1) * PEAK_W;
+              for (int x = 0; x < PEAK_W; x++) {
+                int i = y * PEAK_W + x;
+                int dx = peakLuma[i + Math.min(PEAK_W - 1, x + 1)] - peakLuma[i + Math.max(0, x - 1)];
+                int dy = peakLuma[yU + x] - peakLuma[yD + x];
+                int l = peakLuma[i];
+                int mag = l > 24 && l < 232 ? Math.min(255, Math.abs(dx) + Math.abs(dy)) : 0;
+                peakOut[i] = (mag << 24) | 0xFFFFFF;
+              }
+            }
+            peakBitmap.setPixels(peakOut, 0, PEAK_W, 0, 0, PEAK_W, PEAK_H);
+            back.state.peak = peakBitmap;
+            back.refresh();
+          } catch (Throwable t) {
+            // Peaking is an aid, not the camera: nothing in here is worth taking the app down
+            // for. After a run of failures it switches itself off and says so.
             if (++peakFailures > PEAK_MAX_FAILURES) {
               peakFailures = 0;
               peaking = false;
@@ -4152,29 +4241,7 @@ public final class MainActivity extends ComponentActivity
               stopPeaking();
               back.toast("PEAKING", "preview read-back unavailable on this device");
             }
-            return;
           }
-          if (b == null) return;
-          peakFailures = 0;
-          b.getPixels(peakPixels, 0, PEAK_W, 0, 0, PEAK_W, PEAK_H);
-          for (int i = 0; i < peakPixels.length; i++) {
-            int c = peakPixels[i];
-            peakLuma[i] = (((c >> 16) & 255) * 54 + ((c >> 8) & 255) * 183 + (c & 255) * 19) >> 8;
-          }
-          for (int y = 0; y < PEAK_H; y++) {
-            int yU = Math.min(PEAK_H - 1, y + 1) * PEAK_W, yD = Math.max(0, y - 1) * PEAK_W;
-            for (int x = 0; x < PEAK_W; x++) {
-              int i = y * PEAK_W + x;
-              int dx = peakLuma[i + Math.min(PEAK_W - 1, x + 1)] - peakLuma[i + Math.max(0, x - 1)];
-              int dy = peakLuma[yU + x] - peakLuma[yD + x];
-              int l = peakLuma[i];
-              int mag = l > 24 && l < 232 ? Math.min(255, Math.abs(dx) + Math.abs(dy)) : 0;
-              peakOut[i] = (mag << 24) | 0xFFFFFF;
-            }
-          }
-          peakBitmap.setPixels(peakOut, 0, PEAK_W, 0, 0, PEAK_W, PEAK_H);
-          back.state.peak = peakBitmap;
-          back.refresh();
         }
       };
 
@@ -4235,7 +4302,7 @@ public final class MainActivity extends ComponentActivity
             if (magSource == null) {
               magSource = Bitmap.createBitmap(MAG_SRC_W, MAG_SRC_H, Bitmap.Config.ARGB_8888);
             }
-            Bitmap src = texture.getBitmap(magSource);
+            Bitmap src = readPreview(magSource);
             if (src != null) {
               float mx =
                   afArea == GrainCamera.AF_FACE && back.state.faceActive
@@ -4363,6 +4430,9 @@ public final class MainActivity extends ComponentActivity
     lp.leftMargin = l;
     lp.topMargin = t;
     frame.setLayoutParams(lp);
+    // The preview surface is about to be resized; reading it back before it has settled is what
+    // used to take the app down.
+    settlePreview();
     if (camera != null) frame.post(() -> camera.updateTransform(zoom));
   }
 
@@ -4998,6 +5068,10 @@ public final class MainActivity extends ComponentActivity
   private void closeOverlays() {
     if (back != null) back.hideOverlay();
     mode = "camera";
+    // Closing an overlay re-lays out the camera back and rebuilds the preview surface, and reading
+    // the preview back in that window is what used to take the app down. Hold the read-back off
+    // until it has settled.
+    settlePreview();
     qTiles.clear();
     menuList = null;
     menuTabs = null;
@@ -5246,6 +5320,14 @@ public final class MainActivity extends ComponentActivity
    * At one attempt every 140 ms this is a little over four seconds of continuous failure.
    */
   private static final int PEAK_MAX_FAILURES = 30;
+
+  /**
+   * How long the preview read-back is held off after the view tree changes.
+   *
+   * <p>Closing the menu re-lays out the camera back, which rebuilds the preview surface. Reading
+   * the preview back while that is happening is what took the app down.
+   */
+  private static final int PREVIEW_SETTLE_MS = 700;
   private static final String[] MENU_TITLES = {"IMAGE QUALITY", "AF / FACE", "SHOOTING", "SET UP"};
 
   private static final class Item {

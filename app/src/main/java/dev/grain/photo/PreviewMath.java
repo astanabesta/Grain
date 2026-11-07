@@ -32,4 +32,37 @@ public final class PreviewMath {
     }
     return out;
   }
+
+  /**
+   * Whether the live preview may be read back right now.
+   *
+   * <p>Reading a TextureView back needs its hardware layer. The platform throws instead of
+   * returning null when it cannot get one, and the window where that happens is right after the
+   * view tree changes - closing the menu re-lays out the camera back and rebuilds the preview
+   * surface. Every reader of the preview (the histogram, the loupe and the peaking) therefore asks
+   * here first, and simply gets nothing on the frames it cannot read.
+   *
+   * @param nowMs the current uptime, in milliseconds
+   * @param settleUntilMs the time the read-back is held off until, in uptime milliseconds
+   * @param surfaceAvailable whether the TextureView has a surface yet
+   * @param viewWidth the width of the TextureView
+   * @param viewHeight the height of the TextureView
+   */
+  public static boolean canReadBack(
+      long nowMs, long settleUntilMs, boolean surfaceAvailable, int viewWidth, int viewHeight) {
+    if (!surfaceAvailable) return false;
+    if (viewWidth <= 0 || viewHeight <= 0) return false;
+    return nowMs >= settleUntilMs;
+  }
+
+  /**
+   * Whether a bitmap that came back from a read-back is big enough for the pixels the caller is
+   * about to read out of it. The platform can hand back a bitmap of a different size when the
+   * preview was resized underneath the reader.
+   */
+  public static boolean fitsTarget(
+      int bitmapWidth, int bitmapHeight, int targetWidth, int targetHeight) {
+    if (targetWidth <= 0 || targetHeight <= 0) return false;
+    return bitmapWidth >= targetWidth && bitmapHeight >= targetHeight;
+  }
 }

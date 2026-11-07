@@ -1,22 +1,21 @@
-## Grain Photo vVERSION — Two Tripod High-Resolution Modes & a Focus Peaking Fix (`Android` + `iOS`)
+## Grain Photo vVERSION — The Preview Read-Back Can No Longer Crash Grain (`Android`)
 
 - **Android (`Grain-vVERSION.apk`):** Install directly inside Grain (**MENU → SET UP → APP UPDATE**) or download **`Grain-vVERSION.apk`** below.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** Download **`Grain-iOS-vVERSION.ipa`** below and install onto any iPhone (iOS 16+, including **iPhone XR / XS** and newer) using **[Sideloadly](https://sideloadly.io/)**, **[AltStore](https://altstore.io/)**, or **[SideStore](https://sidestore.io/)**.
 
-### What's new in v0.8.1
+### What's new in v0.8.2
 
-#### 1. Focus Peaking No Longer Crashes
-- **Fixed:** Turning on `PEAKING` could take the app down. The preview read-back now waits for the viewfinder to have a real size, and a failed read-back can never take the camera down with it.
-- **Never fatal:** If a device cannot read the preview back at all, Grain switches peaking off and tells you, instead of crashing. Everything else in the camera keeps working.
+#### 1. The Real Cause of the Focus Peaking Crash
+- **Found:** Turning on `PEAKING` and then leaving the menu could take Grain down. The culprit was **not** the peaking code — it was the **live histogram**, which reads the same preview pixels and had no guard at all.
+- **Why it crashed there:** Reading a `TextureView` back needs its hardware layer, and Android *throws* instead of returning nothing when it cannot get one. The window where that happens is right after the view tree changes — closing the menu re-lays out the camera back and rebuilds the preview surface. The histogram resumed its read-back in exactly that window and took the app with it.
+- **Fixed:** All three preview readers — the **histogram**, the **focus loupe** and the **peaking** — now go through one shared, guarded read-back. A frame that cannot be read is simply a frame with no histogram, no loupe image and no peaking overlay. Nothing there can crash Grain any more.
+- **Also fixed:** The read-back is held off for a moment after the view tree changes, and a bitmap that comes back the wrong size is rejected instead of being read past its end.
 
-#### 2. Two Tripod High-Resolution Modes (`HI-RES 1 36MP` / `HI-RES 2 48MP`)
-- **Select via `DRIVE` button or `MENU → SHOOTING → DRIVE`:** Cycles through `SINGLE → 3s → 5s → FS BKT → FOCUS BKT → HI-RES 1 36MP → HI-RES 2 48MP` (`HR 36MP` / `HR 48MP` badge in the viewfinder OSD).
-- **`HI-RES 1 36MP` (unchanged):** The 4-shot tripod merge you already know, at `~6928 × 5196` (`36.00 MP`).
-- **`HI-RES 2 48MP` (new):** The same 4-frame sub-pixel merge, now resolving `~8000 × 6000` (`48.00 MP`) from the same 12 MP sensor frame.
-- **Same 4-second tripod settle, same locked AE/AF, same haptic/Taptic OIS micro-shift** — only the merge size changes.
-- **Registers all 4 linear sensor frames on a `4×4` sub-pixel tile grid** (`0.05 px` parabolic refinement) with automatic anti-ghosting fallback on moving foliage, clouds, or water, then develops the merged negative through Grain's full F-Log2 / S-Log3, 3D LUT, `OKLab` colour calibration, halation, and film grain pipeline.
-- **Honest limits:** `48 MP` needs near-perfect sub-pixel registration, so it is more sensitive to movement than `36 MP` — use a tripod. The merge never upscales past `2×` linear (the most four frames can resolve), so a smaller sensor than `12 MP` will land below `48 MP`; the receipt always records the real output size.
+#### 2. Grain Now Remembers Its Own Crashes
+- **New:** If Grain crashes, the next launch shows the crash report on screen with a **Copy** button — so a crash is something you can send, not something you have to guess at.
+- The report says the exception, the stack trace, the Android version and the exact device.
+- The last report also stays available in **MENU → SET UP → DIAGNOSTICS**.
 
-#### 3. Receipts & Gallery Say Which Mode You Shot
-- **Saved files** still carry the `_HiRes` filename tag, and the receipt now records the nominal merge size (`36 MP` or `48 MP`) alongside the sub-pixel shift diagnostics.
-- **Darkroom gallery** shows the merge size on each Hi-Res frame, on both Android and iOS.
+#### 3. Everything Else From v0.8.1 Still Here
+- The two tripod high-resolution modes (`HI-RES 1 36MP` and `HI-RES 2 48MP`) are unchanged.
+- The receipt and the Darkroom gallery still record which merge produced each frame.
