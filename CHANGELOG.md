@@ -8,6 +8,20 @@ one was a separate APK install on the device.
 
 ---
 
+## v0.7.6 — Enlarged 360° Analog Focus Lever (VSync AF Glide & Hold-Repeat)
+
+- **Larger, tactile Fujifilm focus stick** — enlarged `CameraBack.Lever` from `56×56` to **`74×74`**
+  design units (`72×72` in landscape) with a `2.6×` larger concave micro-knurled thumb cap, recessed
+  gimbal socket, cast stem shadow, active amber directional chevrons, and damped `OvershootInterpolator`
+  spring return on release.
+- **Fluid 360° analog VSync AF gliding** — replaced discrete `ACTION_UP` 4-way jumps with continuous
+  2D analog `ACTION_MOVE` tracking driven at native display VSync (`60 / 90 / 120 Hz`), dual-slope
+  precision velocity curve, floating-origin zero-lag direction reversal, automatic `AF_CENTER` /
+  `AF_FACE` steerable unlock, and paced live Camera2 focus requests.
+- **Instant menu step & hold-to-repeat** — in `Q`, `MENU`, and `PLAY`, tilting engages immediately
+  on threshold entry and auto-repeats smoothly while held with axis hysteresis against diagonal
+  chatter.
+
 ## v0.7.5 — Authentic CineStill 800T (`800T`) & Kodak 800 v3 Kelvin Calibration
 
 - **CineStill 800T (`800T`) phone-sensor Vision3 500T calibration** — upgrades `cinestill-800t`

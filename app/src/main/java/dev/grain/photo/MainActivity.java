@@ -4422,6 +4422,50 @@ public final class MainActivity extends ComponentActivity
     back.toast(aeLock ? "AE-L" : "AE UNLOCKED", aeLock ? "exposure held until you press again" : null);
   }
 
+  private long lastLeverFocusAt;
+
+  private void unlockSteerableAf() {
+    if (afArea == GrainCamera.AF_CENTER) {
+      afX = .5f;
+      afY = .5f;
+      afArea = GrainCamera.AF_SINGLE;
+      if (camera != null) camera.setAfArea(afArea);
+    } else if (afArea == GrainCamera.AF_FACE && back != null && back.state.faceActive) {
+      afX = Math.max(.06f, Math.min(.94f, (back.state.faceL + back.state.faceR) * .5f));
+      afY = Math.max(.06f, Math.min(.94f, (back.state.faceT + back.state.faceB) * .5f));
+      afArea = GrainCamera.AF_SINGLE;
+      if (camera != null) camera.setAfArea(afArea);
+    }
+  }
+
+  @Override
+  public boolean leverAnalogMode() {
+    return powerOn
+        && !busy
+        && "camera".equals(page)
+        && "camera".equals(mode)
+        && (back == null || back.overlay.getVisibility() != View.VISIBLE);
+  }
+
+  @Override
+  public void leverGlide(float vx, float vy, float dtSec, boolean finished) {
+    if (!powerOn || busy || !"camera".equals(mode)) return;
+    if (dtSec > 0f && (vx != 0f || vy != 0f)) {
+      unlockSteerableAf();
+      float[] next = FocusMath.leverGlideStep(afX, afY, vx, vy, dtSec, 0.90f);
+      afX = next[0];
+      afY = next[1];
+      afFeedback = 0;
+      pushOsd();
+    }
+    long now = SystemClock.uptimeMillis();
+    if (finished || now - lastLeverFocusAt >= 150L) {
+      lastLeverFocusAt = now;
+      focusAt(afX, afY, false);
+      if (finished) pushOsd();
+    }
+  }
+
   private void leverKey(int dir) {
     switch (mode) {
       case "q":
@@ -4458,6 +4502,7 @@ public final class MainActivity extends ComponentActivity
           afX = .5f;
           afY = .5f;
         } else {
+          unlockSteerableAf();
           float step = .07f;
           if (dir == CameraBack.LEVER_UP) afY -= step;
           else if (dir == CameraBack.LEVER_DOWN) afY += step;

@@ -11,6 +11,7 @@ import android.os.SystemClock;
 import android.util.TypedValue;
 import android.view.*;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.animation.OvershootInterpolator;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 import java.util.ArrayList;
@@ -42,6 +43,14 @@ final class CameraBack extends ViewGroup {
 
     /** Where the camera preview must be, in the parent's (screen) coordinates. */
     void previewRect(RectF rect);
+
+    /** True when the focus lever drives continuous 360-degree analog AF gliding. */
+    default boolean leverAnalogMode() {
+      return false;
+    }
+
+    /** Continuous analog focus-lever velocity (vx, vy in [-1..1]) and frame delta (seconds). */
+    default void leverGlide(float vx, float vy, float dtSec, boolean finished) {}
   }
 
   static final int K_Q = 1, K_OK = 2, K_DISP = 3, K_PLAY = 4, K_DRIVE = 5, K_AEL = 6, K_LEVER = 7,
@@ -531,8 +540,8 @@ final class CameraBack extends ViewGroup {
     put(play, d(84, by + 107, 54, 24));
     put(disp, d(78, by + 146, 66, 24));
     put(shutter, d(160, by + 60, 116, 116));
-    put(lever, d(302, by + 62, 56, 56));
-    put(ok, d(304, by + 132, 52, 52));
+    put(lever, d(296, by + 58, 74, 74));
+    put(ok, d(307, by + 144, 52, 52));
     fit(screen, ratio, image);
     placeScreen(screen);
   }
@@ -581,9 +590,9 @@ final class CameraBack extends ViewGroup {
     put(drive, d(532 + rx, 135, 54, 24));
     engrave("PLAY", 534 + rx, 171, 5.8f, Paint.Align.LEFT, false);
     put(play, d(532 + rx, 175, 54, 24));
-    put(lever, d(608 + rx, 140, 56, 56));
-    put(ok, d(610 + rx, 210, 52, 52));
-    put(disp, d(603 + rx, 280, 66, 24));
+    put(lever, d(601 + rx, 134, 72, 72));
+    put(ok, d(611 + rx, 218, 52, 52));
+    put(disp, d(604 + rx, 282, 66, 24));
     put(shutter, d(700 + rx, 138, 118, 118));
     thumb.set(d(694 + rx, 296, 140, 86));
     grille.set(d(534 + rx, 334, 54, 22));
@@ -1244,50 +1253,253 @@ final class CameraBack extends ViewGroup {
     }
   }
 
-  /** The focus lever: four directions and a press. */
+  /**
+   * Analog Fujifilm focus lever: continuous 360-degree VSync AF gliding in camera mode, instant
+   * directional step + hold-to-repeat in menus, center press, and damped mechanical spring return.
+   */
   final class Lever extends View {
-    private int pressed = -1;
+    private static final float DEADZONE = 0.13f;
+    private static final float CARDINAL_THRESHOLD = 0.32f;
+
     private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Path tri = new Path();
+    private float originX, originY;
+    private float visX, visY;
+    private float velX, velY, peakVx, peakVy;
+    private boolean touching, centerHeld, glided, engagedHaptic, glideRunning;
+    private int cardinalDir = -1, repeatSteps, glideFrames;
+    private long downAt, lastFrameNs;
+    private ValueAnimator springAnim;
+
+    private final Choreographer.FrameCallback glideCallback =
+        new Choreographer.FrameCallback() {
+          @Override
+          public void doFrame(long frameTimeNanos) {
+            if (!touching || !host.leverAnalogMode()) {
+              glideRunning = false;
+              lastFrameNs = 0;
+              return;
+            }
+            float dt =
+                lastFrameNs == 0
+                    ? (1f / 60f)
+                    : Math.min(0.05f, Math.max(0.001f, (frameTimeNanos - lastFrameNs) * 1e-9f));
+            lastFrameNs = frameTimeNanos;
+            if (Math.hypot(velX, velY) > 1e-4f) {
+              glideFrames++;
+              host.leverGlide(velX, velY, dt, false);
+              Choreographer.getInstance().postFrameCallback(this);
+            } else {
+              glideRunning = false;
+              lastFrameNs = 0;
+            }
+          }
+        };
+
+    private final Runnable repeatTask =
+        new Runnable() {
+          @Override
+          public void run() {
+            if (!touching || cardinalDir <= 0 || host.leverAnalogMode()) return;
+            repeatSteps++;
+            performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+            host.key(K_LEVER, cardinalDir);
+            long delay = repeatSteps >= 6 ? 75L : 108L;
+            postDelayed(this, delay);
+          }
+        };
 
     Lever(Context c) {
       super(c);
       setClickable(true);
       setFocusable(true);
-      setContentDescription("Focus lever: moves the focus point and navigates menus");
+      setContentDescription("Focus lever: drag smoothly to move focus or tilt to navigate menus");
     }
 
-    private int zone(float x, float y) {
-      float dx = x - getWidth() / 2f, dy = y - getHeight() / 2f;
-      if (Math.hypot(dx, dy) < getWidth() * .17f) return LEVER_CENTER;
-      if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? LEVER_RIGHT : LEVER_LEFT;
-      return dy > 0 ? LEVER_DOWN : LEVER_UP;
+    private void stopLoops() {
+      if (glideRunning) {
+        Choreographer.getInstance().removeFrameCallback(glideCallback);
+        glideRunning = false;
+      }
+      lastFrameNs = 0;
+      removeCallbacks(repeatTask);
+    }
+
+    private void cancelSpring() {
+      if (springAnim != null) {
+        springAnim.cancel();
+        springAnim = null;
+      }
+    }
+
+    private void springBack() {
+      cancelSpring();
+      final float sx = visX, sy = visY;
+      if (Math.hypot(sx, sy) < 0.01f) {
+        visX = 0f;
+        visY = 0f;
+        invalidate();
+        return;
+      }
+      springAnim = ValueAnimator.ofFloat(1f, 0f);
+      springAnim.setDuration(145L);
+      springAnim.setInterpolator(new OvershootInterpolator(1.35f));
+      springAnim.addUpdateListener(
+          a -> {
+            float k = (float) a.getAnimatedValue();
+            visX = sx * k;
+            visY = sy * k;
+            invalidate();
+          });
+      springAnim.start();
+    }
+
+    private void startGlideLoop() {
+      if (!glideRunning) {
+        glideRunning = true;
+        lastFrameNs = 0;
+        Choreographer.getInstance().postFrameCallback(glideCallback);
+      }
+    }
+
+    private void updateStick(float tx, float ty) {
+      float r = Math.min(getWidth(), getHeight()) * 0.5f;
+      float maxTravel = Math.max(8f, r * 0.45f);
+      float[] leashed =
+          FocusMath.leverFloatingOrigin(originX, originY, tx, ty, maxTravel * 1.30f);
+      originX = leashed[0];
+      originY = leashed[1];
+      float[] resp = FocusMath.leverResponse(tx - originX, ty - originY, maxTravel, DEADZONE);
+      velX = resp[0];
+      velY = resp[1];
+      visX = resp[2];
+      visY = resp[3];
+      float speed = resp[4];
+      if (speed > Math.hypot(peakVx, peakVy)) {
+        peakVx = velX;
+        peakVy = velY;
+      }
+      if (speed > 0f) centerHeld = false;
+
+      if (host.leverAnalogMode()) {
+        removeCallbacks(repeatTask);
+        cardinalDir = -1;
+        if (speed > 0f) {
+          if (!engagedHaptic) {
+            engagedHaptic = true;
+            performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+          }
+          glided = true;
+          startGlideLoop();
+        }
+      } else {
+        int dir = FocusMath.leverCardinal(visX, visY, CARDINAL_THRESHOLD, cardinalDir);
+        if (dir != cardinalDir) {
+          removeCallbacks(repeatTask);
+          cardinalDir = dir;
+          if (dir > 0) {
+            glided = true;
+            repeatSteps = 0;
+            performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+            host.key(K_LEVER, dir);
+            postDelayed(repeatTask, 260L);
+          }
+        }
+      }
+      invalidate();
     }
 
     @SuppressLint("ClickableViewAccessibility")
     @Override
     public boolean onTouchEvent(MotionEvent e) {
       switch (e.getActionMasked()) {
-        case MotionEvent.ACTION_DOWN:
-          pressed = zone(e.getX(), e.getY());
-          performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
-          invalidate();
-          return true;
-        case MotionEvent.ACTION_UP:
-          int dir = pressed;
-          pressed = -1;
-          invalidate();
-          if (dir >= 0) {
-            performClick();
-            host.key(K_LEVER, dir);
+        case MotionEvent.ACTION_DOWN: {
+          cancelSpring();
+          stopLoops();
+          if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(true);
+          touching = true;
+          downAt = SystemClock.uptimeMillis();
+          glided = false;
+          engagedHaptic = false;
+          cardinalDir = -1;
+          repeatSteps = 0;
+          glideFrames = 0;
+          velX = velY = peakVx = peakVy = 0f;
+
+          float cx = getWidth() * 0.5f, cy = getHeight() * 0.5f;
+          float r = Math.min(cx, cy);
+          float d0 = (float) Math.hypot(e.getX() - cx, e.getY() - cy);
+          if (d0 <= r * 0.57f) {
+            originX = e.getX();
+            originY = e.getY();
+            centerHeld = true;
+            visX = (e.getX() - cx) / Math.max(1f, r) * 0.14f;
+            visY = (e.getY() - cy) / Math.max(1f, r) * 0.14f;
+            performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+            invalidate();
+          } else {
+            originX = cx;
+            originY = cy;
+            centerHeld = false;
+            updateStick(e.getX(), e.getY());
           }
           return true;
+        }
+        case MotionEvent.ACTION_MOVE:
+          if (touching) updateStick(e.getX(), e.getY());
+          return true;
+        case MotionEvent.ACTION_UP: {
+          boolean wasTouching = touching;
+          touching = false;
+          stopLoops();
+          long heldMs = SystemClock.uptimeMillis() - downAt;
+          if (wasTouching) {
+            if (host.leverAnalogMode()) {
+              if (glided) {
+                double pk = Math.hypot(peakVx, peakVy);
+                if (heldMs < 200L && glideFrames <= 2 && pk > 1e-4) {
+                  float ux = (float) (peakVx / pk), uy = (float) (peakVy / pk);
+                  host.leverGlide(ux, uy, 0.068f, true);
+                } else {
+                  host.leverGlide(0f, 0f, 0f, true);
+                }
+              } else {
+                performClick();
+                host.key(K_LEVER, LEVER_CENTER);
+              }
+            } else if (!glided) {
+              performClick();
+              host.key(K_LEVER, LEVER_CENTER);
+            }
+          }
+          velX = velY = peakVx = peakVy = 0f;
+          centerHeld = false;
+          cardinalDir = -1;
+          springBack();
+          return true;
+        }
         case MotionEvent.ACTION_CANCEL:
-          pressed = -1;
-          invalidate();
+          if (touching && glided && host.leverAnalogMode()) {
+            host.leverGlide(0f, 0f, 0f, true);
+          }
+          touching = false;
+          stopLoops();
+          velX = velY = peakVx = peakVy = 0f;
+          centerHeld = false;
+          cardinalDir = -1;
+          springBack();
           return true;
         default:
           return true;
       }
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+      touching = false;
+      stopLoops();
+      cancelSpring();
+      super.onDetachedFromWindow();
     }
 
     @Override
@@ -1296,40 +1508,124 @@ final class CameraBack extends ViewGroup {
       return true;
     }
 
+    private int blendArrowColor(float align) {
+      float t = Math.max(0f, Math.min(1f, (align - 0.18f) / 0.65f));
+      int r0 = 0x98, g0 = 0x94, b0 = 0x8a;
+      int r1 = (ORANGE >> 16) & 0xff, g1 = (ORANGE >> 8) & 0xff, b1 = ORANGE & 0xff;
+      return Color.rgb(
+          Math.round(r0 + (r1 - r0) * t),
+          Math.round(g0 + (g1 - g0) * t),
+          Math.round(b0 + (b1 - b0) * t));
+    }
+
     @Override
     protected void onDraw(Canvas c) {
-      float w = getWidth(), r = w / 2f, cx = r, cy = getHeight() / 2f;
-      p.setShader(new RadialGradient(cx, cy - r * .3f, r * 1.2f, 0xff33342f, 0xff0b0b0a, Shader.TileMode.CLAMP));
+      float w = getWidth(), h = getHeight();
+      float r = Math.min(w, h) * 0.5f, cx = w * 0.5f, cy = h * 0.5f;
+      if (r <= 0f) return;
+
+      // 1. Anodized outer housing bezel
+      p.setStyle(Paint.Style.FILL);
+      p.setShader(
+          new RadialGradient(
+              cx - r * 0.25f,
+              cy - r * 0.32f,
+              r * 1.25f,
+              0xff3d3e39,
+              0xff0b0c0a,
+              Shader.TileMode.CLAMP));
       c.drawCircle(cx, cy, r, p);
       p.setShader(null);
+      p.setStyle(Paint.Style.STROKE);
+      p.setStrokeWidth(Math.max(1f, 0.9f * u));
+      p.setColor(0x28ffffff);
+      c.drawCircle(cx, cy, r - 0.5f * u, p);
+
+      // 2. Recessed gimbal socket well
+      p.setStyle(Paint.Style.FILL);
       p.setColor(0xff050505);
-      c.drawCircle(cx, cy, r * .62f, p);
-      p.setColor(0xff8b887f);
-      float tr = r * .8f, s = 2.6f * u;
+      c.drawCircle(cx, cy, r * 0.68f, p);
+      p.setStyle(Paint.Style.STROKE);
+      p.setStrokeWidth(Math.max(1f, 1.1f * u));
+      p.setColor(0x88000000);
+      c.drawCircle(cx, cy, r * 0.67f, p);
+
+      // 3. Directional chevrons with warm active illumination
+      p.setStyle(Paint.Style.FILL);
+      float tr = r * 0.83f, s = 2.8f * u;
+      float[] aligns = {-visY, visX, visY, -visX};
       for (int d = 0; d < 4; d++) {
+        p.setColor(blendArrowColor(aligns[d]));
         c.save();
-        c.rotate(d * 90, cx, cy);
-        Path tri = new Path();
-        tri.moveTo(cx, cy - tr - s);
-        tri.lineTo(cx - s, cy - tr + s * .6f);
-        tri.lineTo(cx + s, cy - tr + s * .6f);
+        c.rotate(d * 90f, cx, cy);
+        tri.reset();
+        tri.moveTo(cx, cy - tr - s * 0.95f);
+        tri.lineTo(cx - s, cy - tr + s * 0.65f);
+        tri.lineTo(cx + s, cy - tr + s * 0.65f);
         tri.close();
         c.drawPath(tri, p);
         c.restore();
       }
-      float nx = cx, ny = cy, shift = 3 * u;
-      if (pressed == LEVER_UP) ny -= shift;
-      else if (pressed == LEVER_DOWN) ny += shift;
-      else if (pressed == LEVER_LEFT) nx -= shift;
-      else if (pressed == LEVER_RIGHT) nx += shift;
-      float nr = r * (pressed == LEVER_CENTER ? .4f : .44f);
-      p.setShader(new RadialGradient(nx - nr * .3f, ny - nr * .4f, nr * 1.4f, 0xff5a5b56, 0xff141513, Shader.TileMode.CLAMP));
+
+      // 4. Analog 360-degree stem + floating cap shadow
+      float maxShift = r * 0.28f;
+      float nx = cx + visX * maxShift, ny = cy + visY * maxShift;
+      float nr = r * (centerHeld ? 0.49f : 0.54f);
+      p.setStyle(Paint.Style.STROKE);
+      p.setStrokeWidth(nr * 0.68f);
+      p.setStrokeCap(Paint.Cap.ROUND);
+      p.setColor(0xff121311);
+      c.drawLine(cx, cy, nx, ny, p);
+
+      p.setStyle(Paint.Style.FILL);
+      p.setColor(0x68000000);
+      c.drawCircle(nx + 1.0f * u, ny + 1.8f * u, nr * 1.03f, p);
+
+      // 5. Knurled Fujifilm X-T5 thumb cap with concave dish
+      p.setShader(
+          new RadialGradient(
+              nx - nr * 0.32f,
+              ny - nr * 0.38f,
+              nr * 1.45f,
+              0xff686a63,
+              0xff161715,
+              Shader.TileMode.CLAMP));
       c.drawCircle(nx, ny, nr, p);
       p.setShader(null);
-      p.setColor(0x50000000);
-      for (int i = 0; i < 6; i++) {
-        double a = i * Math.PI / 3;
-        c.drawCircle(nx + (float) Math.cos(a) * nr * .5f, ny + (float) Math.sin(a) * nr * .5f, .9f * u, p);
+
+      p.setStyle(Paint.Style.STROKE);
+      p.setStrokeWidth(Math.max(1f, 0.8f * u));
+      p.setColor(0x36ffffff);
+      c.drawCircle(nx, ny, nr - 0.4f * u, p);
+
+      p.setStyle(Paint.Style.FILL);
+      float dishR = nr * 0.72f;
+      p.setShader(
+          new RadialGradient(
+              nx + dishR * 0.22f,
+              ny + dishR * 0.26f,
+              dishR * 1.3f,
+              0xff3c3e39,
+              0xff181917,
+              Shader.TileMode.CLAMP));
+      c.drawCircle(nx, ny, dishR, p);
+      p.setShader(null);
+
+      // Micro-knurling grip studs (inner 6 + outer 12)
+      for (int ring = 0; ring < 2; ring++) {
+        int count = ring == 0 ? 6 : 12;
+        float kr = nr * (ring == 0 ? 0.34f : 0.62f);
+        float dotR = (ring == 0 ? 0.88f : 0.78f) * u;
+        double phase = ring == 0 ? 0.0 : Math.PI / 12.0;
+        for (int i = 0; i < count; i++) {
+          double a = phase + i * (2.0 * Math.PI / count);
+          float kx = nx + (float) Math.cos(a) * kr;
+          float ky = ny + (float) Math.sin(a) * kr;
+          p.setColor(0x66000000);
+          c.drawCircle(kx + 0.35f * u, ky + 0.45f * u, dotR, p);
+          p.setColor(0x28ffffff);
+          c.drawCircle(kx - 0.25f * u, ky - 0.25f * u, dotR * 0.78f, p);
+        }
       }
     }
   }

@@ -148,7 +148,7 @@ Developed from sensor `RAW_SENSOR` through Fujifilm's official F-Log2 LUTs. Ever
 | **Shutter / ISO Dial** | Sets **Program (`A`)**, **Shutter Priority** (`1/4000 s` – `1 s`), **ISO Priority** (`50` – `12800` via the `ISO` toggle chip), or **Manual (`M`)** when both dials are off `A`. |
 | **EV Dial & Command Wheel** | `−2` to `+2 EV` in `1/3 EV` clicks; set EV to **`C`** to drive fine `0.1 EV` steps on the rear command wheel (otherwise controls zoom or steps manual focus in the loupe). |
 | **Flash (`⚡`)** | Cycles **`OFF`**, **`ON`**, **`AUTO`**, and continuous **`TORCH`** fill light. |
-| **Five-Way Joystick** | Press to confirm; **Up** `AE-L`, **Right** next film, **Down** `MENU`, **Left** nudge focus point. |
+| **Focus Lever (Joystick)** | **360° analog thumb stick:** drag in any direction to glide the AF point smoothly at 60–120 Hz (press centre to re-centre); tilt & hold to navigate / auto-repeat **`Q`**, **`MENU`**, and **`PLAY`**. |
 | **`Q` Menu** | 16-tile quick grid (`Film`, `WB`, `WB R`, `WB B`, `DR`, `H Tone`, `S Tone`, `Color`, `Sharp`, `NR`, `Clarity`, `Grain`, `CCE`, `FX Blue`, `Dev`, `Face`). |
 | **`DRIVE`** | `SINGLE`, `3 s` / `5 s` self-timer, **`FS BKT`** (3-film RAW bracket), and **`FOCUS BKT`** (`3 / 5 / 7` focus planes). |
 | **Playback (`▶`)** | Opens the private gallery: swipe frames, inspect JSON/settings receipts (`DISP`), or tap **Select** to batch-mark multiple photos for **Delete (N)** (with 7 s Undo) or **Save (N)** to `Pictures/Grain`. |
@@ -187,7 +187,7 @@ Full mathematical derivations and calibration measurements are documented in **[
 - **Requirements:** Android 10+ (API 29+, targeting API 36). `◆` RAW films require Camera2 `RAW_SENSOR` support on the active rear lens.
 - **Automated suite:**
   - **1,278** SDK-free pure-Java crop, tone-curve, preview, focus, and exposure smoke tests (`tools/check-source.sh`).
-  - **82** JUnit & Robolectric tests covering F-Log2 / S-Log3 round-trips, DNG Planckian/Bradford colour math, noise measurement, bit-identical golden hashes, sensor-calibrated tone/colour/halation invariants, blackout viewfinder geometry, exposure planning, and OTA update verification.
+  - **83** JUnit & Robolectric tests covering F-Log2 / S-Log3 round-trips, DNG Planckian/Bradford colour math, noise measurement, bit-identical golden hashes, sensor-calibrated tone/colour/halation invariants, analog focus-lever physics, blackout viewfinder geometry, exposure planning, and OTA update verification.
   - GitHub Actions runs `:app:testDebugUnitTest`, `:app:lintDebug`, and `:app:assembleRelease` before publishing every release.
 
 ---
@@ -294,6 +294,7 @@ tools/                          SDK-free syntax/math verifier & desktop RAW CLI 
 
 | Version | Highlights |
 | --- | --- |
+| **v0.7.6** | Enlarged **360° analog Focus Lever** (`74×74`, `2.6×` thumb cap) with 60/120Hz VSync AF gliding, zero-lag reversal, damped spring return & menu hold-repeat |
 | **v0.7.5** | Authentic **CineStill 800T (`800T`)** Vision3 tungsten + remjet-free red-orange halation & **Kodak 800 v3 (`K800`)** RAF-calibrated Kelvin fix |
 | **v0.7.4** | Added **Kodak 800 v3 (`K800`)** & **Leica X (`LCX`)** with phone-sensor tone, highlight, shadow & perceptual `OKLab` colour calibration |
 | **v0.7.3** | **Pure Blackout Optical Viewfinder** (top-left eyepiece window only, `#000000` body & hidden shutter ring) |

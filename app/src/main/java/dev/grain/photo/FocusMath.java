@@ -276,6 +276,78 @@ public final class FocusMath {
     return new float[] {cx - half, cy - half, cx + half, cy + half};
   }
 
+  /**
+   * Computes analog focus-lever response from thumb displacement {@code (dx, dy)}.
+   *
+   * @return {@code [vx, vy, visX, visY, speed]} where {@code (visX, visY)} is the normalized
+   *     360-degree visual cap deflection on the unit disk and {@code (vx, vy)} is the deadzone-
+   *     compensated dual-slope velocity vector ({@code speed = hypot(vx, vy)} in {@code [0..1]}).
+   */
+  public static float[] leverResponse(float dx, float dy, float maxRadius, float deadzone) {
+    float r = Math.max(1f, maxRadius);
+    float dist = (float) Math.hypot(dx, dy);
+    if (dist <= 1e-5f || !Float.isFinite(dist)) {
+      return new float[] {0f, 0f, 0f, 0f, 0f};
+    }
+    float ux = dx / dist, uy = dy / dist;
+    float rawMag = Math.min(1f, dist / r);
+    float visX = ux * rawMag, visY = uy * rawMag;
+    float dz = Math.max(0f, Math.min(0.6f, deadzone));
+    if (rawMag <= dz) {
+      return new float[] {0f, 0f, visX, visY, 0f};
+    }
+    float m = (rawMag - dz) / (1f - dz);
+    float speed = 0.24f * m + 0.76f * m * m;
+    return new float[] {ux * speed, uy * speed, visX, visY, speed};
+  }
+
+  /**
+   * Floating-origin leash for the analog lever: once the thumb slides past {@code leashRadius},
+   * pulls the virtual origin behind the thumb so reversing direction responds with zero deadzone
+   * lag.
+   */
+  public static float[] leverFloatingOrigin(
+      float originX, float originY, float touchX, float touchY, float leashRadius) {
+    float leash = Math.max(1f, leashRadius);
+    float dx = touchX - originX, dy = touchY - originY;
+    float dist = (float) Math.hypot(dx, dy);
+    if (dist <= leash || !Float.isFinite(dist)) {
+      return new float[] {originX, originY};
+    }
+    float scale = leash / dist;
+    return new float[] {touchX - dx * scale, touchY - dy * scale};
+  }
+
+  /** Advances normalized AF coordinates {@code (afX, afY)} smoothly along {@code (vx, vy)}. */
+  public static float[] leverGlideStep(
+      float afX, float afY, float vx, float vy, float dtSec, float maxPerSec) {
+    float dt = Float.isFinite(dtSec) ? Math.max(0f, Math.min(0.05f, dtSec)) : 0f;
+    float rate = Math.max(0f, maxPerSec);
+    float nx = Math.max(0.06f, Math.min(0.94f, afX + vx * rate * dt));
+    float ny = Math.max(0.06f, Math.min(0.94f, afY + vy * rate * dt));
+    return new float[] {nx, ny};
+  }
+
+  /**
+   * Maps normalized analog deflection {@code (nx, ny)} to cardinal directions ({@code 1=UP,
+   * 2=RIGHT, 3=DOWN, 4=LEFT}, or {@code -1} neutral) with release and axis hysteresis so menu
+   * scrolling never chatters on diagonals.
+   */
+  public static int leverCardinal(float nx, float ny, float threshold, int currentDir) {
+    float mag = (float) Math.hypot(nx, ny);
+    float enter = Math.max(0.08f, threshold);
+    float limit = currentDir > 0 ? enter * 0.72f : enter;
+    if (!Float.isFinite(mag) || mag < limit) return -1;
+    float ax = Math.abs(nx), ay = Math.abs(ny);
+    if (currentDir == 2 || currentDir == 4) {
+      if (ax * 1.15f >= ay) return nx >= 0f ? 2 : 4;
+    } else if (currentDir == 1 || currentDir == 3) {
+      if (ay * 1.15f >= ax) return ny >= 0f ? 3 : 1;
+    }
+    if (ax >= ay) return nx >= 0f ? 2 : 4;
+    return ny >= 0f ? 3 : 1;
+  }
+
   private static float clamp01(float v) {
     return Math.max(0f, Math.min(1f, v));
   }

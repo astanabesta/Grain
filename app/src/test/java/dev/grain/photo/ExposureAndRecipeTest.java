@@ -205,6 +205,41 @@ public class ExposureAndRecipeTest {
     assertEquals("torch", ExposureMath.FLASH_RECEIPT[s.flashMode]);
   }
 
+  @Test
+  public void focusLeverAnalogMathAndHysteresis() {
+    // Inside deadzone -> zero velocity, non-zero smooth visual cap offset
+    float[] dz = FocusMath.leverResponse(3f, 0f, 30f, 0.13f);
+    assertEquals(0f, dz[0], 1e-6f);
+    assertEquals(0f, dz[4], 1e-6f);
+    assertTrue(dz[2] > 0.09f);
+
+    // Diagonal 45-degree full deflection -> unit speed split equally across X and Y
+    float[] diag = FocusMath.leverResponse(30f, -30f, 30f, 0.13f);
+    assertEquals(1.0f, diag[4], 1e-4f);
+    assertEquals(Math.sqrt(0.5), diag[0], 1e-3);
+    assertEquals(-Math.sqrt(0.5), diag[1], 1e-3);
+
+    // Floating origin leash follows excessive thumb travel so direction reversal is instant
+    float[] origin = FocusMath.leverFloatingOrigin(50f, 50f, 150f, 50f, 40f);
+    assertEquals(110f, origin[0], 1e-4f);
+    assertEquals(50f, origin[1], 1e-4f);
+
+    // Glide step advances smoothly and clamps cleanly inside [0.06, 0.94]
+    float[] glided = FocusMath.leverGlideStep(0.50f, 0.50f, 0.7f, -0.7f, 1f / 60f, 0.90f);
+    assertTrue(glided[0] > 0.50f && glided[1] < 0.50f);
+    float[] clamped = FocusMath.leverGlideStep(0.93f, 0.07f, 1f, -1f, 0.05f, 0.90f);
+    assertEquals(0.94f, clamped[0], 1e-6f);
+    assertEquals(0.06f, clamped[1], 1e-6f);
+
+    // Cardinal hysteresis holds current axis across mild diagonal wobble and releases cleanly
+    assertEquals(-1, FocusMath.leverCardinal(0.15f, 0.05f, 0.32f, -1));
+    assertEquals(2, FocusMath.leverCardinal(0.50f, 0.10f, 0.32f, -1)); // RIGHT
+    assertEquals(2, FocusMath.leverCardinal(0.45f, 0.48f, 0.32f, 2)); // stays RIGHT on mild diagonal
+    assertEquals(3, FocusMath.leverCardinal(0.30f, 0.60f, 0.32f, 2)); // switches DOWN when decisive
+    assertEquals(3, FocusMath.leverCardinal(0.0f, 0.25f, 0.32f, 3)); // holds above release hysteresis
+    assertEquals(-1, FocusMath.leverCardinal(0.0f, 0.18f, 0.32f, 3)); // releases cleanly
+  }
+
   private static Recipe findRecipe(String key) {
     for (Recipe r : Recipe.ALL) {
       if (r.fuji != null && key.equals(r.fuji.key)) return r;
