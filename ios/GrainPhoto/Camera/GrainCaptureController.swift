@@ -37,8 +37,8 @@ public enum DriveSetting: Int, CaseIterable {
         case .timer5: return "5s TIMER"
         case .filmBracket: return "FS BKT"
         case .focusBracket: return "FOCUS BKT"
-        case .hiRes36: return "HI-RES 36MP"
-        case .hiRes48: return "HI-RES 48MP"
+        case .hiRes36: return "HI-RES 1 36MP"
+        case .hiRes48: return "HI-RES 2 48MP"
         }
     }
 
@@ -558,7 +558,7 @@ public final class GrainCaptureController: NSObject, ObservableObject {
             showToast("FOCUS BRACKET", subtitle: "3 focus planes")
             captureFocusBracket(planes: [0.25, 0.52, 0.80])
         case .hiRes36, .hiRes48:
-            showToast("\(label) · 4s SETTLE", subtitle: "Keep tripod steady · tap shutter to cancel")
+            showToast("\(driveSetting.label) · 4s SETTLE", subtitle: "Keep tripod steady · tap shutter to cancel")
             runSelfTimer(seconds: 4) { [weak self] in
                 self?.captureHiResSequence()
             }

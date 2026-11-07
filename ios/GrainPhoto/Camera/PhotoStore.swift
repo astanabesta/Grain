@@ -183,7 +183,11 @@ public final class PhotoStore: ObservableObject {
             return Self.receiptHeader(for: entry, megapixels: nil) + "{ \"film\": \"\(entry.filmName)\" }"
         }
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-        return Self.receiptHeader(for: entry, megapixels: json?["hiResMegapixels"] as? Int) + text
+        var megapixels: Int?
+        if let obj = json, let mp = obj["hiResMegapixels"] as? Int {
+            megapixels = mp
+        }
+        return Self.receiptHeader(for: entry, megapixels: megapixels) + text
     }
 
     private static func receiptHeader(for entry: RollEntry, megapixels: Int?) -> String {
