@@ -2072,12 +2072,12 @@ public final class GrainCamera {
     }
     if (value instanceof float[]) {
       JSONArray a = new JSONArray();
-      for (float v : (float[]) value) a.put((double) v);
+      for (float v : (float[]) value) a.put(Double.valueOf(v));
       return a;
     }
     if (value instanceof double[]) {
       JSONArray a = new JSONArray();
-      for (double v : (double[]) value) a.put(v);
+      for (double v : (double[]) value) a.put(Double.valueOf(v));
       return a;
     }
     if (value instanceof boolean[]) {

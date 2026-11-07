@@ -1214,9 +1214,9 @@ final class CameraBack extends ViewGroup {
 
     /** The focus fraction the given x on the scale means. */
     private float fractionAt(float x) {
-      float w = getWidth(), p = pad();
-      if (w <= 2 * p) return 0f;
-      return FocusScale.clampFraction((x - p) / (w - 2 * p));
+      float w = getWidth(), inset = pad();
+      if (w <= 2 * inset) return 0f;
+      return FocusScale.clampFraction((x - inset) / (w - 2 * inset));
     }
 
     private void apply(float x) {
@@ -1258,7 +1258,7 @@ final class CameraBack extends ViewGroup {
 
     @Override
     protected void onDraw(Canvas c) {
-      float w = getWidth(), h = getHeight(), p = pad();
+      float w = getWidth(), h = getHeight(), inset = pad();
       float minFocus = host.minFocusDistance();
       float value = FocusScale.clampFraction(state.mfFraction);
       float trackY = h * .58f;
@@ -1272,28 +1272,30 @@ final class CameraBack extends ViewGroup {
       t.setTextSize(7 * u);
       t.setColor(0xffb9b7ad);
       t.setTextAlign(Paint.Align.LEFT);
-      c.drawText("MANUAL FOCUS", p, h * .2f, t);
+      c.drawText("MANUAL FOCUS", inset, h * .2f, t);
       t.setFakeBoldText(false);
       p.setStrokeWidth(Math.max(1f, 2 * u));
       p.setColor(0xff000000);
-      c.drawLine(p, trackY, w - p, trackY, p);
+      c.drawLine(inset, trackY, w - inset, trackY, p);
       p.setStrokeWidth(Math.max(1f, 1 * u));
       p.setColor(0xff4a4b46);
-      c.drawLine(p, trackY - 1 * u, w - p, trackY - 1 * u, p);
+      c.drawLine(inset, trackY - 1 * u, w - inset, trackY - 1 * u, p);
       int stops = FocusScale.stopCount(minFocus);
       t.setTextSize(6.2f * u);
       for (int i = 0; i < stops; i++) {
         float f = FocusScale.stopFraction(i, minFocus);
-        float x = p + f * (w - 2 * p);
+        float x = inset + f * (w - 2 * inset);
         p.setColor(0xff77786f);
         p.setStrokeWidth(Math.max(1f, 1.2f * u));
         c.drawLine(x, trackY - 7 * u, x, trackY - 2 * u, p);
         t.setColor(0xff9b998f);
         t.setTextAlign(
-            x < p + 8 * u ? Paint.Align.LEFT : x > w - p - 8 * u ? Paint.Align.RIGHT : Paint.Align.CENTER);
+            x < inset + 8 * u
+                ? Paint.Align.LEFT
+                : x > w - inset - 8 * u ? Paint.Align.RIGHT : Paint.Align.CENTER);
         c.drawText(FocusScale.stopLabel(i, minFocus), x, trackY - 10 * u, t);
       }
-      float x = p + value * (w - 2 * p);
+      float x = inset + value * (w - 2 * inset);
       p.setColor(ORANGE);
       c.drawRoundRect(x - 1.6f * u, trackY - 11 * u, x + 1.6f * u, trackY + 11 * u, 1.6f * u, 1.6f * u, p);
       t.setFakeBoldText(true);
@@ -1302,7 +1304,7 @@ final class CameraBack extends ViewGroup {
       t.setTextAlign(Paint.Align.CENTER);
       c.drawText(
           FocusScale.label(value, minFocus),
-          Math.max(p + 16 * u, Math.min(w - p - 16 * u, x)),
+          Math.max(inset + 16 * u, Math.min(w - inset - 16 * u, x)),
           h * .93f,
           t);
       t.setFakeBoldText(false);
