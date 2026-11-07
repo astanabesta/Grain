@@ -591,6 +591,15 @@ must be re-measured with the receipt's `timingMs`.
   the camera's face detector found the face (`faceSource`), the EV applied (`faceExposureEv`) and
   the capture ISO, i.e. how much noise the lift brings up.
 
+- (v0.7.4) **Kodak 800 v3** (`kodak-800-v3`, Ritchie Roesch / Fuji X Weekly) and **Leica X**
+  (`leica-x`, Carl Cruz / `@carlcruzsnaps`), with dedicated phone-sensor-to-emulsion/Summilux
+  calibration (`ToneModel.calibratedCurve` + `RawDeveloper.applySensorCalibration` in perceptual
+  OKLab): true negative-Highlight roll-off (`Highlight -2` / `-1`), Portra open shadow toe vs Leica
+  dehazed black toe, perceptual `Color` (`+3` / `+4`), `Color Chrome Strong` subtractive pigment
+  darkening with skin-hue protection (`~50°` OKLab), phone lime-foliage rotation toward sage/forest
+  green, Portra golden-amber + paper-ivory highlights + gentle emulsion micro-bloom, Leica crimson /
+  cobalt depth, and hue-preserving gamut compression.
+
 Desktop harness: `tools/DevelopRaw.java` develops a raw Bayer dump with any `.cube` file. No Android
 is needed. `-Drecipe=<key>` picks a published recipe (e.g. `kodak-gold-200`, `vibrant-arizona`, `reggies-superia`) or
 `sim-<LUT name>`; `-Dwb`, `-Dkelvin`, `-Ddr`, `-Dfilter`, `-DshiftR/-DshiftB`, `-Dhl/-Dsh`,

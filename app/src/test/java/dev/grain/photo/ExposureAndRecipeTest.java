@@ -54,6 +54,65 @@ public class ExposureAndRecipeTest {
   }
 
   @Test
+  public void kodak800v3AndLeicaXMatchPublishedSettingsAndPhoneCaptureHeadroom() {
+    FujiRecipe k800 = FujiRecipe.KODAK_800_V3;
+    assertEquals("kodak-800-v3", k800.key);
+    assertEquals("Kodak 800 v3", k800.name);
+    assertEquals("CLASSIC-CHROME", k800.filmSimulation);
+    assertEquals(FujiRecipe.DynamicRange.DR400, k800.dynamicRange);
+    assertEquals(FujiRecipe.WhiteBalance.KELVIN, k800.wbMode);
+    assertEquals(6600, k800.kelvin);
+    assertEquals(-1, k800.wbShiftRed);
+    assertEquals(-3, k800.wbShiftBlue);
+    assertEquals(-2.0, k800.highlight, 1e-6);
+    assertEquals(-0.5, k800.shadow, 1e-6);
+    assertEquals(3, k800.color);
+    assertEquals(-2, k800.sharpness);
+    assertEquals(-4, k800.noiseReduction);
+    assertEquals(-3, k800.clarity);
+    assertEquals(2, k800.grainRoughness);
+    assertTrue(k800.grainLarge);
+    assertEquals(2, k800.colorChrome);
+    assertEquals(1, k800.colorChromeBlue);
+    assertEquals("+1/3 to +1 1/3 EV", k800.exposureNote);
+    assertTrue(k800.sensorCalibrated());
+    assertEquals(-1.25f, Recipe.rawCaptureBias(k800), 1e-5f);
+
+    FujiRecipe leica = FujiRecipe.LEICA_X;
+    assertEquals("leica-x", leica.key);
+    assertEquals("Leica X", leica.name);
+    assertEquals("CLASSIC-CHROME", leica.filmSimulation);
+    assertEquals(FujiRecipe.DynamicRange.AUTO, leica.dynamicRange);
+    assertEquals(FujiRecipe.WhiteBalance.AUTO, leica.wbMode);
+    assertEquals(1, leica.wbShiftRed);
+    assertEquals(-2, leica.wbShiftBlue);
+    assertEquals(-1.0, leica.highlight, 1e-6);
+    assertEquals(0.0, leica.shadow, 1e-6);
+    assertEquals(4, leica.color);
+    assertEquals(0, leica.sharpness);
+    assertEquals(-4, leica.noiseReduction);
+    assertEquals(0, leica.clarity);
+    assertEquals(0, leica.grainRoughness);
+    assertFalse(leica.grainLarge);
+    assertEquals(2, leica.colorChrome);
+    assertEquals(2, leica.colorChromeBlue);
+    assertEquals("0 to +1/3 EV", leica.exposureNote);
+    assertTrue(leica.sensorCalibrated());
+    assertEquals(-2f / 3f, Recipe.rawCaptureBias(leica), 1e-5f);
+
+    assertSame(FujiRecipe.KODAK_800_V3, Recipe.ALL[26].fuji);
+    assertSame(FujiRecipe.LEICA_X, Recipe.ALL[27].fuji);
+    int bkdIdx = -1, k800Idx = -1, lcxIdx = -1;
+    for (int i = 0; i < Recipe.DISPLAY_ORDER.length; i++) {
+      Recipe item = Recipe.DISPLAY_ORDER[i];
+      if (item.fuji == FujiRecipe.BRIGHT_KODAK) bkdIdx = i;
+      if (item.fuji == FujiRecipe.KODAK_800_V3) k800Idx = i;
+      if (item.fuji == FujiRecipe.LEICA_X) lcxIdx = i;
+    }
+    assertTrue(bkdIdx >= 0 && k800Idx == bkdIdx + 1 && lcxIdx == k800Idx + 1);
+  }
+
+  @Test
   public void exposurePlanCoversProgramShutterIsoAndManualModes() {
     double neutral = 16_000_000.0 * 100.0; // 1/60s @ ISO 100
     assertNull(ExposureMath.planStill(0, 0, 0, 0, neutral, 10_000L, 1_000_000_000L, 50, 6400));

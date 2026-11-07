@@ -106,6 +106,165 @@ public final class RawDeveloper {
    */
   static final float FV_CCE_C0 = 0.07f, FV_CCE_C1 = 0.19f;
 
+  static final int PROFILE_NONE = 0, PROFILE_KODAK_800_V3 = 1, PROFILE_LEICA_X = 2;
+  private static final float[] CBRT_Q = new float[2049];
+  private static final float[] SRGB_DEC = new float[4097], SRGB_ENC = new float[2049];
+
+  static {
+    for (int i = 0; i <= 2048; i++) {
+      double u = i / 2048.0;
+      CBRT_Q[i] = (float) Math.pow(u, 4.0 / 3.0);
+      double lin = u * u;
+      SRGB_ENC[i] = (float) (lin <= 0.0031308 ? 12.92 * lin : 1.055 * Math.pow(lin, 1 / 2.4) - 0.055);
+    }
+    for (int i = 0; i <= 4096; i++) {
+      double c = i / 4096.0;
+      SRGB_DEC[i] = (float) (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+    }
+  }
+
+  static int sensorProfileOf(FujiRecipe r) {
+    if (r == null) return PROFILE_NONE;
+    if ("kodak-800-v3".equals(r.key)) return PROFILE_KODAK_800_V3;
+    if ("leica-x".equals(r.key)) return PROFILE_LEICA_X;
+    return PROFILE_NONE;
+  }
+
+  private static float cbrtUnit(float x) {
+    if (x <= 0f) return 0f;
+    if (x >= 1f) return x == 1f ? 1f : (float) Math.cbrt(x);
+    float u = (float) Math.sqrt(Math.sqrt(x)) * 2048f;
+    int i = (int) u;
+    if (i >= 2048) i = 2047;
+    return CBRT_Q[i] + (u - i) * (CBRT_Q[i + 1] - CBRT_Q[i]);
+  }
+
+  private static float srgbDecodeFast(float c) {
+    if (c <= 0f) return 0f;
+    if (c >= 1f) return 1f;
+    float p = c * 4096f;
+    int i = (int) p;
+    if (i >= 4096) i = 4095;
+    return SRGB_DEC[i] + (p - i) * (SRGB_DEC[i + 1] - SRGB_DEC[i]);
+  }
+
+  private static float srgbEncodeFast(float lin) {
+    if (lin <= 0f) return 0f;
+    if (lin >= 1f) return 1f;
+    float p = (float) Math.sqrt(lin) * 2048f;
+    int i = (int) p;
+    if (i >= 2048) i = 2047;
+    return SRGB_ENC[i] + (uClamp(p - i)) * (SRGB_ENC[i + 1] - SRGB_ENC[i]);
+  }
+
+  private static float uClamp(float t) {
+    return t < 0f ? 0f : t > 1f ? 1f : t;
+  }
+
+  private static float sstep(float a, float b, float x) {
+    float t = (x - a) / (b - a);
+    t = t <= 0f ? 0f : t >= 1f ? 1f : t;
+    return t * t * (3f - 2f * t);
+  }
+
+  /**
+   * Perceptual OKLab phone-sensor-to-emulsion/Summilux colour, Color Chrome pigment density, skin
+   * protection, foliage hue calibration and hue-preserving soft gamut compression.
+   */
+  static void applySensorCalibration(float[] rgb, int profile, int colorStep, int cceLevel) {
+    float vr = rgb[0], vg = rgb[1], vb = rgb[2];
+    if (profile == PROFILE_LEICA_X && vr == vg && vg == vb) return;
+    float lr = srgbDecodeFast(vr), lg = srgbDecodeFast(vg), lb = srgbDecodeFast(vb);
+    float l = cbrtUnit(0.41222146f * lr + 0.53633255f * lg + 0.05144599f * lb);
+    float mm = cbrtUnit(0.21190350f * lr + 0.68069953f * lg + 0.10739697f * lb);
+    float s = cbrtUnit(0.08830246f * lr + 0.28171885f * lg + 0.62997869f * lb);
+    float L = 0.21045426f * l + 0.79361779f * mm - 0.00407204f * s;
+    float A = 1.97799850f * l - 2.42859221f * mm + 0.45059371f * s;
+    float Bb = 0.02590404f * l + 0.78277177f * mm - 0.80867580f * s;
+    float C = (float) Math.sqrt(A * A + Bb * Bb);
+    if (C > 1e-5f) {
+      float ua = A / C, ub = Bb / C;
+      float cSkin = ua * 0.6428f + ub * 0.7660f;
+      float cSkin2 = cSkin > 0f ? cSkin * cSkin : 0f;
+      float wSkin = (cSkin2 * cSkin2 * cSkin2) * sstep(0.015f, 0.045f, C) * (1f - sstep(0.095f, 0.145f, C));
+
+      float cRed = ua * 0.8801f + ub * 0.4748f;
+      float cRed2 = cRed > 0f ? cRed * cRed : 0f;
+      float wRed = (cRed2 * cRed2 * cRed2) * sstep(0.08f, 0.15f, C);
+
+      float cGold = ua * 0.0286f + ub * 0.9996f;
+      float cGold2 = cGold > 0f ? cGold * cGold : 0f;
+      float wGold = (cGold2 * cGold2) * sstep(0.03f, 0.09f, C);
+
+      float cLime = ua * (-0.6419f) + ub * 0.7668f;
+      float cLime2 = cLime > 0f ? cLime * cLime : 0f;
+      float wLime = (cLime2 * cLime2) * sstep(0.03f, 0.09f, C);
+
+      float cBlue = ua * (-0.1874f) + ub * (-0.9823f);
+      float cBlue2 = cBlue > 0f ? cBlue * cBlue : 0f;
+      float wBlue = (cBlue2 * cBlue2) * sstep(0.04f, 0.11f, C);
+
+      float shGuard = 0.55f + 0.45f * sstep(0.04f, 0.16f, L);
+      float hlGuard = 1f - 0.55f * sstep(0.80f, 0.99f, L);
+      float env = shGuard * hlGuard;
+
+      float cScale = 1f + (0.065f * colorStep) * env;
+      if (cScale < 0f) cScale = 0f;
+      float cce = cceLevel == 2 ? 0.130f : cceLevel == 1 ? 0.065f : 0f;
+      if (cce > 0f) {
+        float wCce = sstep(0.045f, 0.185f, C);
+        L -= cce * wCce * (1f - 0.55f * wSkin) * L;
+      }
+
+      float rotDeg;
+      if (profile == PROFILE_KODAK_800_V3) {
+        L += 0.010f * wSkin * sstep(0.25f, 0.50f, L) * (1f - sstep(0.75f, 0.92f, L));
+        cScale *= (1f + 0.08f * wGold - 0.07f * wLime);
+        rotDeg = 2.5f * wSkin - 3.5f * wGold + 7.5f * wLime;
+      } else {
+        cScale *= (1f + 0.10f * wRed - 0.11f * wSkin + 0.09f * wBlue - 0.04f * wLime);
+        L -= (0.028f * wRed + 0.022f * wLime + 0.020f * wBlue) * L;
+        rotDeg = -2.5f * wRed + 9.0f * wLime;
+      }
+      float rad = rotDeg * 0.0174532925f;
+      float r2 = rad * rad;
+      float cs = 1f - 0.5f * r2 * (1f - r2 * (1f / 12f));
+      float sn = rad * (1f - r2 * (1f / 6f));
+      float sa = A * cScale, sb = Bb * cScale;
+      A = sa * cs - sb * sn;
+      Bb = sa * sn + sb * cs;
+    }
+    if (profile == PROFILE_KODAK_800_V3) {
+      float wPaper =
+          sstep(0.76f, 0.88f, L) * (1f - sstep(0.93f, 0.995f, L)) * (1f - sstep(0.03f, 0.10f, C));
+      Bb += 0.006f * wPaper;
+      A += 0.0015f * wPaper;
+    }
+    if (L < 0f) L = 0f;
+    else if (L > 1f) L = 1f;
+
+    float outR = 0f, outG = 0f, outB = 0f;
+    for (int iter = 0; iter < 4; iter++) {
+      float l2 = L + 0.39633778f * A + 0.21580376f * Bb;
+      float m2 = L - 0.10556135f * A - 0.06385417f * Bb;
+      float s2 = L - 0.08948418f * A - 1.29148555f * Bb;
+      l2 = l2 * l2 * l2;
+      m2 = m2 * m2 * m2;
+      s2 = s2 * s2 * s2;
+      outR = 4.07674166f * l2 - 3.30771159f * m2 + 0.23096993f * s2;
+      outG = -1.26843800f * l2 + 2.60975740f * m2 - 0.34131940f * s2;
+      outB = -0.00419609f * l2 - 0.70341861f * m2 + 1.70761470f * s2;
+      float mx = Math.max(outR, Math.max(outG, outB));
+      float mn = Math.min(outR, Math.min(outG, outB));
+      if (mx <= 0.985f && mn >= -0.002f) break;
+      A *= 0.90f;
+      Bb *= 0.90f;
+    }
+    rgb[0] = srgbEncodeFast(outR);
+    rgb[1] = srgbEncodeFast(outG);
+    rgb[2] = srgbEncodeFast(outB);
+  }
+
   static final int FV_MAX_RADIUS = 4;
   static final int STRIP = 64, HALO = 5, GF_R = 2, NR_TABLE = 256;
   /** Quarter-resolution guided-filter radii (in 4 x 4 blocks) for luma and for chroma. */
@@ -262,6 +421,7 @@ public final class RawDeveloper {
     float[] qY, qU, qV, qS;
     final float lowKeep, cKeep, epsLow, epsChroma;
     final float chroma, cceDepth, blueDepth, grainAmp;
+    final int sensorProfile, recipeColor, recipeCce;
     /**
      * Acros filter (+Ye/+R/+G): after the LUT's own black-and-white conversion, each pixel's
      * equivalent grey is scaled by the filter's linear brightness ratio (filtered mix / the LUT's
@@ -425,13 +585,20 @@ public final class RawDeveloper {
       stats.put("rawClippedFraction", round(rawClipped, 5));
 
       // --- dynamic range and the white point
+      boolean fvInit = r.development == FujiRecipe.Development.FIRST_VERSION;
+      sensorProfile = fvInit ? PROFILE_NONE : sensorProfileOf(r);
+      recipeColor = r.color;
+      recipeCce = r.colorChrome;
       double gEv = Math.log(gain) / Math.log(2);
       double clipEv = Math.log(gain * clipFactor / 0.18) / Math.log(2);
       // D-Range Priority replaces DR and the tone curve (approximation, see DRP_* constants)
       boolean drp = r.dynamicRange.priority();
       double highlight = drp ? DRP_HIGHLIGHT : r.highlight, shadow = drp ? DRP_SHADOW : r.shadow;
       double extraEv = r.dynamicRange == FujiRecipe.DynamicRange.DRP_STRONG ? DRP_STRONG_EXTRA_EV : 0;
-      ToneModel.Curve probe = ToneModel.curve(0, highlight, shadow, o.stillsTone, 1, !sony);
+      ToneModel.Curve probe =
+          sensorProfile != PROFILE_NONE
+              ? ToneModel.calibratedCurve(0, highlight, shadow, o.stillsTone, 1, r.key)
+              : ToneModel.curve(0, highlight, shadow, o.stillsTone, 1, !sony);
       double whiteEv = ToneModel.whiteEv(probe, lut);
       double above = fractionAbove(hist, whiteEv - gEv);
       int steps;
@@ -473,7 +640,10 @@ public final class RawDeveloper {
         if (target != whiteEv) shoulder = (whiteEv - ToneModel.KNEE_EV) / (target - ToneModel.KNEE_EV);
       }
       stats.put("shoulderScale", round(shoulder, 4));
-      final ToneModel.Curve curve = ToneModel.curve(steps, highlight, shadow, o.stillsTone, shoulder, !sony);
+      final ToneModel.Curve curve =
+          sensorProfile != PROFILE_NONE
+              ? ToneModel.calibratedCurve(steps, highlight, shadow, o.stillsTone, shoulder, r.key)
+              : ToneModel.curve(steps, highlight, shadow, o.stillsTone, shoulder, !sony);
       tone =
           new ToneTable(
               x -> {
@@ -482,8 +652,11 @@ public final class RawDeveloper {
               });
       stats.put(
           "toneModel",
-          sony ? ToneModel.VERSION + ": shoulder remap and tuning only (Sony s709 tone, no Fujifilm offsets)"
-              : ToneModel.VERSION);
+          sony
+              ? ToneModel.VERSION + ": shoulder remap and tuning only (Sony s709 tone, no Fujifilm offsets)"
+              : sensorProfile != PROFILE_NONE
+                  ? ToneModel.VERSION + " + phone-sensor calibration (" + r.key + ")"
+                  : ToneModel.VERSION);
       stats.put("toneOffsetsAtKnots", curve.knots());
 
       int iso = Math.max(50, f.iso);
@@ -558,7 +731,7 @@ public final class RawDeveloper {
       pV = new float[qn];
       kq = new float[qn];
       qx0 = new int[W];
-      if (r.halation > 0 || r.bloom > 0) {
+      if (r.halation > 0 || r.bloom > 0 || (sensorProfile == PROFILE_KODAK_800_V3 && o.stillsTone)) {
         qLin = new float[3 * qn];
         qClip = new float[qn];
       }
@@ -638,12 +811,15 @@ public final class RawDeveloper {
 
       int halSteps = Math.max(0, Math.min(10, r.halation)), bloomSteps = Math.max(0, Math.min(10, r.bloom));
       double aH = HALATION_PER_STEP * halSteps;
-      bloomA = (float) (BLOOM_PER_STEP * bloomSteps);
+      float baseBloom = (float) (BLOOM_PER_STEP * bloomSteps);
+      if (sensorProfile == PROFILE_KODAK_800_V3 && o.stillsTone && bloomSteps == 0)
+        baseBloom = 0.036f; // Portra 800 v3 gentle emulsion highlight diffusion (Clarity -3 / 10% CineBloom)
+      bloomA = baseBloom;
       haloA[0] = (float) aH;
       haloA[1] = (float) (aH * HALATION_GREEN);
       haloA[2] = 0;
       for (int c = 0; c < 3; c++) glowKeep[c] = (1 - bloomA) * (1 - haloA[c]);
-      glow = halSteps > 0 || bloomSteps > 0;
+      glow = halSteps > 0 || bloomA > 0;
       double longSide = Math.max(W, H) / 4.0; // in quarter-resolution blocks
       haloR = boxRadius(HALATION_SIGMA * longSide);
       bloomR = boxRadius(BLOOM_SIGMA * longSide);
@@ -664,6 +840,14 @@ public final class RawDeveloper {
                 + CLIP_BOOST + "x their clipped value (assumption)");
       }
       if (claritySteps != 0) stats.put("clarityModel", "mid-band local contrast, approximation; k=" + round(clarityK, 3));
+      if (sensorProfile == PROFILE_KODAK_800_V3)
+        stats.put(
+            "sensorCalibration",
+            "Phone CMOS -> Kodak Portra 800 v3: soft highlight shoulder, open shadow toe, OKLab Color/CCE, golden-amber/skin/sage-foliage calibration, paper-ivory highlights");
+      else if (sensorProfile == PROFILE_LEICA_X)
+        stats.put(
+            "sensorCalibration",
+            "Phone CMOS -> Leica X: Summilux midtone/black-toe contrast, specular roll-off, OKLab Color +4/CCE pigment density, Leica crimson/skin-guard/forest-green/cobalt calibration");
       fvNoise = firstVersion && (epsFine > 0 || sharpen != 0 || clarityK != 0);
       if (firstVersion && post) {
         srgbDecode = new float[4097];
@@ -1681,6 +1865,7 @@ public final class RawDeveloper {
       final float[] ga = j.grainA, gb = j.grainB;
       final boolean post = j.post, cce = j.cceDepth > 0, mono = j.monoFilter;
       final boolean fv = j.firstVersion;
+      final int sp = j.sensorProfile, rColor = j.recipeColor, rCce = j.recipeCce;
       final float chroma = j.chroma, cceDepth = j.cceDepth, blueDepth = j.blueDepth;
       int src = (r + HALO) * W, dst = r * W;
       int rowA = ((y + j.grainOy) & 1023) << 10, rowB = j.mod997[y + j.grainOy] * 997;
@@ -1690,7 +1875,12 @@ public final class RawDeveloper {
         if (blueDepth > 0) fxBlue(lutOut, blueDepth); // both developments (v0.3.3)
         float vr = lutOut[0], vg = lutOut[1], vb = lutOut[2];
         if (mono) vr = vg = vb = j.filterMono(cr[src + x], cg[src + x], cb[src + x], vg);
-        if (post && fv) {
+        if (sp != PROFILE_NONE && !mono) {
+          applySensorCalibration(lutOut, sp, rColor, rCce);
+          vr = lutOut[0];
+          vg = lutOut[1];
+          vb = lutOut[2];
+        } else if (post && fv) {
           // First version (v0.2.0), unchanged: Color Chrome Effect / Color in OKLab
           float lr = j.decode(vr), lg = j.decode(vg), lb = j.decode(vb);
           float l = (float) Math.cbrt(0.4122214708f * lr + 0.5363325363f * lg + 0.0514459929f * lb);

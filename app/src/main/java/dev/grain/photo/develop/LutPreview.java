@@ -18,6 +18,11 @@ public final class LutPreview {
 
   /** Converts packed ARGB pixels in place. */
   public static void apply(int[] argb, CubeLut lut) {
+    apply(argb, lut, null);
+  }
+
+  /** Converts packed ARGB pixels in place, applying sensor-calibrated recipe character when present. */
+  public static void apply(int[] argb, CubeLut lut, FujiRecipe recipe) {
     float[] lin = new float[256];
     for (int i = 0; i < 256; i++) {
       double c = i / 255.0;
@@ -34,17 +39,46 @@ public final class LutPreview {
     }
     double gain = n == 0 ? 1 : 0.18 / Math.exp(sumLog / n);
     gain = Math.max(0.25, Math.min(8, gain));
+    int sp = RawDeveloper.sensorProfileOf(recipe);
+    int steps =
+        recipe == null
+            ? 0
+            : recipe.dynamicRange == FujiRecipe.DynamicRange.DR400
+                ? 2
+                : recipe.dynamicRange == FujiRecipe.DynamicRange.DR200 ? 1 : 0;
+    ToneModel.Curve curve =
+        sp != RawDeveloper.PROFILE_NONE
+            ? ToneModel.calibratedCurve(steps, recipe.highlight, recipe.shadow, true, 1.0, recipe.key)
+            : null;
+    float wbR = sp == RawDeveloper.PROFILE_KODAK_800_V3 ? 1.07f : sp == RawDeveloper.PROFILE_LEICA_X ? 1.03f : 1f;
+    float wbB = sp == RawDeveloper.PROFILE_KODAK_800_V3 ? 0.90f : sp == RawDeveloper.PROFILE_LEICA_X ? 0.95f : 1f;
+    float blueDepth = sp != RawDeveloper.PROFILE_NONE ? RawDeveloper.fxBlueDepth(recipe.colorChromeBlue) : 0f;
     float[] m = REC709_TO_REC2020, out = new float[3];
     float g = (float) gain;
     for (int i = 0; i < argb.length; i++) {
       int p = argb[i];
-      float r = lin[(p >> 16) & 255] * g, gg = lin[(p >> 8) & 255] * g, b = lin[p & 255] * g;
+      float r = lin[(p >> 16) & 255] * g * wbR;
+      float gg = lin[(p >> 8) & 255] * g;
+      float b = lin[p & 255] * g * wbB;
       float r2 = m[0] * r + m[1] * gg + m[2] * b;
       float g2 = m[3] * r + m[4] * gg + m[5] * b;
       float b2 = m[6] * r + m[7] * gg + m[8] * b;
-      lut.sample(encode(r2), encode(g2), encode(b2), out);
+      float cr = encode(r2), cg = encode(g2), cb = encode(b2);
+      if (curve != null) {
+        cr = clamp01((float) curve.apply(cr));
+        cg = clamp01((float) curve.apply(cg));
+        cb = clamp01((float) curve.apply(cb));
+      }
+      lut.sample(cr, cg, cb, out);
+      if (blueDepth > 0f) RawDeveloper.fxBlue(out, blueDepth);
+      if (sp != RawDeveloper.PROFILE_NONE)
+        RawDeveloper.applySensorCalibration(out, sp, recipe.color, recipe.colorChrome);
       argb[i] = (p & 0xff000000) | (byte8(out[0]) << 16) | (byte8(out[1]) << 8) | byte8(out[2]);
     }
+  }
+
+  private static float clamp01(float v) {
+    return v < 0f ? 0f : v > 1f ? 1f : v;
   }
 
   private static float encode(float v) {

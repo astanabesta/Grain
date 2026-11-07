@@ -77,15 +77,23 @@ public final class ToneModel {
     public final boolean stills;
     /** The fitted Fujifilm DR100 offsets (false for Sony s709: shoulder and tuning only). */
     public final boolean fujifilm;
+    /** Optional phone-sensor-to-simulation tone calibration profile ("" for baseline recipes). */
+    public final String profile;
 
     Curve(int drSteps, double highlight, double shadow, boolean stills, double shoulderScale,
         boolean fujifilm) {
+      this(drSteps, highlight, shadow, stills, shoulderScale, fujifilm, "");
+    }
+
+    Curve(int drSteps, double highlight, double shadow, boolean stills, double shoulderScale,
+        boolean fujifilm, String profile) {
       this.drSteps = drSteps;
       this.highlight = highlight;
       this.shadow = shadow;
       this.stills = stills;
       this.shoulderScale = shoulderScale;
       this.fujifilm = fujifilm;
+      this.profile = profile == null ? "" : profile;
     }
 
     /** F-Log2 code in, LUT input code out. */
@@ -97,6 +105,21 @@ public final class ToneModel {
         x = FLog2.encode(0.18 * Math.pow(2, e));
       }
       double d = fujifilm ? base(x) : 0;
+      if ("kodak-800-v3".equals(profile)) {
+        d += highlight * 0.0165 * smoothstep(-0.1, 3.0, e);
+        d -= drSteps * 0.0110 * smoothstep(0.6, 3.8, e);
+        d -= shadow * 0.0140 * smoothstep(0.15, 3.0, -e);
+        d += 0.0080 * smoothstep(0.2, 2.2, -e) * (1.0 - smoothstep(3.2, 5.0, -e));
+        return x + d;
+      }
+      if ("leica-x".equals(profile)) {
+        d += highlight * 0.0160 * smoothstep(0.0, 2.8, e);
+        d -= drSteps * 0.0080 * smoothstep(0.6, 3.6, e);
+        d += 0.0075 * smoothstep(-0.3, 1.3, e) * (1.0 - smoothstep(1.5, 3.2, e));
+        d -= 0.0105 * smoothstep(0.5, 3.4, -e);
+        d -= shadow * 0.0130 * smoothstep(0.2, 3.0, -e);
+        return x + d;
+      }
       d += highlight * HIGHLIGHT_PER_STEP * smoothstep(0, 2.5, e);
       d -= shadow * SHADOW_PER_STEP * smoothstep(0, 3, -e);
       d -= drSteps * DR200_MODIFIER * smoothstep(0.5, 4, e);
@@ -119,6 +142,12 @@ public final class ToneModel {
   public static Curve curve(
       int drSteps, double highlight, double shadow, boolean stills, double shoulderScale, boolean fujifilm) {
     return new Curve(drSteps, highlight, shadow, stills, shoulderScale, fujifilm);
+  }
+
+  /** Phone-sensor-calibrated stills curve for dedicated film/optical simulations. */
+  public static Curve calibratedCurve(
+      int drSteps, double highlight, double shadow, boolean stills, double shoulderScale, String profile) {
+    return new Curve(drSteps, highlight, shadow, stills, shoulderScale, true, profile);
   }
 
   /** Scene EV (re 18 % grey) where the curve + LUT first renders a neutral at >= 0.985. */

@@ -1024,7 +1024,10 @@ public class RawEngineTest {
     assertNull("only black and white films have a filter", control(gold, "Filter"));
 
     for (FujiRecipe r : FujiRecipe.PUBLISHED) {
-      assertTrue(r.key, r.source.startsWith("https://fujixweekly.com/"));
+      assertTrue(
+          r.key,
+          r.source.startsWith("https://fujixweekly.com/")
+              || r.source.startsWith("https://carlcruzsnaps.com/"));
       assertTrue(r.key + " is its own default", r.sameSettings(r.with(r.tuning())));
       for (dev.grain.photo.develop.TuningControl c : dev.grain.photo.develop.TuningControl.fujifilm(r))
         for (int p = 0; p < c.labels.length; p++) {
@@ -1783,5 +1786,100 @@ public class RawEngineTest {
     }
     assertEquals(FujiRecipe.Development.CLEAN, s.development);
     assertEquals(0, s.grainRoughness);
+  }
+
+  @Test
+  public void kodak800v3AndLeicaXCalibratePhoneSensorColorHighlightShadowAndTone() throws Exception {
+    // 1) Monotonicity and true negative-Highlight roll-off + Portra vs Leica shadow toe
+    ToneModel.Curve k800 =
+        ToneModel.calibratedCurve(2, -2.0, -0.5, true, 1.0, FujiRecipe.KODAK_800_V3.key);
+    ToneModel.Curve k800HardHi =
+        ToneModel.calibratedCurve(2, 0.0, -0.5, true, 1.0, FujiRecipe.KODAK_800_V3.key);
+    ToneModel.Curve leica =
+        ToneModel.calibratedCurve(1, -1.0, 0.0, true, 1.0, FujiRecipe.LEICA_X.key);
+    ToneModel.Curve leicaHardHi =
+        ToneModel.calibratedCurve(1, 0.0, 0.0, true, 1.0, FujiRecipe.LEICA_X.key);
+
+    double prevK = -1, prevL = -1;
+    for (double ev = -8.0; ev <= 8.0; ev += 0.125) {
+      double x = FLog2.encode(0.18 * Math.pow(2, ev));
+      double ck = k800.apply(x), cl = leica.apply(x);
+      assertTrue("Kodak 800 v3 curve strictly monotonic at EV " + ev, ck > prevK);
+      assertTrue("Leica X curve strictly monotonic at EV " + ev, cl > prevL);
+      prevK = ck;
+      prevL = cl;
+    }
+    double hiCode = FLog2.encode(0.18 * Math.pow(2, 2.2));
+    assertTrue(
+        "Highlight -2 softens highlights relative to Highlight 0 on Kodak 800 v3",
+        k800.apply(hiCode) < k800HardHi.apply(hiCode) - 0.02);
+    assertTrue(
+        "Highlight -1 softens highlights relative to Highlight 0 on Leica X",
+        leica.apply(hiCode) < leicaHardHi.apply(hiCode) - 0.01);
+
+    double shCode = FLog2.encode(0.18 * Math.pow(2, -2.0));
+    assertTrue(
+        "Kodak 800 v3 (Shadow -0.5) renders more open shadows than Leica X (grounded black toe)",
+        k800.apply(shCode) > leica.apply(shCode) + 0.012);
+
+    // 2) Full phone-sensor RAW development on goldenFrame()
+    FujiRecipe plainCc = FujiRecipe.standard("CLASSIC-CHROME", "Classic Chrome");
+    java.util.List<Map<String, Object>> stPlain = new java.util.ArrayList<>();
+    java.util.List<Map<String, Object>> stKodak = new java.util.ArrayList<>();
+    java.util.List<Map<String, Object>> stLeica = new java.util.ArrayList<>();
+
+    int[] pxPlain = developGolden(plainCc, false, stPlain);
+    int[] pxKodak = developGolden(FujiRecipe.KODAK_800_V3, true, stKodak);
+    int[] pxLeica = developGolden(FujiRecipe.LEICA_X, true, stLeica);
+
+    Map<String, Object> mk = stKodak.get(0), ml = stLeica.get(0);
+    assertTrue(String.valueOf(mk.get("sensorCalibration")).contains("Kodak Portra 800 v3"));
+    assertTrue(String.valueOf(ml.get("sensorCalibration")).contains("Leica X"));
+    assertTrue(
+        "Kodak 800 v3 applies gentle emulsion highlight micro-bloom",
+        ((Number) mk.get("bloomShare")).doubleValue() > 0.03);
+    assertTrue(
+        "Kodak 800 v3 renders Strong / Large grain",
+        ((Number) mk.get("grainAmplitude")).doubleValue() > 0.01);
+    assertEquals(
+        "Leica X keeps Grain Off",
+        0.0,
+        ((Number) ml.get("grainAmplitude")).doubleValue(),
+        1e-6);
+    assertTrue(
+        "Leica X FX Blue Strong exceeds Kodak 800 v3 FX Blue Weak",
+        ((Number) ml.get("colorChromeBlueDepth")).doubleValue()
+            > ((Number) mk.get("colorChromeBlueDepth")).doubleValue());
+
+    // Measure average chromatic richness on saturated patches vs plain Classic Chrome
+    double satPlain = meanSaturation(pxPlain), satKodak = meanSaturation(pxKodak), satLeica = meanSaturation(pxLeica);
+    assertTrue("Kodak 800 v3 boosts perceptual colour richness above plain Classic Chrome", satKodak > satPlain * 1.08);
+    assertTrue("Leica X boosts perceptual colour richness above plain Classic Chrome", satLeica > satPlain * 1.12);
+    assertNotEquals(fnv(pxKodak), fnv(pxLeica));
+
+    // 3) Film-sheet LutPreview differentiates Kodak 800 v3, Leica X and plain Classic Chrome
+    CubeLut lut = goldenLut();
+    int[] prevBase = {0xffb84842, 0xffb88f78, 0xff759942, 0xff528acc, 0xffeaeaea};
+    int[] tileK = prevBase.clone(), tileL = prevBase.clone(), tileC = prevBase.clone();
+    dev.grain.photo.develop.LutPreview.apply(tileC, lut);
+    dev.grain.photo.develop.LutPreview.apply(tileK, lut, FujiRecipe.KODAK_800_V3);
+    dev.grain.photo.develop.LutPreview.apply(tileL, lut, FujiRecipe.LEICA_X);
+    assertNotEquals(fnv(tileC), fnv(tileK));
+    assertNotEquals(fnv(tileC), fnv(tileL));
+    assertNotEquals(fnv(tileK), fnv(tileL));
+  }
+
+  private static double meanSaturation(int[] argb) {
+    double sum = 0;
+    int cnt = 0;
+    for (int p : argb) {
+      int r = (p >> 16) & 255, g = (p >> 8) & 255, b = p & 255;
+      int mx = Math.max(r, Math.max(g, b)), mn = Math.min(r, Math.min(g, b));
+      if (mx > 35 && mx < 245) {
+        sum += (mx - mn) / (double) mx;
+        cnt++;
+      }
+    }
+    return cnt == 0 ? 0 : sum / cnt;
   }
 }

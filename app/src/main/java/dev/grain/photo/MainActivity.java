@@ -504,6 +504,8 @@ public final class MainActivity extends ComponentActivity
     if (r.fuji == FujiRecipe.REGGIES_SUPERIA) return "SUP";
     if (r.fuji == FujiRecipe.KODAK_GOLD_200) return "GLD";
     if (r.fuji == FujiRecipe.BRIGHT_KODAK) return "BKD";
+    if (r.fuji == FujiRecipe.KODAK_800_V3) return "K800";
+    if (r.fuji == FujiRecipe.LEICA_X) return "LCX";
     if (r.fuji == FujiRecipe.KODACHROME_64) return "K64";
     if (r.fuji == FujiRecipe.PACIFIC_BLUES) return "PAC";
     if (r.fuji == FujiRecipe.VIBRANT_ARIZONA) return "ARZ";
@@ -551,6 +553,10 @@ public final class MainActivity extends ComponentActivity
         return new int[] {0xfff2b51c, 0xff4a2a10, 0xffc0392b};
       case "BKD":
         return new int[] {0xfff7cf3d, 0xff2b1c0e, 0xffd94126};
+      case "K800":
+        return new int[] {0xffe5a93b, 0xff2b1b12, 0xff9e2a2b};
+      case "LCX":
+        return new int[] {0xff1b1c1a, 0xfff4f1e8, 0xffd92b2b};
       case "K64":
         return new int[] {0xfff4c430, 0xff8b1a1a, 0xffb22222};
       case "PAC":
@@ -707,10 +713,14 @@ public final class MainActivity extends ComponentActivity
       ImageView art = new ImageView(this);
       art.setScaleType(ImageView.ScaleType.CENTER_CROP);
       boolean lutPreview = f.raw && luts.has(f.fuji.filmSimulation) && artwork != null;
-      Bitmap cachedPreview = lutPreview ? lutPreviews.get(f.fuji.filmSimulation) : null;
+      String previewKey =
+          lutPreview
+              ? (f.fuji.sensorCalibrated() ? f.fuji.key : f.fuji.filmSimulation)
+              : null;
+      Bitmap cachedPreview = previewKey != null ? lutPreviews.get(previewKey) : null;
       art.setImageBitmap(cachedPreview != null ? cachedPreview : artwork);
       if (lutPreview) {
-        if (cachedPreview == null) previewThroughLut(art, f.fuji.filmSimulation, artwork);
+        if (cachedPreview == null) previewThroughLut(art, previewKey, f.fuji, artwork);
         art.setContentDescription(
             "Reference picture through " + (f.fuji.sony() ? "Sony’s " : "Fujifilm’s ") + f.fuji.filmLabel
                 + " LUT; approximate");
@@ -856,23 +866,23 @@ public final class MainActivity extends ComponentActivity
     }
   }
 
-  private void previewThroughLut(ImageView art, String sim, Bitmap artwork) {
+  private void previewThroughLut(ImageView art, String cacheKey, FujiRecipe fuji, Bitmap artwork) {
     files.execute(
         () -> {
           try {
             int w = artwork.getWidth(), h = artwork.getHeight();
             int[] px = new int[w * h];
             artwork.getPixels(px, 0, w, 0, 0, w, h);
-            LutPreview.apply(px, luts.load(sim));
+            LutPreview.apply(px, luts.load(fuji.filmSimulation), fuji.sensorCalibrated() ? fuji : null);
             Bitmap out = Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888);
             runOnUiThread(
                 () -> {
-                  lutPreviews.put(sim, out);
+                  lutPreviews.put(cacheKey, out);
                   art.setColorFilter(null);
                   art.setImageBitmap(out);
                 });
           } catch (Exception e) {
-            android.util.Log.w("Grain", "LUT preview failed for " + sim, e);
+            android.util.Log.w("Grain", "LUT preview failed for " + cacheKey, e);
           }
         });
   }

@@ -132,13 +132,6 @@ jobs:
           sed "s/vVERSION/$TAG/g" .github/release-notes.md > release-files/RELEASE_NOTES.md
           PUBLISHED=0
           : > release-files/publication.log
-          # Remove obsolete releases whose target_commitish pointed to pre-rewrite commits.
-          for OLD_TAG in $(gh api "repos/$GH_REPO/releases?per_page=100" --jq '.[].tag_name' 2>/dev/null || true); do
-            if [ "$OLD_TAG" != "$TAG" ]; then
-              echo "Removing legacy release $OLD_TAG" >> release-files/publication.log
-              gh release delete "$OLD_TAG" --cleanup-tag --yes >> release-files/publication.log 2>&1 || true
-            fi
-          done
           # Re-publishing a version from a newer commit replaces that release and moves its tag.
           REL_TARGET=$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq '.target_commitish' 2>/dev/null || true)
           if [ -n "$REL_TARGET" ] && [ "$REL_TARGET" != "$GITHUB_SHA" ]; then

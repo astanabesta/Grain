@@ -63,7 +63,7 @@ public final class Recipe {
       "Reggie Ballesteros’ published Fujifilm recipe: Classic Negative, moodier, grainier and more"
           + " contrasty than his Portra, made for rich skin tones in directional light."
     };
-    Recipe[] all = new Recipe[fixed.length + sims.length + recipes.length + 2];
+    Recipe[] all = new Recipe[fixed.length + sims.length + recipes.length + 4];
     System.arraycopy(fixed, 0, all, 0, fixed.length);
     for (int i = 0; i < sims.length; i++) {
       int id = fixed.length + i;
@@ -106,6 +106,24 @@ public final class Recipe {
             "Ritchie Roesch’s published recipe: sun-drenched warmth, open shadows and bold Kodak"
                 + " colour. Developed from this phone’s RAW with Fujifilm’s official Classic"
                 + " Chrome LUT.",
+            false);
+    int kodak800v3Id = brightKodakId + 1;
+    all[kodak800v3Id] =
+        new Recipe(
+            kodak800v3Id,
+            FujiRecipe.KODAK_800_V3,
+            "Ritchie Roesch’s Kodak Portra 800 v3: warm golden amber, creamy pastel highlight"
+                + " roll-off, luminous open shadows and 800-speed grain, calibrated for phone"
+                + " sensors through Fujifilm’s Classic Chrome LUT.",
+            false);
+    int leicaXId = kodak800v3Id + 1;
+    all[leicaXId] =
+        new Recipe(
+            leicaXId,
+            FujiRecipe.LEICA_X,
+            "Carl Cruz’s Leica X: rich Leica Color vermilion, grounded forest greens, polarized"
+                + " cobalt blues and crisp Summilux black-toe micro-contrast, calibrated for phone"
+                + " sensors through Fujifilm’s Classic Chrome LUT.",
             false);
     return all;
   }
@@ -194,6 +212,10 @@ public final class Recipe {
   public static float rawCaptureBias(FujiRecipe f) {
     // Sony's s709 has no dynamic range setting: 1/3 EV of highlight room, like DR-Auto
     if (f.sony()) return -1f / 3;
+    if ("kodak-800-v3".equals(f.key) && f.dynamicRange == FujiRecipe.DynamicRange.DR400)
+      return -1.25f; // phone-sensor optimal headroom: 1.25 EV highlight safety without 4x shadow photon loss
+    if ("leica-x".equals(f.key) && f.dynamicRange == FujiRecipe.DynamicRange.AUTO)
+      return -2f / 3f; // 2/3 EV specular protection for crisp sunlit whites on phone CMOS
     switch (f.dynamicRange) {
       case DR400:
       case DRP_STRONG:

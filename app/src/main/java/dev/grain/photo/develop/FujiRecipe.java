@@ -650,12 +650,63 @@ public final class FujiRecipe {
           .build();
 
   /**
+   * Kodak Portra 800 v3 ("Kodak 800 v3") by Ritchie Roesch, as published by Fuji X Weekly, with
+   * phone-sensor-to-emulsion tone, highlight shoulder, shadow latitude and perceptual OKLab colour
+   * calibration.
+   */
+  public static final FujiRecipe KODAK_800_V3 =
+      new Builder(
+              "kodak-800-v3",
+              "Kodak 800 v3",
+              ROESCH,
+              "https://fujixweekly.com/2024/02/14/kodak-portra-800-v3-fujifilm-x-t5-x-trans-v-x-e4-x-trans-iv-film-simulation-recipe/",
+              "CLASSIC-CHROME",
+              "Classic Chrome")
+          .dynamicRange(DynamicRange.DR400)
+          .kelvin(6600, -1, -3)
+          .tone(-2, -0.5)
+          .color(3)
+          .detail(-2, -4, -3)
+          .grain(2, true)
+          .colorChrome(2, 1)
+          .exposure("+1/3 to +1 1/3 EV")
+          .build();
+
+  /**
+   * Leica X by Carl Cruz (@carlcruzsnaps), emulating Leica Color on Classic Chrome, with
+   * phone-sensor-to-Summilux/X-Trans V perceptual colour density, highlight roll-off and black-toe
+   * calibration.
+   */
+  public static final FujiRecipe LEICA_X =
+      new Builder(
+              "leica-x",
+              "Leica X",
+              "Carl Cruz (@carlcruzsnaps)",
+              "https://carlcruzsnaps.com/leica-x.html",
+              "CLASSIC-CHROME",
+              "Classic Chrome")
+          .dynamicRange(DynamicRange.AUTO)
+          .whiteBalance(WhiteBalance.AUTO, 1, -2)
+          .tone(-1, 0)
+          .color(4)
+          .detail(0, -4, 0)
+          .grain(0, false)
+          .colorChrome(2, 2)
+          .exposure("0 to +1/3 EV")
+          .build();
+
+  /** True when this recipe uses Grain's phone-sensor-to-emulsion tone and perceptual colour model. */
+  public boolean sensorCalibrated() {
+    return "kodak-800-v3".equals(key) || "leica-x".equals(key);
+  }
+
+  /**
    * The published recipes Grain develops, in the order the film list shows them (Reggie's two
    * first). Ids are assigned in Recipe and never change.
    */
   public static final FujiRecipe[] PUBLISHED = {
-    REGGIES_PORTRA, REGGIES_SUPERIA, KODAK_GOLD_200, BRIGHT_KODAK, KODACHROME_64, PACIFIC_BLUES,
-    VIBRANT_ARIZONA, CINESTILL_800T, KODAK_TRI_X_400
+    REGGIES_PORTRA, REGGIES_SUPERIA, KODAK_GOLD_200, BRIGHT_KODAK, KODAK_800_V3, LEICA_X,
+    KODACHROME_64, PACIFIC_BLUES, VIBRANT_ARIZONA, CINESTILL_800T, KODAK_TRI_X_400
   };
 
   /** Fujifilm's LUT download page, credited for the plain film simulations. */
