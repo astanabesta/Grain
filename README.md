@@ -13,7 +13,6 @@ wrapped in the back of a Fujifilm camera.
 [![Latest release](https://img.shields.io/github/v/release/astanabesta/Grain?include_prereleases&label=release&color=b5532a)](https://github.com/astanabesta/Grain/releases)
 [![Android](https://img.shields.io/badge/Android-10%2B-3ddc84?logo=android&logoColor=white)](#compatibility-and-test-status)
 
-**v0.6.0 · device-test beta · Redmi Note 13 Pro+**
 
 </div>
 
