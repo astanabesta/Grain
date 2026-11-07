@@ -10,7 +10,7 @@ Both changes below are **Android only for now** — the iOS build follows later.
 #### 1. A Manual-Focus Scale Under the Screen
 - **New:** Pick **MANUAL** in **MENU → FOCUS MODE** and a focus scale appears directly under the screen, in the space between the display and the bottom deck. It is there only while manual focus is selected, and it disappears the moment you go back to **AF-C** or **AF-S**.
 - **The stops are real distances, not step numbers.** A lens focuses by *dioptres*, and the distance is the reciprocal — one dioptre is one metre, ten dioptres is ten centimetres — so the scale is stretched at the far end and crowded at the near end, exactly like the distance scale engraved on a lens barrel.
-- On the Redmi Note 13 Pro+ the lens reports a closest focus of **10 cm**, so the scale runs from **∞** down to **10 cm** and is engraved **∞ · 1 m · 0.5 m · 0.2 m · 0.1 m**. The exact distance follows your thumb while you drag.
+- On the Redmi Note 13 Pro+ the lens reports a closest focus of **10 cm**, so the scale runs from **∞** down to **10 cm** and is engraved **∞ · 1 m · 0.50 m · 0.20 m · 0.10 m**. The exact distance follows your thumb while you drag.
 - **It works while the focus loupe is up**, which is where manual focus is actually used: magnify, drag the scale, watch the focus plane settle.
 - **Also:** the **MF DISTANCE** menu item, the magnifier label and the focus toast now read the distance (`0.30 m`) instead of `STEP 7 / 30`.
 

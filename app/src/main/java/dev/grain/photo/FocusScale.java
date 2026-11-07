@@ -73,9 +73,10 @@ public final class FocusScale {
     return label(stopFraction(index, minFocusDistance), minFocusDistance);
   }
 
-  /** One decimal place at most, with the trailing zeros taken off: 3.0 becomes "3", 1.5 stays. */
+  /** Two decimals at most, with the trailing zeros taken off: 3.00 becomes "3", 1.50 becomes "1.5". */
   private static String trim(float value) {
     String s = String.format(Locale.US, "%.2f", value);
+    if (s.endsWith("0")) s = s.substring(0, s.length() - 1);
     if (s.endsWith("0")) s = s.substring(0, s.length() - 1);
     if (s.endsWith(".")) s = s.substring(0, s.length() - 1);
     return s;

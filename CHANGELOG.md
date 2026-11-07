@@ -18,7 +18,7 @@ Both changes are **Android only for now**; the iOS build follows later.
   a lens focuses by dioptres and the distance is the reciprocal, so the scale is stretched at the
   far end and crowded at the near end, like the distance scale on a lens barrel. The Redmi Note 13
   Pro+ reports a closest focus of **10 cm**, so the scale runs from **∞** to **10 cm** and is
-  engraved **∞ · 1 m · 0.5 m · 0.2 m · 0.1 m**, with the exact distance under the thumb while you
+  engraved **∞ · 1 m · 0.50 m · 0.20 m · 0.10 m**, with the exact distance under the thumb while you
   drag. It works while the focus loupe is up. The `MF DISTANCE` menu item, the magnifier label and
   the focus toast now read the distance (`0.30 m`) instead of `STEP 7 / 30`.
 - **The HAL probe** — `MENU → SET UP → DIAGNOSTICS` now also dumps what the camera's own hardware
