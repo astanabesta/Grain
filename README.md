@@ -66,9 +66,9 @@ Every exposure saves a machine-readable **JSON receipt** documenting what was re
 
 ## Download & Install
 
-**Latest release:** [**Grain v0.7.5**](https://github.com/astanabesta/Grain/releases/latest) (`Grain-v0.7.5.apk` + `SHA256SUMS.txt`). All releases are listed on the [Releases page](https://github.com/astanabesta/Grain/releases).
+**Latest release:** [![Latest release](https://img.shields.io/github/v/release/astanabesta/Grain?include_prereleases&label=Grain%20APK&color=b5532a)](https://github.com/astanabesta/Grain/releases/latest) — [**Download latest APK & `SHA256SUMS.txt`**](https://github.com/astanabesta/Grain/releases/latest) · [All releases](https://github.com/astanabesta/Grain/releases)
 
-1. Download **`Grain-v0.7.5.apk`** from the [latest release](https://github.com/astanabesta/Grain/releases/latest) and install it.
+1. Open the [**latest release**](https://github.com/astanabesta/Grain/releases/latest), download **`Grain-v*.apk`**, and install it.
 2. Grant **Camera** permission on first launch (the only runtime permission Grain requests).
 3. Follow the 4-step **Intro Guide** (replayable anytime via `MENU → SET UP → INTRO GUIDE`).
 
