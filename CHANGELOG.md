@@ -8,6 +8,58 @@ one was a separate APK install on the device.
 
 ---
 
+## v0.7.5 — Authentic CineStill 800T (`800T`) & Kodak 800 v3 Kelvin Calibration
+
+- **CineStill 800T (`800T`) phone-sensor Vision3 500T calibration** — upgrades `cinestill-800t`
+  (`Eterna`) with true `3450K` tungsten-cinema white balance (replacing the greenish `Fluorescent 3`
+  approximation), automatic scene-linear **remjet-free red-orange pressure-plate halation** around
+  both clipped and bright unclipped night lamps/neon (`> +1.85 EV`), `-1.0 EV` low-light photon
+  headroom, grounded `Shadow +2` night blacks, perceptual `OKLab` `Color +4` / `Color Chrome Strong`,
+  emerald-mint fluorescent greens, and cyan-teal shadow × warm-amber highlight split-toning.
+- **Kodak 800 v3 (`K800`) RAF Kelvin calibration** — maps Fujifilm's menu Kelvin (`6600K`) through
+  Fujifilm's RAF-measured Planckian white-point curve (`5693K` DNG instead of overshooting `600K`
+  past Shade), producing clean creamy Portra 800 whites and natural peach-warm skin tones.
+
+## v0.7.4 — Kodak 800 v3 (`K800`) & Leica X (`LCX`) with Phone-Sensor Calibration
+
+- **Kodak 800 v3 (`K800`)** — adds Ritchie Roesch's *Kodak Portra 800 v3* (`Classic Chrome`, `DR400`,
+  `6600K R −1 B −3`, `Highlight −2`, `Shadow −0.5`, `Color +3`, `Clarity −3`, `Grain Strong / Large`,
+  `Color Chrome Strong`, `FX Blue Weak`) with soft highlight shoulder roll-off, `-1.25 EV` capture
+  headroom, open Portra shadow toe, gentle emulsion highlight micro-bloom, peach-gold skin
+  protection, and pine-sage foliage hue calibration.
+- **Leica X (`LCX`)** — adds Carl Cruz's *Leica X* (`Classic Chrome`, `DR-Auto`, `Auto WB R +1 B −2`,
+  `Highlight −1`, `Shadow 0`, `Color +4`, `Grain Off`, `Color Chrome Strong`, `FX Blue Strong`) with
+  Summilux midtone micro-contrast, dehazed optical black toe, `-2/3 EV` specular protection,
+  vermilion-crimson Leica reds, polarized cobalt skies, grounded emerald-forest greens, skin-hue
+  restraint, and hue-preserving soft gamut compression.
+
+## v0.7.3 — Pure Blackout Optical Viewfinder
+
+- **Top-left eyepiece blackout mode** — tapping `EYE` turns the entire camera body, dials, rear LCD,
+  and shutter ring pure `#000000` black, leaving only the top-left optical viewfinder window live
+  (tap inside to focus/meter, press Volume keys to shoot, tap anywhere outside or Back to return).
+
+## v0.7.2 — Gallery Multi-Select Batch Delete & Minimalist Onboarding
+
+- **Multi-select gallery** — select multiple frames together, toggle **All / None**, batch
+  **Delete (N)** with a 7-second **Undo** window, or batch **Save (N)** to `Pictures/Grain`.
+- **Minimalist hardware onboarding** — concise 4-step darkroom intro guide with custom vector
+  visuals (replayable via `MENU → SET UP → INTRO GUIDE`).
+
+## v0.7.1 — Xiaomi HyperOS / MIUI In-App Updater Fix
+
+- **`FileProvider` system-installer fallback** — detects silent/system-blocked `PackageInstaller`
+  aborts on Xiaomi HyperOS / MIUI and hands the verified APK directly to Android's system package
+  installer.
+
+## v0.7.0 — P / S / ISO / M Exposure Solver, Bright Kodak (`BKD`) & Hardware Flash (`⚡`)
+
+- **Closed-loop P / S / ISO / M exposure solver** — fixes manual shutter speed and ISO dials across
+  Program, Shutter-Priority, ISO-Priority, and Manual modes with `1/8 s` preview frame-duration
+  capping and ISO preview boost.
+- **Bright Kodak (`BKD`)** — adds Ritchie Roesch's *Bright Kodak* RAW recipe.
+- **Hardware Flash (`⚡`)** — adds `OFF`, `ON`, `AUTO`, and `TORCH` flash modes on the camera back.
+
 ## v0.6.0 — Magnifier, AF-C face tracking, focus bracketing & in-app updates
 
 Completes the focusing suite planned in v0.5.0 and adds verified in-app self-updating from GitHub
