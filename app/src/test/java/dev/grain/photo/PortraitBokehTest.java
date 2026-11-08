@@ -40,10 +40,6 @@ public class PortraitBokehTest {
 
     int[] out = new int[w * h];
     PortraitBokeh.applyRadius(img, w, h, mask, qw, qh, 22f, out);
-    StringBuilder dbg = new StringBuilder("DBG row y=" + hy + ":");
-    for (int x = 128; x <= 188; x += 4)
-      dbg.append(" ").append(Math.round(lumaAt(out, w, x, hy)));
-    System.out.println(dbg.toString());
 
     double d1FgBefore = d1(img, w, 60, 92, 46, 100);
     double d1FgAfter = d1(out, w, 60, 92, 46, 100);
@@ -119,7 +115,6 @@ public class PortraitBokehTest {
 
     double bedBefore = d1(img, w, 120, 172, 100, 136), bedAfter = d1(out, w, 120, 172, 100, 136);
     double bgBefore = d1(img, w, 60, 92, 4, 30), bgAfter = d1(out, w, 60, 92, 4, 30);
-    System.out.println("DBG depth: bg " + bgBefore + "->" + bgAfter + " bed " + bedBefore + "->" + bedAfter);
     assertTrue("far background melts (" + bgAfter + " vs " + bgBefore + ")", bgAfter <= 0.45 * bgBefore);
     assertTrue("same-plane object stays sharp (" + bedAfter + " vs " + bedBefore + ")", bedAfter >= 0.80 * bedBefore);
     double fgBefore = d1(img, w, 60, 92, 46, 100), fgAfter = d1(out, w, 60, 92, 46, 100);

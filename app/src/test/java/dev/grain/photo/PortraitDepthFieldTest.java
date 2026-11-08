@@ -6,7 +6,7 @@ import dev.grain.photo.develop.PortraitBokeh;
 import org.junit.Test;
 
 /** Sigma field from relative depth: far saturates, focus plane and same-depth items stay sharp. */
-public class PortraitDepthDebugTest {
+public class PortraitDepthFieldTest {
   @Test
   public void depthRadiusFieldSaturatesFarAndKeepsPlane() {
     int w = 192, h = 144;
@@ -26,8 +26,6 @@ public class PortraitDepthDebugTest {
     float rMaxQ = 4.6f;
     float[] rf = new float[qw * qh];
     boolean ok = PortraitBokeh.depthRadii(mask, depth, rf, qw, qh, rMaxQ);
-    System.out.println("DBG-DEPTH ok=" + ok + " bed=" + rf[30 * qw + 34]
-        + " farBg=" + rf[2 * qw + 45] + " person=" + rf[17 * qw + 17]);
     assertTrue("field produced", ok);
     assertTrue("person core sharp", rf[17 * qw + 17] == 0f);
     assertTrue("same-depth object sharp (" + rf[30 * qw + 34] + ")", rf[30 * qw + 34] < 0.25f);
