@@ -13,7 +13,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
+import org.robolectric.android.controller.ActivityController;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
@@ -183,6 +185,31 @@ public class BlackoutViewfinderTest {
     m3.recycle();
     u2.recycle();
     assertEquals(0, discreteSteps.get());
+  }
+
+  @Test
+  public void mainActivityOpensCleanlyAndCyclesThroughEveryDriveMode() {
+    Context app = RuntimeEnvironment.getApplication();
+    app.getSharedPreferences("grain", Context.MODE_PRIVATE)
+        .edit()
+        .putBoolean("onboardingDone", true)
+        .putBoolean("notifyUpdates", false)
+        .commit();
+
+    ActivityController<MainActivity> controller =
+        Robolectric.buildActivity(MainActivity.class).setup();
+    MainActivity activity = controller.get();
+    assertFalse("MainActivity must not fail startup", activity.startupFailed);
+
+    // Cycle around the full 8-stop DRIVE dial (including HI-RES 1/2/3) and back to SINGLE.
+    for (int i = 0; i < MainActivity.DRIVES.length; i++) {
+      activity.key(CameraBack.K_DRIVE, 0);
+    }
+    activity.key(CameraBack.K_Q, 0);
+    activity.key(CameraBack.K_Q, 0);
+    assertFalse(activity.startupFailed);
+
+    controller.pause().stop().destroy();
   }
 
   private static void dispatchTap(View target, float x, float y) {

@@ -423,6 +423,38 @@ public class ExposureAndRecipeTest {
         avg > merged.white * 0.15 && avg < merged.white * 0.65);
   }
 
+  @Test
+  public void driveModeHelpersCoverEveryDialStopWithoutRecursing() {
+    assertEquals(8, DriveModes.DRIVES.length);
+    for (int d = 0; d < DriveModes.DRIVES.length; d++) {
+      boolean hiRes = DriveModes.isHiRes(d);
+      boolean expectedHiRes =
+          d == DriveModes.DRIVE_HIRES_36
+              || d == DriveModes.DRIVE_HIRES_48
+              || d == DriveModes.DRIVE_HIRES_112;
+      assertEquals("isHiRes(" + d + ")", expectedHiRes, hiRes);
+      int settle = DriveModes.driveTimerSeconds(d);
+      if (d == DriveModes.DRIVE_TIMER_3) assertEquals(3, settle);
+      else if (d == DriveModes.DRIVE_TIMER_5) assertEquals(5, settle);
+      else if (d == DriveModes.DRIVE_HIRES_112) assertEquals(6, settle);
+      else if (hiRes) assertEquals(4, settle);
+      else assertEquals(0, settle);
+    }
+    assertEquals(36, DriveModes.hiResMegapixels(DriveModes.DRIVE_HIRES_36));
+    assertEquals(48, DriveModes.hiResMegapixels(DriveModes.DRIVE_HIRES_48));
+    assertEquals(112, DriveModes.hiResMegapixels(DriveModes.DRIVE_HIRES_112));
+    assertEquals(4, DriveModes.hiResFramesFor(DriveModes.DRIVE_HIRES_36));
+    assertEquals(4, DriveModes.hiResFramesFor(DriveModes.DRIVE_HIRES_48));
+    assertEquals(9, DriveModes.hiResFramesFor(DriveModes.DRIVE_HIRES_112));
+    assertEquals(2.0, DriveModes.hiResMaxScale(DriveModes.DRIVE_HIRES_48), 1e-9);
+    assertEquals(3.0, DriveModes.hiResMaxScale(DriveModes.DRIVE_HIRES_112), 1e-9);
+    assertEquals("HI-RES 3 112MP", DriveModes.hiResLabel(DriveModes.DRIVE_HIRES_112));
+    for (int step = 1; step < 9; step++) {
+      int amp = DriveModes.oisAmplitude(step, 9);
+      assertTrue("step " + step + " amp=" + amp, amp >= 1 && amp <= 255);
+    }
+  }
+
   private static Recipe findRecipe(String key) {
     for (Recipe r : Recipe.ALL) {
       if (r.fuji != null && key.equals(r.fuji.key)) return r;

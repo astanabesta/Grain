@@ -194,7 +194,7 @@ Full mathematical derivations and calibration measurements are documented in **[
 - **Requirements:** Android 10+ (API 29+, targeting API 36). `◆` RAW films require Camera2 `RAW_SENSOR` support on the active rear lens.
 - **Automated suite:**
   - **1,278** SDK-free pure-Java crop, tone-curve, preview, focus, and exposure smoke tests (`tools/check-source.sh`).
-  - **107** JUnit & Robolectric tests covering F-Log2 / S-Log3 round-trips, DNG Planckian/Bradford colour math, noise measurement, bit-identical golden hashes, sensor-calibrated tone/colour/halation invariants, analog focus-lever physics, blackout viewfinder geometry, exposure planning, Hi-Res merge sizing, nine-frame sub-pixel phase tracking, preview read-back safety, manual-focus scale geometry, and OTA update verification.
+  - **109** JUnit & Robolectric tests covering F-Log2 / S-Log3 round-trips, DNG Planckian/Bradford colour math, noise measurement, bit-identical golden hashes, sensor-calibrated tone/colour/halation invariants, analog focus-lever physics, blackout viewfinder geometry, exposure planning, Hi-Res merge sizing, nine-frame sub-pixel phase tracking, preview read-back safety, manual-focus scale geometry, and OTA update verification.
   - GitHub Actions runs `:app:testDebugUnitTest`, `:app:lintDebug`, and `:app:assembleRelease` before publishing every release.
 
 ---
@@ -307,6 +307,7 @@ tools/                          SDK-free syntax/math verifier, iOS type-check & 
 
 | Version | Highlights |
 | --- | --- |
+| **v0.8.7** | **Startup `StackOverflowError` fixed & guided 112 MP ready** (`Android`) — fixes the self-recursive `isHiRes(drive)` launch crash introduced in `v0.8.5`, hardens startup safe-mode so `onResume()` never touches uninitialised fields, fixes the green drift readout alpha in the 3×3 phase guide, and adds `DriveModes` + Robolectric `MainActivity` boot/drive-cycle regression tests |
 | **v0.8.6** | **A startup failure now shows itself instead of dying silently** (`Android`) — a failure while opening is shown in a dialog with a **Copy report** button and the app stays alive, the crash report appears half a second after launch, every crash also leaves a **`Grain-crash-<date>.txt`** file in `Download/Grain` (readable even when the app never opens), and the update check starts immediately so a crashing build can still be replaced from inside the app |
 | **v0.8.5** | **A guided nine-shot 112 MP mode** (`Android`) — **`HI-RES 3 112MP`** merges nine RAW frames of the same scene into ~`12216 × 9164` (~112 MP) from the same field of view, with an on-screen **3×3 sub-pixel phase guide** that lights a cell as each frame lands on it, a **drift meter** and corner ticks; the exposure is now **hard-locked** for the whole sequence, the merge needs **half** the memory it used to, and Grain **checks the phone's memory first** so it merges smaller instead of crashing |
 | **v0.8.4** | **The camera report can be saved, not just copied** (`Android`) — **Save as .txt** writes the whole report to `Download/Grain`, **Copy summary** copies only the high-resolution paths in a form that always survives the clipboard, and the report now opens with that summary and puts the high-resolution block first |

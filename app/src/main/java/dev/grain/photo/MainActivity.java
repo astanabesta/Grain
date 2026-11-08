@@ -96,20 +96,17 @@ public final class MainActivity extends ComponentActivity
     50, 64, 80, 100, 125, 160, 200, 250, 320, 400, 500, 640, 800, 1000, 1250, 1600, 2000, 2500, 3200,
     4000, 5000, 6400, 8000, 10000, 12800
   };
-  /** Drive-dial positions. The two tripod super-resolution modes sit at the end. */
-  private static final int DRIVE_SINGLE = 0,
-      DRIVE_TIMER_3 = 1,
-      DRIVE_TIMER_5 = 2,
-      DRIVE_FS_BKT = 3,
-      DRIVE_FOCUS_BKT = 4,
-      DRIVE_HIRES_36 = 5,
-      DRIVE_HIRES_48 = 6,
-      DRIVE_HIRES_112 = 7;
+  /** Drive-dial positions (delegated to {@link DriveModes}). */
+  static final int DRIVE_SINGLE = DriveModes.DRIVE_SINGLE,
+      DRIVE_TIMER_3 = DriveModes.DRIVE_TIMER_3,
+      DRIVE_TIMER_5 = DriveModes.DRIVE_TIMER_5,
+      DRIVE_FS_BKT = DriveModes.DRIVE_FS_BKT,
+      DRIVE_FOCUS_BKT = DriveModes.DRIVE_FOCUS_BKT,
+      DRIVE_HIRES_36 = DriveModes.DRIVE_HIRES_36,
+      DRIVE_HIRES_48 = DriveModes.DRIVE_HIRES_48,
+      DRIVE_HIRES_112 = DriveModes.DRIVE_HIRES_112;
 
-  private static final String[] DRIVES = {
-    "SINGLE", "TIMER 3S", "TIMER 5S", "FS BKT", "FOCUS BKT", "HI-RES 1 36MP", "HI-RES 2 48MP",
-    "HI-RES 3 112MP"
-  };
+  static final String[] DRIVES = DriveModes.DRIVES;
   private static final String[] VIEW_MODES = {"EYE SENSOR", "EVF ONLY", "LCD ONLY"};
   private static final String[] EV_LABELS = {
     "−2", "−1⅔", "−1⅓", "−1", "−⅔", "−⅓", "0", "+⅓", "+⅔", "+1", "+1⅓", "+1⅔", "+2", "C"
@@ -203,61 +200,28 @@ public final class MainActivity extends ComponentActivity
   private Runnable purgeTask;
   private String page = "camera";
 
+  boolean startupFailed;
+
   @Override
   public void onCreate(Bundle saved) {
     super.onCreate(saved);
     CrashLog.install(this);
+    preferences = getSharedPreferences("grain", MODE_PRIVATE);
+    initUpdaterHooks();
     try {
       onCreateBody(saved);
     } catch (Throwable e) {
-      // A failure while opening must not take Grain down silently: the user would only see
-      // "Grain keeps stopping" and no reason at all. Show the reason instead and keep the app
-      // alive, so the report can still be copied.
+      // A failure while opening must not take Grain down silently, and onResume() must not run
+      // against half-built fields afterwards. Keep the activity alive in minimal safe mode so the
+      // report can be copied and the built-in updater can still replace a broken build.
+      startupFailed = true;
       android.util.Log.e("Grain", "Startup failed", e);
+      CrashLog.recordCaught(this, e);
       showStartupFailure(e);
     }
   }
 
-  /** Shows a startup failure as a dialog the user can copy, instead of a crash. */
-  private void showStartupFailure(Throwable error) {
-    final String text = CrashLog.describe(error);
-    try {
-      new AlertDialog.Builder(this)
-          .setTitle("Grain could not start")
-          .setMessage("Something went wrong while opening:\n\n" + error)
-          .setPositiveButton(
-              "Copy report",
-              (d, w) -> {
-                try {
-                  ClipboardManager clip =
-                      (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-                  if (clip != null) clip.setPrimaryClip(ClipData.newPlainText("Grain crash", text));
-                  Toast.makeText(this, "Crash report copied", Toast.LENGTH_SHORT).show();
-                } catch (Throwable ignored) {
-                  // the clipboard is not worth crashing over
-                }
-              })
-          .setNegativeButton("Close", null)
-          .show();
-    } catch (Throwable ignored) {
-      // even the error dialog could not be shown
-    }
-  }
-
-  private void onCreateBody(Bundle saved) {
-    preferences = getSharedPreferences("grain", MODE_PRIVATE);
-    tuning = new RecipeTuning(preferences);
-    Arrays.fill(strengths, 80);
-    loadPrefs();
-    store = new PhotoStore(this);
-    store.purgeTrash();
-    luts = new LutLibrary(this);
-    lutPicker =
-        registerForActivityResult(
-            new ActivityResultContracts.OpenDocument(),
-            uri -> {
-              if (uri != null) importLuts(uri);
-            });
+  private void initUpdaterHooks() {
     installPermissionLauncher =
         registerForActivityResult(
             new ActivityResultContracts.StartActivityForResult(),
@@ -320,6 +284,49 @@ public final class MainActivity extends ComponentActivity
                                 : " (matching signing key required)"));
                   }
                 }));
+  }
+
+  /** Shows a startup failure as a dialog the user can copy, instead of a crash. */
+  private void showStartupFailure(Throwable error) {
+    final String text = CrashLog.describe(error);
+    try {
+      new AlertDialog.Builder(this)
+          .setTitle("Grain could not start")
+          .setMessage("Something went wrong while opening:\n\n" + error)
+          .setCancelable(false)
+          .setPositiveButton(
+              "Copy report",
+              (d, w) -> {
+                try {
+                  ClipboardManager clip =
+                      (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                  if (clip != null) clip.setPrimaryClip(ClipData.newPlainText("Grain crash", text));
+                  Toast.makeText(this, "Crash report copied", Toast.LENGTH_SHORT).show();
+                } catch (Throwable ignored) {
+                  // the clipboard is not worth crashing over
+                }
+              })
+          .setNeutralButton("Check update", (d, w) -> checkForUpdates(true))
+          .setNegativeButton("Close", (d, w) -> finish())
+          .show();
+    } catch (Throwable ignored) {
+      // even the error dialog could not be shown
+    }
+  }
+
+  private void onCreateBody(Bundle saved) {
+    tuning = new RecipeTuning(preferences);
+    Arrays.fill(strengths, 80);
+    loadPrefs();
+    store = new PhotoStore(this);
+    store.purgeTrash();
+    luts = new LutLibrary(this);
+    lutPicker =
+        registerForActivityResult(
+            new ActivityResultContracts.OpenDocument(),
+            uri -> {
+              if (uri != null) importLuts(uri);
+            });
     build();
     getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
       @Override public void handleOnBackPressed() { navigateBack(); }
@@ -1782,10 +1789,8 @@ public final class MainActivity extends ComponentActivity
    * can only do that if the nine frames land on nine different sub-pixel phases - so the
    * amplitudes have to spread the frames out, not just make them wobble.
    */
-  private static int oisAmplitude(int step, int frames) {
-    if (frames <= 4) return step == 1 ? 105 : step == 2 ? 145 : 125;
-    int[] ladder = {0, 55, 85, 115, 145, 180, 210, 240, 255};
-    return ladder[Math.max(1, Math.min(ladder.length - 1, step))];
+  static int oisAmplitude(int step, int frames) {
+    return DriveModes.oisAmplitude(step, frames);
   }
 
   private void abortHiRes() {
@@ -2361,6 +2366,12 @@ public final class MainActivity extends ComponentActivity
   protected void onResume() {
     super.onResume();
     resumed = true;
+    if (startupFailed) {
+      if (preferences == null) preferences = getSharedPreferences("grain", MODE_PRIVATE);
+      main.removeCallbacks(startupUpdateTask);
+      main.postDelayed(startupUpdateTask, 400);
+      return;
+    }
     immersive();
     // The preview surface is rebuilt while the activity comes back; give it a moment.
     settlePreview();
@@ -2395,6 +2406,12 @@ public final class MainActivity extends ComponentActivity
 
   @Override
   protected void onPause() {
+    if (startupFailed) {
+      resumed = false;
+      main.removeCallbacks(startupUpdateTask);
+      super.onPause();
+      return;
+    }
     if (orientationListener != null) orientationListener.disable();
     main.removeCallbacks(histogramTask);
     main.removeCallbacks(peakingTask);
@@ -2442,6 +2459,7 @@ public final class MainActivity extends ComponentActivity
 
   @Override
   public boolean onKeyDown(int code, KeyEvent event) {
+    if (startupFailed) return super.onKeyDown(code, event);
     if ((code == KeyEvent.KEYCODE_VOLUME_UP
             || code == KeyEvent.KEYCODE_VOLUME_DOWN
             || code == KeyEvent.KEYCODE_CAMERA)
@@ -2479,6 +2497,7 @@ public final class MainActivity extends ComponentActivity
   }
 
   private void updateThumb() {
+    if (store == null) return;
     files.execute(
         () -> {
           int count = store.list().size();
@@ -3839,6 +3858,7 @@ public final class MainActivity extends ComponentActivity
   }
 
   private void savePrefs() {
+    if (preferences == null) return;
     SharedPreferences.Editor edit =
         preferences
             .edit()
@@ -3886,6 +3906,10 @@ public final class MainActivity extends ComponentActivity
     if (snackbar != null && snackbar.getParent() instanceof ViewGroup)
       ((ViewGroup) snackbar.getParent()).removeView(snackbar);
     ViewGroup host = panel != null || back == null ? root : ui;
+    if (host == null) {
+      Toast.makeText(this, text, Toast.LENGTH_SHORT).show();
+      return;
+    }
     LinearLayout bar = row();
     bar.setPadding(dp(14), dp(9), dp(12), dp(9));
     bar.setElevation(dp(12));
@@ -5051,35 +5075,29 @@ public final class MainActivity extends ComponentActivity
     pushOsd();
   }
 
-  /** The self-timer length a drive mode implies (the Hi-Res modes use a 4 s tripod settle). */
-  private static int driveTimerSeconds(int drive) {
-    if (drive == DRIVE_TIMER_3) return 3;
-    if (drive == DRIVE_TIMER_5) return 5;
-    if (drive == DRIVE_HIRES_112) return 6;
-    if (isHiRes(drive)) return 4;
-    return 0;
+  /** The self-timer length a drive mode implies (4 s for 4-frame Hi-Res, 6 s for 9-frame). */
+  static int driveTimerSeconds(int drive) {
+    return DriveModes.driveTimerSeconds(drive);
   }
 
   /** True for the tripod super-resolution drive modes. */
-  private static boolean isHiRes(int drive) {
-    return isHiRes(drive) || drive == DRIVE_HIRES_112;
+  static boolean isHiRes(int drive) {
+    return DriveModes.isHiRes(drive);
   }
 
   /** The nominal output size of a tripod super-resolution drive mode, in megapixels. */
-  private static int hiResMegapixels(int drive) {
-    if (drive == DRIVE_HIRES_112) return 112;
-    return drive == DRIVE_HIRES_48 ? 48 : 36;
+  static int hiResMegapixels(int drive) {
+    return DriveModes.hiResMegapixels(drive);
   }
 
   /** How many RAW frames a tripod super-resolution drive mode merges. */
-  private static int hiResFramesFor(int drive) {
-    return drive == DRIVE_HIRES_112 ? 9 : 4;
+  static int hiResFramesFor(int drive) {
+    return DriveModes.hiResFramesFor(drive);
   }
 
   /** The target pixel count a tripod super-resolution drive mode merges toward. */
-  private static long hiResTargetPixelsFor(int drive) {
-    if (drive == DRIVE_HIRES_112) return HiResMerger.TARGET_PIXELS_112;
-    return drive == DRIVE_HIRES_48 ? HiResMerger.TARGET_PIXELS_48 : HiResMerger.TARGET_PIXELS;
+  static long hiResTargetPixelsFor(int drive) {
+    return DriveModes.hiResTargetPixelsFor(drive);
   }
 
   /**
@@ -5109,14 +5127,13 @@ public final class MainActivity extends ComponentActivity
   }
 
   /** The linear gain a drive mode's frame count can resolve: sqrt(frames). */
-  private static double hiResMaxScale(int drive) {
-    return drive == DRIVE_HIRES_112 ? HiResMerger.MAX_SCALE_9 : 2.0;
+  static double hiResMaxScale(int drive) {
+    return DriveModes.hiResMaxScale(drive);
   }
 
   /** Short label for a tripod super-resolution drive mode. */
-  private static String hiResLabel(int drive) {
-    if (drive == DRIVE_HIRES_112) return "HI-RES 3 112MP";
-    return drive == DRIVE_HIRES_48 ? "HI-RES 2 48MP" : "HI-RES 1 36MP";
+  static String hiResLabel(int drive) {
+    return DriveModes.hiResLabel(drive);
   }
 
   private void driveKey() {

@@ -2519,7 +2519,7 @@ final class CameraBack extends ViewGroup {
       p.setStyle(Paint.Style.FILL);
       float fs = size * .56f;
       text(c, "PHASE " + o.hiResPhases + "/9", left, top + gh + 5.4f * u, fs, 0xfff4f1e8, Paint.Align.LEFT);
-      int drift = o.hiResShiftPx < .7f ? 0x8fe08a : o.hiResShiftPx < 1.5f ? 0xffffd27a : 0xffff5a3c;
+      int drift = o.hiResShiftPx < .7f ? 0xff8fe08a : o.hiResShiftPx < 1.5f ? 0xffffd27a : 0xffff5a3c;
       text(c, shiftText(o.hiResShiftPx), left + gw, top + gh + 5.4f * u, fs, drift, Paint.Align.RIGHT);
       text(c, "TRIPOD · HOLD STEADY", left, top + gh + 10.4f * u, fs * .92f, 0x90ffffff, Paint.Align.LEFT);
     }

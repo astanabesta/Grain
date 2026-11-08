@@ -8,6 +8,22 @@ one was a separate APK install on the device.
 
 ---
 
+## v0.8.7 — Fix the Startup Crash & Ship the Guided 112 MP Mode (`Android`)
+
+**Android only for now**; the iOS build follows later.
+
+- **Fixed the launch `StackOverflowError` in `v0.8.5` / `v0.8.6`** — `MainActivity.isHiRes(int)`
+  accidentally called itself recursively when checking drive modes during `loadPrefs()`. Drive-dial
+  constants and Hi-Res helpers now live in pure-Java `DriveModes`, covered by both pure-JVM tests
+  across all 8 dial stops and a Robolectric `MainActivity` boot + drive-cycle test on `main`.
+- **Fixed safe-mode `onResume()` after a caught startup error** — `v0.8.6` caught `onCreate`
+  failures and wrote `Download/Grain/Grain-crash-*.txt`, but `onResume()` still called
+  `updateThumb()` while `store` was null. Safe mode now skips camera/store lifecycle work, keeps
+  the error dialog + updater alive, and ignores stale crash logs left by an older version.
+- **Fixed green drift readout opacity in the 3×3 Hi-Res phase guide** — `0x8fe08a` was missing its
+  alpha byte (`0xff8fe08a`), so sub-0.7 px shifts now render visibly in green alongside the phase
+  cells during **HI-RES 3 112MP** bursts.
+
 ## v0.8.6 — A Startup Failure Should Show Itself, Not Just Die (`Android`)
 
 **Android only for now**; the iOS build follows later.

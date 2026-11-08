@@ -68,7 +68,12 @@ public final class CrashLog {
   /** Forgets the recorded crash. */
   public static void clear(Context context) {
     try {
-      context.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit().remove("last").apply();
+      context
+          .getSharedPreferences(PREF, Context.MODE_PRIVATE)
+          .edit()
+          .remove("last")
+          .remove("version")
+          .apply();
     } catch (Throwable ignored) {
       // nothing to do
     }
@@ -81,7 +86,18 @@ public final class CrashLog {
   public static void showPending(final Activity activity) {
     final String text = lastCrash(activity);
     if (text == null || text.trim().isEmpty()) return;
+    String crashVer = null;
+    try {
+      crashVer =
+          activity.getSharedPreferences(PREF, Context.MODE_PRIVATE).getString("version", null);
+    } catch (Throwable ignored) {
+    }
     clear(activity);
+    if (!BuildConfig.VERSION_NAME.equals(crashVer)) {
+      // A crash from an earlier version that was just replaced by an update should not scare the
+      // user on the first launch of the fixed build.
+      return;
+    }
     try {
       ScrollView scroll = new ScrollView(activity);
       TextView view = new TextView(activity);
@@ -126,7 +142,12 @@ public final class CrashLog {
       // best effort
     }
     try {
-      context.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit().putString("last", text).apply();
+      context
+          .getSharedPreferences(PREF, Context.MODE_PRIVATE)
+          .edit()
+          .putString("last", text)
+          .putString("version", BuildConfig.VERSION_NAME)
+          .apply();
     } catch (Throwable ignored) {
       // best effort
     }
@@ -142,6 +163,27 @@ public final class CrashLog {
     }
   }
 
+  /** Saves a caught startup failure to crash.log and Download/Grain without marking next launch. */
+  public static void recordCaught(Context context, Throwable error) {
+    try {
+      Context app = context.getApplicationContext();
+      String text = describe(error);
+      try {
+        File file = new File(app.getFilesDir(), FILE);
+        try (FileOutputStream out = new FileOutputStream(file, false)) {
+          out.write(text.getBytes("UTF-8"));
+        }
+      } catch (Throwable ignored) {
+      }
+      try {
+        String stamp = new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date());
+        new PhotoStore(app).writeText("Grain-crash-" + stamp + ".txt", text);
+      } catch (Throwable ignored) {
+      }
+    } catch (Throwable ignored) {
+    }
+  }
+
   /** A full crash report for a throwable that was caught rather than fatal. */
   public static String describe(Throwable error) {
     return describe(Thread.currentThread(), error);
@@ -151,6 +193,7 @@ public final class CrashLog {
     StringWriter sw = new StringWriter();
     PrintWriter pw = new PrintWriter(sw);
     pw.println("Grain crash report");
+    pw.println("Version: " + BuildConfig.VERSION_NAME);
     pw.println("When   : " + new Date());
     pw.println("Android: " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")");
     pw.println("Device : " + Build.MANUFACTURER + " " + Build.MODEL);
