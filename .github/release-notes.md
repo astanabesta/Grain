@@ -1,19 +1,14 @@
-## Grain Photo vVERSION — Crisp Deep-Fusion Detail, Vibrant iPhone Backgrounds & iPhone XS Max Warm (`iXS`)
+## Grain Photo vVERSION — Bright 3D Portrait Faces & Silk-Clean Photonic Detail (`i16`, `iXS`, `iRS`, `iRC`, `iAM`)
 
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, and photos).
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** Download **`Grain-iOS-vVERSION.ipa`** below and install onto any iPhone (iOS 16+, including **iPhone XR / XS** and newer) using **[Sideloadly](https://sideloadly.io/)**, **[AltStore](https://altstore.io/)**, or **[SideStore](https://sidestore.io/)**.
 
-### What's new in v0.9.1
+### What's new in v0.9.2
 
-#### 1. New Built-In Profile: `iXS` — iPhone XS Max · Warm (`A12 Smart HDR`)
-- Added **`iXS` (`iPhone XS Max · Warm`)** right next to `i16` on the Film dial (alongside `iRS`, `iRC`, and `iAM` — 5 built-in Apple RAW profiles, no external LUT needed):
-  - **Signature A12 Smart HDR Golden-Honey AWB:** Warm golden midtones, velvety golden-peach skin glow, and creamy highlight roll-off without turning white surfaces orange.
-  - **Lush Sunlit Backgrounds:** Deep cobalt-cerulean skies, warm emerald sunlit foliage, rich street reds, and golden highlights.
+#### 1. Luminous 3D Portrait Faces, Bright Indoor Tones & Glossy Black Hair
+- **Apple Portrait Face Exposure (`AppleRender.FACE_KEY = 0.368`) + 3-Layer Face Metering:** Fixes dark indoor portraits against bright walls/windows by calibrating Apple portrait metering (`+0.8 EV` brighter than Fujifilm's low-key target), forwarding recent live-preview hardware face boxes when Camera2 omits `STATISTICS_FACES` on single-frame `RAW_SENSOR` captures, and adding a **Display P3 human-skin chromaticity fallback** for 3/4-turned or profile faces missed by frontal detectors (rejecting warm walls, shirts, and wood).
+- **Uncompressed Facial Highlights & Scene-Adaptive White Point:** Moves Smart HDR `highlightPull` above `+1.30 EV` so lit foreheads, cheekbones, and shirts keep full 3D tonal modeling (`+28` sRGB codes between lit and shadow cheeks instead of flattened midtones), tapers `shadowLift` below `-2.65 EV` so black hair stays rich and glossy rather than lifted grey, and adapts `whiteLin` to the scene's 99.6th-percentile peak so unclipped indoor walls render clean and bright instead of dull grey-cream.
 
-#### 2. Crisp Natural Detail & Texture Preservation (Fixes Over-Smooth Output)
-- **Redescending Texture-Isolated Smart HDR Local Tone Mapping:** Separates fine/medium surface texture (`<= 0.65 EV` leaves, hair, pores, fabric, brick) from the macro illumination map before guided filtering so LTM never cancels surface detail, restores subtle **Deep-Fusion local micro-contrast**, and keeps multi-stop silhouette edges completely halo-free.
-- **Calibrated Phone-CMOS Detail Defaults (`NR -4`, `Sharpness +1..+2`, `Clarity +1..+2`) + `-2/3 EV` Capture Headroom:** Doubles preserved pixel micro-texture (`nrKeep 0.40`), cuts fine/low-frequency NR over-smoothing in half, caps LTM shadow NR inflation, and captures `1.6×` more raw sensor photons while keeping specular highlights protected.
-
-#### 3. Vibrant iPhone Background Colours + Universal Vibrant sRGB + Ultra HDR
-- **Non-Skin Background Vibrance Engine:** Boosts background skies, lush emerald trees/grass (fixing the muted olive foliage in `v0.9.0`), street reds, and warm golds by `+18%–35%` with subtle Color-Chrome-style pigment depth while keeping human skin tones natural and protected from indoor orange clipping.
-- **Universal Vibrant sRGB + Android 14+ Ultra HDR `Gainmap`:** Grades internally in wide-gamut linear Display P3 / OKLab and encodes Universal Vibrant sRGB + ISO 21496-1 Ultra HDR `Gainmap` (`3.0×` OLED highlight headroom), so colours stay identically punchy in Grain, Google Photos, WhatsApp, Instagram, and every Android screen mode.
+#### 2. SNR-Gated Photonic Detail (Silk-Clean High-ISO Walls/Skin + Razor-Sharp Hair, Eyes & Text)
+- **Guided-Filter SNR Structure Gating (`meanA`):** Replaces unconditional raw-noise retention (`NR -4`) with per-pixel He–Sun–Tang guided-filter structure confidence gating (`bb[o + x] = meanA`), ISO-adaptive fine/quarter-block noise thresholds, and SNR-gated Deep-Fusion quarter-block micro-contrast.
+- **Best of Both Worlds:** Eliminates `>85%` of high-ISO sandy shot/read noise and `4×4` blotches on flat indoor walls, smooth skin, and dark hair while applying full halo-cored crisp acutance (`Sharpness +2..+3`) and fine edge retention (`0.46`) selectively to real hair strands, eyelashes, pores, textiles, wood grain, and lettering — paired with `-1/3 EV` capture bias (`+26%` more low-light photons).

@@ -30,7 +30,13 @@ public final class AppleRender {
   public static final String PREFIX = "APPLE-";
 
   /** Metering key in linear Rec.2020 (places 18% grey right at Apple's open midtone anchor). */
-  public static final double METERING_KEY = 0.188;
+  public static final double METERING_KEY = 0.210;
+
+  /**
+   * 65th-percentile linear face luminance target for Apple portrait metering (calibrates lit
+   * foreheads to ~179/255 and lit cheeks to ~162/255 sRGB with full 3D shadow modeling).
+   */
+  public static final double FACE_KEY = 0.368;
 
   /** Maximum linear HDR/SDR highlight boost encoded into the ISO 21496-1 Ultra HDR gainmap. */
   public static final float GAINMAP_RATIO_MAX = 3.0f;
@@ -97,55 +103,55 @@ public final class AppleRender {
         "Smart HDR 5 · Standard",
         1.000,
         1.000,
-        0.68f,
-        0.82f,
-        1.26,
-        0.60,
-        1.05),
+        0.56f,
+        0.84f,
+        1.17,
+        0.48,
+        1.32),
     XS_MAX_WARM(
         "APPLE-XS-MAX",
         "iXS",
         "A12 Smart HDR · XS Max Warm",
         1.044,
         0.942,
-        0.74f,
-        0.85f,
-        1.23,
-        0.62,
-        1.06),
+        0.58f,
+        0.86f,
+        1.15,
+        0.48,
+        1.34),
     NATURAL_ROSE(
         "APPLE-NATURAL-ROSE",
         "iRS",
         "Smart HDR 5 · Natural Rose",
         1.000,
         1.000,
-        0.72f,
-        0.80f,
-        1.19,
-        0.61,
-        1.06),
+        0.60f,
+        0.82f,
+        1.13,
+        0.49,
+        1.35),
     RICH_CONTRAST(
         "APPLE-RICH-CONTRAST",
         "iRC",
         "Smart HDR 5 · Rich Contrast",
         1.000,
         1.000,
-        0.40f,
-        0.86f,
-        1.42,
-        0.58,
-        1.02),
+        0.35f,
+        0.88f,
+        1.33,
+        0.48,
+        1.23),
     AMBER_COZY(
         "APPLE-AMBER-COZY",
         "iAM",
         "Smart HDR 5 · Amber Cozy",
         1.036,
         0.952,
-        0.68f,
-        0.82f,
-        1.27,
-        0.60,
-        1.05);
+        0.56f,
+        0.84f,
+        1.18,
+        0.48,
+        1.32);
 
     public final String id;
     public final String dialCode;
@@ -207,9 +213,27 @@ public final class AppleRender {
   }
 
   /**
+   * Linear Display P3 human-skin reflectance locus used as a portrait-exposure fallback when a
+   * turned/profile face was missed by the camera's frontal detector. Separates melanin/hemoglobin
+   * skin (`b/g >= 0.48`) from warm walls, shirts, hair, and high-absorption wood/amber (`b/g < 0.40`).
+   */
+  public static boolean isPortraitSkinLinearP3(float rP3, float gP3, float bP3) {
+    if (!(gP3 > 0.004f && rP3 > gP3 && gP3 > bP3)) return false;
+    float rg = rP3 / gP3;
+    float bg = bP3 / gP3;
+    return rg >= 1.18f
+        && rg <= 2.35f
+        && bg >= 0.45f
+        && bg <= 0.86f
+        && (rP3 - bP3) > 0.03f * gP3
+        && rg * bg > 0.72f;
+  }
+
+  /**
    * Spatially-varying local exposure delta (in stops) for a smoothed illumination envelope {@code
-   * envEv = log2(u / METERING_KEY)}. Lifts dark foregrounds/subjects while pulling bright windows
-   * and skies back into tonal range; deep sensor black floor tapers off to avoid lifting read noise.
+   * envEv = log2(u / METERING_KEY)}. Leaves lit skin and upper midtones ({@code 0 .. +1.30 EV})
+   * uncompressed to preserve 3D facial modeling, lifts shadow foregrounds while anchoring jet-black
+   * hair ({@code < -2.65 EV}), and pulls bright walls/windows/skies smoothly back into range.
    */
   public static float localToneDeltaEv(
       float envEv, Style style, double highlightTone, double shadowTone) {
@@ -218,13 +242,13 @@ public final class AppleRender {
       lift = Math.max(0f, Math.min(1.65f, lift));
       if (lift == 0f) return 0f;
       float neg = -envEv;
-      float shaped = (float) Math.tanh(neg / 2.2);
-      float blackGuard = 1f - sstep(4.2f, 6.8f, neg);
+      float shaped = (float) Math.tanh(neg / 1.90);
+      float blackGuard = 1f - 0.72f * sstep(2.65f, 4.65f, neg) - 0.28f * sstep(4.65f, 6.60f, neg);
       return lift * shaped * blackGuard;
     }
     float pull = style.highlightPullEv - (float) (0.14 * highlightTone);
     pull = Math.max(0.15f, Math.min(1.85f, pull));
-    return -pull * sstep(0.12f, 2.75f, envEv);
+    return -pull * sstep(1.30f, 3.00f, envEv);
   }
 
   /** Precomputed 4097-entry monotonic global {@code ProfileToneCurve} over {@code [0, whiteLin]}. */
@@ -239,7 +263,7 @@ public final class AppleRender {
       this.invWhite = 4096f / this.whiteLin;
 
       double toe = Math.max(1.02, Math.min(1.75, style.curveToe + 0.055 * shadowTone));
-      double shoulder = Math.max(0.42, Math.min(1.18, style.curveShoulder - 0.055 * highlightTone));
+      double shoulder = Math.max(0.34, Math.min(1.18, style.curveShoulder - 0.055 * highlightTone));
       double midGain = style.curveMidGain;
       double fw = rawCurve(wl, toe, shoulder, midGain);
       double invFw = 1.0 / Math.max(1e-6, fw);
@@ -249,7 +273,7 @@ public final class AppleRender {
       for (int i = 1; i < 4096; i++) {
         double x = wl * (i / 4096.0);
         double y = rawCurve(x, toe, shoulder, midGain);
-        double t = (x - 0.28) / Math.max(0.15, wl - 0.28);
+        double t = (x - 0.30) / Math.max(0.16, wl - 0.30);
         t = t < 0 ? 0 : t > 1 ? 1 : t;
         double ts = t * t * (3.0 - 2.0 * t);
         double scale = 1.0 + ts * (invFw - 1.0);
@@ -263,8 +287,8 @@ public final class AppleRender {
 
     private static double rawCurve(double v, double toe, double shoulder, double midGain) {
       if (v <= 0.0) return 0.0;
-      double u = (v / 0.18) * midGain;
-      double up = Math.pow(u, toe);
+      double u = v / 0.18;
+      double up = Math.pow(u, toe) * midGain;
       return 0.18 * up / (1.0 + shoulder * Math.pow(up * 0.18, 0.88));
     }
 

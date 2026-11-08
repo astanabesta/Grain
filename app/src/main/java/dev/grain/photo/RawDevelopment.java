@@ -65,6 +65,8 @@ final class RawDevelopment {
       faceSearch += ", " + (System.nanoTime() - t) / 1_000_000 + " ms";
     }
     final int outW = frame.width, outH = frame.height;
+    final int frameIso = frame.iso;
+    final long frameExposureNs = frame.exposureNs;
     final Bitmap bitmap = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888);
     Bitmap gainmapBmp = null;
     File tmp = null;
@@ -143,6 +145,16 @@ final class RawDevelopment {
           }
         } catch (Exception ignored) {
         }
+      if (exif.getAttribute(ExifInterface.TAG_MAKE) == null && Build.MANUFACTURER != null)
+        exif.setAttribute(ExifInterface.TAG_MAKE, Build.MANUFACTURER);
+      if (exif.getAttribute(ExifInterface.TAG_MODEL) == null && Build.MODEL != null)
+        exif.setAttribute(ExifInterface.TAG_MODEL, Build.MODEL);
+      if (exif.getAttribute(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY) == null && frameIso > 0)
+        exif.setAttribute(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY, String.valueOf(frameIso));
+      if (exif.getAttribute(ExifInterface.TAG_EXPOSURE_TIME) == null && frameExposureNs > 0)
+        exif.setAttribute(
+            ExifInterface.TAG_EXPOSURE_TIME,
+            String.format(java.util.Locale.US, "%.6f", frameExposureNs / 1e9));
       exif.setAttribute(
           ExifInterface.TAG_ORIENTATION,
           String.valueOf(RawSupport.exifOrientation(capture.orientationDegrees)));

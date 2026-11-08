@@ -156,9 +156,9 @@ public class AppleRenderTest {
       assertTrue(r.apple());
       assertFalse(r.sony());
       assertFalse(FujiRecipe.isTechnical(r.filmSimulation));
-      assertEquals(-2f / 3f, Recipe.rawCaptureBias(r), 1e-6f);
-      assertEquals(-4, r.noiseReduction);
-      assertTrue(r.sharpness >= 1);
+      assertEquals(-1f / 3f, Recipe.rawCaptureBias(r), 1e-6f);
+      assertEquals(0, r.noiseReduction);
+      assertTrue(r.sharpness >= 2);
       assertTrue(r.clarity >= 1);
 
       Set<String> controls = new HashSet<>();
@@ -500,6 +500,204 @@ public class AppleRenderTest {
       m[3] * lr + m[4] * lg + m[5] * lb,
       m[6] * lr + m[7] * lg + m[8] * lb
     };
+  }
+
+  @Test
+  public void indoorPortraitAgainstBrightWallProducesLuminous3dFaceAndGlossyBlackHair()
+      throws Exception {
+    // Verify skin locus separates human skin from walls, hair, and warm wood
+    assertTrue(AppleRender.isPortraitSkinLinearP3(0.45f, 0.30f, 0.21f));
+    assertFalse("Warm wall is not skin", AppleRender.isPortraitSkinLinearP3(0.75f, 0.72f, 0.62f));
+    assertFalse("Warm wood is not skin", AppleRender.isPortraitSkinLinearP3(0.32f, 0.21f, 0.06f));
+
+    // Indoor portrait against a bright cream wall (60% of frame): tests both boxed face metering
+    // and 3/4-angle unboxed portrait skin fallback.
+    int w = 240, h = 320;
+    double[] n = {0.5, 1.0, 0.625};
+    short[] data = new short[w * h];
+    RawFrame portrait = new RawFrame(data, w, h, w);
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        int c = portrait.color(x, y);
+        double rMul = 1.0, gMul = 1.0, bMul = 1.0, lum;
+        boolean inHair = x >= 76 && x < 164 && y >= 76 && y < 112;
+        boolean inFace = x >= 76 && x < 164 && y >= 112 && y < 208;
+        boolean inWood = y >= 248;
+        if (inHair) {
+          lum = 0.012; // jet-black hair
+        } else if (inFace) {
+          // Forehead (y 112..144), lit left cheek (x < 120), shadow right cheek (x >= 120)
+          lum = y < 144 ? 0.165 : (x < 120 ? 0.132 : 0.086);
+          rMul = 1.66;
+          gMul = 1.00;
+          bMul = 0.66;
+        } else if (inWood) {
+          lum = 0.095;
+          rMul = 1.62;
+          gMul = 1.00;
+          bMul = 0.24;
+        } else {
+          // Bright indoor cream wall filling the upper/side background
+          lum = 0.43;
+          rMul = 1.04;
+          gMul = 1.00;
+          bMul = 0.88;
+        }
+        double chMul = c == 0 ? rMul : c == 1 ? gMul : bMul;
+        double v = Math.max(0.002, Math.min(1.0, lum * chMul * n[c]));
+        data[y * w + x] = (short) Math.round(64 + v * (1023 - 64));
+      }
+    }
+    portrait.neutral = n;
+    portrait.colorMatrix1 = PHONE_CM1;
+    portrait.colorMatrix2 = PHONE_CM2;
+    portrait.forwardMatrix1 = PHONE_FM1;
+    portrait.forwardMatrix2 = PHONE_FM2;
+    portrait.illuminant1 = 21;
+    portrait.illuminant2 = 17;
+    portrait.iso = 1200;
+
+    // Case A: 3/4-angle portrait where frontal face detector missed (faces == null)
+    int[] pxUnboxed = new int[w * h];
+    RawDeveloper.Options optUnboxed = new RawDeveloper.Options();
+    optUnboxed.grain = false;
+    optUnboxed.faceExposure = true;
+    Map<String, Object> statsUnboxed =
+        RawDeveloper.develop(
+            portrait,
+            FujiRecipe.IPHONE_XS_MAX,
+            null,
+            optUnboxed,
+            (y, rows, argb, width) -> System.arraycopy(argb, 0, pxUnboxed, y * width, rows * width));
+    assertTrue(
+        "Unboxed portrait triggers skin metering fallback: " + statsUnboxed.get("faceExposure"),
+        String.valueOf(statsUnboxed.get("faceExposure")).contains("portrait skin metered"));
+
+    // Case B: Hardware face box reported
+    portrait.faces = new int[] {76, 108, 164, 208};
+    portrait.faceScores = new int[] {85};
+    portrait.faceSource = "camera face detection";
+    int[] pxBoxed = new int[w * h];
+    RawDeveloper.Options optBoxed = new RawDeveloper.Options();
+    optBoxed.grain = false;
+    optBoxed.faceExposure = true;
+    RawDeveloper.develop(
+        portrait,
+        FujiRecipe.IPHONE_XS_MAX,
+        null,
+        optBoxed,
+        (y, rows, argb, width) -> System.arraycopy(argb, 0, pxBoxed, y * width, rows * width));
+
+    for (int[][] pair : new int[][][] {{pxUnboxed}, {pxBoxed}}) {
+      int[] px = pair[0];
+      double wallL = lumaMean(px, w, 16, 60, 24, 180);
+      double foreheadL = lumaMean(px, w, 88, 152, 118, 138);
+      double litCheekL = lumaMean(px, w, 86, 114, 152, 196);
+      double shdCheekL = lumaMean(px, w, 126, 154, 152, 196);
+      double hairL = lumaMean(px, w, 88, 152, 82, 104);
+
+      assertTrue("Bright indoor wall luminous (" + wallL + ")", wallL > 218.0);
+      assertTrue("Forehead bright (" + foreheadL + ", not 150)", foreheadL > 166.0 && foreheadL < 204.0);
+      assertTrue("Lit cheek bright (" + litCheekL + ", not 130)", litCheekL > 148.0 && litCheekL < 190.0);
+      assertTrue(
+          "3D facial contrast preserved (" + (litCheekL - shdCheekL) + " codes)",
+          litCheekL - shdCheekL > 16.0);
+      assertTrue("Black hair stays glossy dark (" + hairL + ", not grey 71)", hairL < 60.0);
+    }
+  }
+
+  @Test
+  public void highIsoSnrGatedDetailKeepsFlatWallsSilkCleanWhileSharpeningFineEdges()
+      throws Exception {
+    int w = 224, h = 144;
+    double[] n = {0.5, 1.0, 0.625};
+    short[] data = new short[w * h];
+    RawFrame noisy = new RawFrame(data, w, h, w);
+    long rng = 987654321L;
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        int c = noisy.color(x, y);
+        // Left half: flat indoor cream wall; Right half: crisp fine hair/text bars (4 px period)
+        double base =
+            x < 112
+                ? 0.28
+                : (0.18 + 0.11 * (((x / 3) & 1) == 0 ? 1.0 : -1.0));
+        // Realistic ISO 1600 shot + read noise
+        rng = rng * 6364136223846793005L + 1442695040888963407L;
+        double u1 = (((rng >>> 32) & 0xFFFF) + 0.5) / 65536.0;
+        rng = rng * 6364136223846793005L + 1442695040888963407L;
+        double u2 = (((rng >>> 32) & 0xFFFF) + 0.5) / 65536.0;
+        double gauss = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+        double sigma = Math.sqrt(0.00018 * base + 0.000012);
+        double v = Math.max(0.002, Math.min(1.0, (base + gauss * sigma) * n[c]));
+        data[y * w + x] = (short) Math.round(64 + v * (1023 - 64));
+      }
+    }
+    noisy.neutral = n;
+    noisy.colorMatrix1 = PHONE_CM1;
+    noisy.colorMatrix2 = PHONE_CM2;
+    noisy.forwardMatrix1 = PHONE_FM1;
+    noisy.forwardMatrix2 = PHONE_FM2;
+    noisy.illuminant1 = 21;
+    noisy.illuminant2 = 17;
+    noisy.iso = 1600;
+
+    int[] pxV092 = new int[w * h];
+    RawDeveloper.Options opt = new RawDeveloper.Options();
+    opt.grain = false;
+    RawDeveloper.develop(
+        noisy,
+        FujiRecipe.IPHONE_XS_MAX,
+        null,
+        opt,
+        (y, rows, argb, width) -> System.arraycopy(argb, 0, pxV092, y * width, rows * width));
+
+    // Simulate noisy ungated NR-off development
+    int[] pxRawNoisy = new int[w * h];
+    RawDeveloper.Options optNoNr = new RawDeveloper.Options();
+    optNoNr.grain = false;
+    optNoNr.lumaNr = 0.05;
+    RawDeveloper.develop(
+        noisy,
+        FujiRecipe.IPHONE_XS_MAX,
+        null,
+        optNoNr,
+        (y, rows, argb, width) -> System.arraycopy(argb, 0, pxRawNoisy, y * width, rows * width));
+
+    double wallNoiseV092 = diff1Mean(pxV092, w, 20, 96, 20, h - 20);
+    double wallNoiseRaw = diff1Mean(pxRawNoisy, w, 20, 96, 20, h - 20);
+    double edgeGradV092 = gradientRms(pxV092, w, 128, w - 20, 20, h - 20);
+
+    assertTrue(
+        "SNR-gated NR cleans high-ISO flat wall >3x (" + wallNoiseRaw + " -> " + wallNoiseV092 + ")",
+        wallNoiseV092 < wallNoiseRaw * 0.33 && wallNoiseV092 < 1.8);
+    assertTrue("Fine edge acutance stays razor-sharp (" + edgeGradV092 + ")", edgeGradV092 > 22.0);
+  }
+
+  private static double lumaMean(int[] argb, int w, int x0, int x1, int y0, int y1) {
+    double sum = 0;
+    long n = 0;
+    for (int y = y0; y < y1; y++)
+      for (int x = x0; x < x1; x++) {
+        int p = argb[y * w + x];
+        sum += 0.299 * ((p >> 16) & 255) + 0.587 * ((p >> 8) & 255) + 0.114 * (p & 255);
+        n++;
+      }
+    return sum / Math.max(1, n);
+  }
+
+  private static double diff1Mean(int[] argb, int w, int x0, int x1, int y0, int y1) {
+    double sum = 0;
+    long n = 0;
+    for (int y = y0; y < y1; y++)
+      for (int x = x0; x < x1; x++) {
+        int p0 = argb[y * w + x], p1 = argb[y * w + x + 1];
+        double l0 = 0.299 * ((p0 >> 16) & 255) + 0.587 * ((p0 >> 8) & 255) + 0.114 * (p0 & 255);
+        double l1 = 0.299 * ((p1 >> 16) & 255) + 0.587 * ((p1 >> 8) & 255) + 0.114 * (p1 & 255);
+        sum += Math.abs(l1 - l0);
+        n++;
+      }
+    return sum / Math.max(1, n);
   }
 
   private static float srgbDec(float c) {

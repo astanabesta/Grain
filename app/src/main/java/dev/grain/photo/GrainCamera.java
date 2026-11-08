@@ -271,6 +271,8 @@ public final class GrainCamera {
   private float[] trackedFaceNorm, submittedFaceNorm, lastPostedFaceNorm;
   private int trackedFaceId = -1;
   private long lastFaceSeenMs, lastFaceRepeatMs;
+  private volatile Face[] lastPreviewFaces;
+  private volatile long lastPreviewFacesMs;
   /** AE-L: the preview's auto exposure holds its values; stills keep them (plus the film's headroom). */
   private volatile boolean aeLock;
   /** Until then stills keep the lens where a focus request put it (half-pressed shutter, tap). */
@@ -302,6 +304,16 @@ public final class GrainCamera {
           if (fd != null && fd >= 0f) lastFocusDistance = fd;
           Integer ls = result.get(CaptureResult.LENS_STATE);
           lastLensState = ls == null ? -1 : ls;
+          if (faceDetection) {
+            Face[] pf = result.get(CaptureResult.STATISTICS_FACES);
+            if (pf != null && pf.length > 0) {
+              lastPreviewFaces = pf;
+              lastPreviewFacesMs = SystemClock.uptimeMillis();
+            } else if (lastPreviewFaces != null
+                && (SystemClock.uptimeMillis() - lastPreviewFacesMs) > 1800L) {
+              lastPreviewFaces = null;
+            }
+          } else lastPreviewFaces = null;
           if (afArea == AF_FACE && bracketFraction < 0f) trackFace(result);
           else if (afArea != AF_FACE && trackedFaceNorm != null) clearTrackedFace();
           double[] faceUpright =
@@ -1415,6 +1427,16 @@ public final class GrainCamera {
         int orientation = jpegOrientation();
         try {
           frame = RawSupport.frame(raw, chars, pendingResult);
+          if ((frame.faces == null || frame.faces.length == 0)
+              && faceDetection
+              && lastPreviewFaces != null
+              && (SystemClock.uptimeMillis() - lastPreviewFacesMs) <= 1800L) {
+            try {
+              RawSupport.facesFromArray(
+                  frame, chars, lastPreviewFaces, "preview camera face detection");
+            } catch (RuntimeException ignored) {
+            }
+          }
           File dir = dngDirectory;
           if (dir != null) {
             dng = new File(dir, "capture-" + timestamp + ".dng");
@@ -2153,6 +2175,7 @@ public final class GrainCamera {
             clearPending();
             bracketFraction = -1f;
             bracketAeHold = false;
+            lastPreviewFaces = null;
             clearTrackedFace();
             if (session != null) {
               session.close();

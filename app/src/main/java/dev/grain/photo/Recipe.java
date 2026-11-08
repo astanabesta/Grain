@@ -264,8 +264,8 @@ public final class Recipe {
   public static float rawCaptureBias(FujiRecipe f) {
     // Sony's s709 has no dynamic range setting: 1/3 EV of highlight room, like DR-Auto
     if (f.sony()) return -1f / 3;
-    // Apple Smart HDR + Ultra HDR: 2/3 EV specular headroom while preserving clean photon detail
-    if (f.apple()) return -2f / 3f;
+    // Apple Smart HDR + Ultra HDR: 1/3 EV specular headroom with cleaner indoor/low-light photons
+    if (f.apple()) return -1f / 3f;
     if ("kodak-800-v3".equals(f.key) && f.dynamicRange == FujiRecipe.DynamicRange.DR400)
       return -1.25f; // phone-sensor optimal headroom: 1.25 EV highlight safety without 4x shadow photon loss
     if ("cinestill-800t".equals(f.key) && f.dynamicRange == FujiRecipe.DynamicRange.DR400)

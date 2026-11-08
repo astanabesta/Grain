@@ -814,7 +814,7 @@ public final class FujiRecipe {
           "Apple (Smart HDR 5)",
           AppleRender.Style.STANDARD,
           2,
-          -4,
+          0,
           1);
 
   /** iPhone XS Max Warm: iconic A12 Smart HDR golden-warm AWB, lush vibrant backgrounds & crisp detail. */
@@ -825,7 +825,7 @@ public final class FujiRecipe {
           "Apple (A12 Smart HDR)",
           AppleRender.Style.XS_MAX_WARM,
           2,
-          -4,
+          0,
           1);
 
   /** iPhone 16 Pro Natural Rose: luminous portrait skin undertone, tamed yellow cast, vibrant scene. */
@@ -835,8 +835,8 @@ public final class FujiRecipe {
           "iPhone 16 Pro · Natural Rose",
           "Apple (Smart HDR 5)",
           AppleRender.Style.NATURAL_ROSE,
-          1,
-          -4,
+          2,
+          0,
           1);
 
   /** iPhone 16 Pro Rich Contrast: deeper shadow anchor, crisp detail, rich pigment vibrancy. */
@@ -846,8 +846,8 @@ public final class FujiRecipe {
           "iPhone 16 Pro · Rich Contrast",
           "Apple (Smart HDR 5)",
           AppleRender.Style.RICH_CONTRAST,
-          2,
-          -4,
+          3,
+          0,
           2);
 
   /** iPhone 16 Pro Amber Cozy: golden-hour warmth across midtones & highlights with protected skin. */
@@ -858,7 +858,7 @@ public final class FujiRecipe {
           "Apple (Smart HDR 5)",
           AppleRender.Style.AMBER_COZY,
           2,
-          -4,
+          0,
           1);
 
   /** Built-in Apple iPhone RAW profiles in Film picker order. */

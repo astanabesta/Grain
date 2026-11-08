@@ -187,8 +187,12 @@ final class RawSupport {
    * pixels for face exposure. Nothing is set when there are none.
    */
   static void faces(RawFrame f, CameraCharacteristics chars, CaptureResult result) {
-    Face[] faces = result.get(CaptureResult.STATISTICS_FACES);
-    Rect active = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+    facesFromArray(f, chars, result.get(CaptureResult.STATISTICS_FACES), "camera face detection");
+  }
+
+  static void facesFromArray(
+      RawFrame f, CameraCharacteristics chars, Face[] faces, String source) {
+    Rect active = chars == null ? null : chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
     if (faces == null || faces.length == 0 || active == null) return;
     Rect pre = chars.get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE);
     Size pixels = chars.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE);
@@ -220,7 +224,7 @@ final class RawSupport {
     if (n == 0) return;
     f.faces = Arrays.copyOf(rects, 4 * n);
     f.faceScores = Arrays.copyOf(scores, n);
-    f.faceSource = "camera face detection";
+    f.faceSource = source;
   }
 
   /** Summary of the frame's calibration for the photo receipt. */

@@ -578,6 +578,7 @@ public final class RawDeveloper {
     final AppleRender.ToneTable appleTone;
     final boolean outputDisplayP3, stillsTone;
     final double recipeHighlight, recipeShadow;
+    final float appleBlockShot, appleBlockRead;
     final byte[] gainmapOut;
     int bandLocalOut0, bandLocalOut1;
     float[] qLin, qClip, band, ltmGainQ;
@@ -762,15 +763,22 @@ public final class RawDeveloper {
       final ToneModel.Curve curve;
       if (apple) {
         double clipLin = gain * clipFactor;
-        float clipEnvEv =
-            (float) (Math.log(Math.max(1e-5, clipLin) / AppleRender.METERING_KEY) / Math.log(2));
-        float clipDeltaEv =
-            o.stillsTone
-                ? AppleRender.localToneDeltaEv(clipEnvEv, appleStyle, r.highlight, r.shadow)
-                : 0f;
-        double clipPostLtm = clipLin * Math.pow(2.0, clipDeltaEv);
-        double whiteLin =
-            o.stillsTone ? Math.max(0.95, Math.min(1.85, clipPostLtm * 0.98)) : 1.65;
+        double p996Lin = gain * histogramPercentileLinear(hist, 0.996);
+        double whiteLin;
+        if (o.stillsTone) {
+          float hdrT = sstep(0.95f, 1.35f, (float) p996Lin);
+          double peakLin = Math.min(clipLin, Math.max(1.04, p996Lin * 1.15));
+          float peakEnvEv =
+              (float) (Math.log(Math.max(1e-5, peakLin) / AppleRender.METERING_KEY) / Math.log(2));
+          float peakDeltaEv =
+              AppleRender.localToneDeltaEv(peakEnvEv, appleStyle, r.highlight, r.shadow);
+          double postPeak = peakLin * Math.pow(2.0, peakDeltaEv);
+          double wlIndoor = Math.max(0.96, postPeak * 0.98);
+          double wlHdr = Math.max(1.26, postPeak * 1.22);
+          whiteLin = Math.min(1.85, wlIndoor + hdrT * (wlHdr - wlIndoor));
+        } else {
+          whiteLin = 1.65;
+        }
         appleTone = new AppleRender.ToneTable(appleStyle, whiteLin, r.highlight, r.shadow);
         curve = ToneModel.curve(0, 0, 0, false, 1, false);
         tone =
@@ -781,6 +789,7 @@ public final class RawDeveloper {
                 });
         stats.put("dynamicRange", "Smart HDR 5 spatially-varying local tone map + Ultra HDR");
         stats.put("rawClipEv", round(clipEv, 3));
+        stats.put("appleScenePeakLinear", round(p996Lin, 4));
         stats.put("appleWhiteLinear", round(whiteLin, 4));
         stats.put(
             "toneModel",
@@ -890,15 +899,20 @@ public final class RawDeveloper {
       } else noiseSource += " x" + HAL_NOISE_SCALE;
       int nrStep = Math.max(-4, Math.min(4, r.noiseReduction));
       firstVersion = r.development == FujiRecipe.Development.FIRST_VERSION;
+      int isoNr = Math.max(50, f.iso);
+      double isoBoost =
+          Math.min(1.42, 0.88 + 0.16 * Math.log(Math.max(1.0, isoNr / 100.0)) / Math.log(2.0));
+      appleBlockShot = apple ? (float) (nS * gain) : 0f;
+      appleBlockRead = apple ? (float) (nO * gain * gain) : 0f;
       // First version: no luma NR at -4 (as v0.2.0); each step up adds 1/8 of Clean's fine luma NR
       double lumaShare = firstVersion ? (nrStep + 4) / 8.0 : 1;
-      double appleFineScale = apple ? 0.48 : 1.0;
+      double appleFineScale = apple ? 0.92 * isoBoost : 1.0;
       double kNr =
           Math.max(
               0, LUMA_NR_K * appleFineScale * Math.pow(2, 0.125 * nrStep) * o.lumaNr * lumaShare);
       nrKeep =
           apple
-              ? (float) Math.max(0.15, Math.min(0.72, 0.42 - 0.06 * nrStep))
+              ? (float) Math.max(0.03, Math.min(0.45, 0.07 - 0.05 * nrStep))
               : (float) Math.max(0, Math.min(0.6, 0.2 - 0.05 * nrStep));
       epsFine = (float) (kNr * kNr);
       // First version: none at Sharpness -2 (v0.2.0 never sharpened); +-0.1 per step, softer below
@@ -907,10 +921,9 @@ public final class RawDeveloper {
               ((firstVersion
                       ? Math.max(-0.2, Math.min(1.2, SHARPEN_STEP * (r.sharpness + 2)))
                       : apple
-                          ? Math.max(0, Math.min(1.45, 0.62 + 0.14 * r.sharpness))
+                          ? Math.max(0, Math.min(1.65, 0.78 + 0.16 * r.sharpness))
                           : Math.max(0, Math.min(1.2, SHARPEN_BASE + SHARPEN_STEP * r.sharpness)))
                   * o.sharpen);
-      int isoNr = Math.max(50, f.iso);
       int baseRadius = isoNr <= 200 ? 1 : isoNr <= 800 ? 2 : isoNr <= 3200 ? 3 : 4;
       nrRadius =
           !firstVersion
@@ -921,7 +934,7 @@ public final class RawDeveloper {
       nrA = new float[NR_TABLE + 1];
       nrB = new float[NR_TABLE + 1];
       noiseTables(curve, gain, nS, nO, NOISE_MIX * NOISE_MIX, nrA, nrB);
-      double appleLowScale = apple ? 0.38 : 1.0;
+      double appleLowScale = apple ? 0.88 * isoBoost : 1.0;
       double kLow = Math.max(0, LOW_NR_K * appleLowScale * Math.pow(2, 0.125 * nrStep) * o.lumaNr);
       epsLow = (float) (kLow * kLow * Q_NOISE / 16);
       epsChroma =
@@ -929,7 +942,7 @@ public final class RawDeveloper {
               (CHROMA_EPS * (apple ? 1.35 : 1.0) * Q_NOISE / 16 * Math.pow(2, 0.25 * nrStep));
       lowKeep =
           apple
-              ? (float) Math.max(0.15, Math.min(0.70, 0.45 - 0.05 * nrStep))
+              ? (float) Math.max(0.04, Math.min(0.45, 0.12 - 0.04 * nrStep))
               : (float) Math.max(0.05, Math.min(0.3, 0.1 - 0.02 * nrStep));
       cKeep = (float) Math.max(0, Math.min(0.5, 0.2 - 0.025 * nrStep));
       qW = (W + 3) / 4;
@@ -1444,9 +1457,19 @@ public final class RawDeveloper {
         for (int i = 0; i < n; i++) {
           float macro = m1[i] * env[i] + m2[i];
           float floorGuard = sstep(-4.2f, -2.0f, macro);
+          float norm =
+              Math.max(
+                  1e-4f,
+                  AppleRender.sceneNormDisplayP3(qLin[3 * i], qLin[3 * i + 1], qLin[3 * i + 2]));
+          float sh = Math.max(0.5f, qS[i]);
+          float varLin = appleBlockShot * sh * norm + appleBlockRead * sh * sh;
+          float blockEvVar = 0.1734f * varLin / (norm * norm);
+          float detVal = det[i];
+          float det2 = detVal * detVal;
+          float snrDet = det2 / (det2 + 6f * blockEvVar + 0.0008f);
           env[i] =
               AppleRender.localToneDeltaEv(macro, appleStyle, recipeHighlight, recipeShadow)
-                  + 0.22f * floorGuard * det[i];
+                  + 0.24f * floorGuard * snrDet * detVal;
         }
       } else {
         env = null;
@@ -1944,6 +1967,10 @@ public final class RawDeveloper {
       }
       int k = Faces.pick(f.faces, f.faceScores, W, H);
       if (k < 0) {
+        if (appleStyle != null) {
+          double skinEv = applePortraitSkinEv(cam, logAverage, key, stats);
+          if (skinEv > 0) return skinEv;
+        }
         stats.put(
             "faceExposure",
             count == 0
@@ -1958,18 +1985,88 @@ public final class RawDeveloper {
         stats.put("faceExposure", "On: face too small to measure");
         return 0;
       }
+      boolean isApple = appleStyle != null;
+      double targetFaceKey = isApple ? AppleRender.FACE_KEY : FACE_KEY;
+      double meterKey = isApple ? key : METERING_KEY;
+      double maxBrighten = isApple ? 1.25 : FACE_MAX_BRIGHTEN_EV;
       double ev =
-          Math.log((FACE_KEY / level) / (METERING_KEY / Math.max(1e-6, logAverage))) / Math.log(2);
-      double used = Math.max(-FACE_MAX_DARKEN_EV, Math.min(FACE_MAX_BRIGHTEN_EV, ev));
+          Math.log((targetFaceKey / level) / (meterKey / Math.max(1e-6, logAverage))) / Math.log(2);
+      double used = Math.max(-FACE_MAX_DARKEN_EV, Math.min(maxBrighten, ev));
       stats.put("faceExposure", "On: face metered");
       stats.put("faceSource", f.faceSource);
       stats.put("faceCount", count);
       stats.put("faceRect", new int[] {l, t, r, b});
       if (f.faceScores != null && k < f.faceScores.length) stats.put("faceScore", f.faceScores[k]);
       stats.put("faceMeter", round(level, 6));
-      stats.put("faceKey", round(FACE_KEY * key / METERING_KEY, 4));
+      stats.put("faceKey", round(isApple ? AppleRender.FACE_KEY : FACE_KEY * key / METERING_KEY, 4));
       stats.put("faceExposureEv", round(used, 3));
       if (used != ev) stats.put("faceExposureWanted", round(ev, 3));
+      return used;
+    }
+
+    /**
+     * Portrait skin-locus metering fallback for Apple profiles when a 3/4-angle or profile portrait
+     * against a bright wall/window was missed by the frontal face detector. Brightens dark central
+     * skin subjects toward {@link AppleRender#FACE_KEY} (never darkens non-portrait scenes).
+     */
+    double applePortraitSkinEv(
+        double[] cam, double logAverage, double key, Map<String, Object> stats) {
+      int x0 = ((int) (0.20 * W)) & ~1, x1 = Math.min(W - 1, (int) (0.80 * W));
+      int y0 = ((int) (0.20 * H)) & ~1, y1 = Math.min(H - 1, (int) (0.80 * H));
+      if (x1 - x0 < 16 || y1 - y0 < 16) return 0;
+      int step = Math.max(2, (Math.min(x1 - x0, y1 - y0) / 56) & ~1);
+      int maxSamples = ((x1 - x0) / step + 1) * ((y1 - y0) / step + 1);
+      double[] skinLogs = new double[maxSamples];
+      int total = 0, skinN = 0;
+      float[] q = new float[3];
+      float[] r2p3 = AppleRender.REC2020_TO_P3;
+      double baseGain = key / Math.max(1e-6, logAverage);
+      float sat =
+          f.white
+              - 0.02f
+                  * (f.white
+                      - Math.min(
+                          Math.min(f.black[0], f.black[1]), Math.min(f.black[2], f.black[3])));
+      for (int y = y0; y < y1; y += step) {
+        for (int x = x0; x < x1; x += step) {
+          q[0] = q[1] = q[2] = 0;
+          boolean clip = false;
+          for (int k = 0; k < 4; k++) {
+            int xx = x + (k & 1), yy = y + (k >> 1);
+            int raw = f.data[yy * f.rowStride + xx] & 0xffff;
+            if (raw >= sat) clip = true;
+            float s = shadingAt(shadeK[k], xx, yy);
+            float v = (raw - black[k]) * scale[k] * s * gainK[k];
+            q[colorK[k]] += colorK[k] == 1 ? 0.5f * v : v;
+          }
+          total++;
+          if (clip) continue;
+          double R = cam[0] * q[0] + cam[1] * q[1] + cam[2] * q[2];
+          double G = cam[3] * q[0] + cam[4] * q[1] + cam[5] * q[2];
+          double B = cam[6] * q[0] + cam[7] * q[1] + cam[8] * q[2];
+          float rP3 = (float) ((r2p3[0] * R + r2p3[1] * G + r2p3[2] * B) * baseGain);
+          float gP3 = (float) ((r2p3[3] * R + r2p3[4] * G + r2p3[5] * B) * baseGain);
+          float bP3 = (float) ((r2p3[6] * R + r2p3[7] * G + r2p3[8] * B) * baseGain);
+          if (gP3 < 0.72f && AppleRender.isPortraitSkinLinearP3(rP3, gP3, bP3)) {
+            double Y = 0.2627 * R + 0.6780 * G + 0.0593 * B;
+            if (Y > 1e-5) skinLogs[skinN++] = Math.log(Y);
+          }
+        }
+      }
+      if (total < 64 || skinN < 24) return 0;
+      double frac = skinN / (double) total;
+      if (frac < 0.035 || frac > 0.68) return 0;
+      Arrays.sort(skinLogs, 0, skinN);
+      double skinLevel = Math.exp(skinLogs[(int) Math.round(FACE_PERCENTILE * (skinN - 1))]);
+      double ev = Math.log((AppleRender.FACE_KEY / skinLevel) / baseGain) / Math.log(2);
+      if (ev <= 0.04) return 0;
+      float conf = sstep(0.035f, 0.090f, (float) frac);
+      double used = Math.min(1.05, ev * conf);
+      stats.put("faceExposure", "On: portrait skin metered (3/4 or unboxed face)");
+      stats.put("faceSource", "Display P3 skin locus (" + round(frac * 100.0, 1) + "% central)");
+      stats.put("faceMeter", round(skinLevel, 6));
+      stats.put("faceKey", round(AppleRender.FACE_KEY, 4));
+      stats.put("faceExposureEv", round(used, 3));
       return used;
     }
 
@@ -2270,10 +2367,13 @@ public final class RawDeveloper {
             s1 += h1[k];
             s2 += h2[k];
           }
-          aa[o + x] = s1 * inv * Y[o + x] + s2 * inv; // denoised base q
+          float meanA = s1 * inv;
+          aa[o + x] = meanA * Y[o + x] + s2 * inv; // denoised base q
+          bb[o + x] = meanA;
         }
       }
       final float lambda = j.sharpen, keep = j.nrKeep;
+      final boolean appleSnr = j.appleStyle != null;
       final float[] bandQ = j.band;
       final float clarityK = j.clarityK;
       final float[] dYq = j.dY, pUq = j.pU, pVq = j.pV, kq = j.kq, qfx = j.qfx;
@@ -2304,7 +2404,22 @@ public final class RawDeveloper {
           int i0 = q0 + qx0[x], i1 = q1 + qx0[x];
           float fx = qfx[x];
           float t0 = dYq[i0] + fx * (dYq[i0 + 1] - dYq[i0]), t1 = dYq[i1] + fx * (dYq[i1 + 1] - dYq[i1]);
-          float yo = q + lambda * (q - blur) + keep * (y - q) + t0 + fy * (t1 - t0);
+          float yo;
+          if (appleSnr) {
+            float conf = bb[o + x];
+            float gate = conf <= 0.06f ? 0f : conf >= 0.42f ? 1f : sstep(0.06f, 0.42f, conf);
+            float keepEff = keep + Math.max(0f, 0.46f - keep) * gate;
+            float hp = q - blur;
+            float hpCored = hp / (1f + 5.5f * Math.abs(hp));
+            yo =
+                q
+                    + lambda * (0.06f + 0.94f * gate) * hpCored
+                    + keepEff * (y - q)
+                    + t0
+                    + fy * (t1 - t0);
+          } else {
+            yo = q + lambda * (q - blur) + keep * (y - q) + t0 + fy * (t1 - t0);
+          }
           if (bandQ != null) {
             float b0 = bandQ[i0] + fx * (bandQ[i0 + 1] - bandQ[i0]);
             float b1 = bandQ[i1] + fx * (bandQ[i1 + 1] - bandQ[i1]);
@@ -2519,6 +2634,24 @@ public final class RawDeveloper {
       if (i >= start) above += hist[i];
     }
     return total == 0 ? 0 : above / total;
+  }
+
+  /** Scene-linear luminance (pre-gain, matching {@link #meter}) at quantile {@code p in (0, 1)}. */
+  static double histogramPercentileLinear(double[] hist, double p) {
+    double total = 0;
+    for (double v : hist) total += v;
+    if (total <= 0) return 0.18;
+    double target = total * p, acc = 0;
+    for (int i = 0; i < hist.length; i++) {
+      double next = acc + hist[i];
+      if (next >= target) {
+        double frac = hist[i] > 0 ? (target - acc) / hist[i] : 0.5;
+        double ev = HIST_MIN + (i + Math.max(0.0, Math.min(1.0, frac))) / HIST_PER_EV;
+        return Math.pow(2.0, ev);
+      }
+      acc = next;
+    }
+    return Math.pow(2.0, HIST_MIN + (double) hist.length / HIST_PER_EV);
   }
 
   /** The code value the strip pipeline produces for scene-linear X (same clamp as the tone table). */
