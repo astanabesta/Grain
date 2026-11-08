@@ -152,6 +152,7 @@ public final class PhotoStore {
             }
             output.setAttribute(ExifInterface.TAG_USER_COMMENT, "Grain Photo · " + recTitle);
             output.saveAttributes();
+            UltraHdrJpeg.repairMpfAfterExifSave(finalImage);
           } catch (Exception ignored) {
           }
         }
@@ -178,6 +179,19 @@ public final class PhotoStore {
               rd.recycle();
             }
             if (cropped == null) throw new IOException("Cannot region-decode JPEG");
+            UltraHdrJpeg.preserveGainmapFromFileOnSensorCrop(
+                source, cropped, bounds.outWidth, bounds.outHeight, sensorCrop);
+            savedOrientation = String.valueOf(orientation == 0 ? 1 : orientation);
+          } else if (sensorCrop != null) {
+            decoded = BitmapFactory.decodeFile(source.getPath());
+            if (decoded == null) throw new IOException("Cannot decode JPEG");
+            cropped =
+                Bitmap.createBitmap(
+                    decoded, sensorCrop[0], sensorCrop[1], sensorCrop[2], sensorCrop[3]);
+            UltraHdrJpeg.preserveGainmapOnCrop(
+                decoded, cropped, sensorCrop[0], sensorCrop[1], sensorCrop[2], sensorCrop[3]);
+            decoded.recycle();
+            decoded = null;
             savedOrientation = String.valueOf(orientation == 0 ? 1 : orientation);
           } else {
             decoded = BitmapFactory.decodeFile(source.getPath());
@@ -186,10 +200,13 @@ public final class PhotoStore {
             upright =
                 Bitmap.createBitmap(decoded, 0, 0, decoded.getWidth(), decoded.getHeight(), m, true);
             if (upright != decoded) {
+              UltraHdrJpeg.preserveGainmapOnTransform(decoded, upright, m);
               decoded.recycle();
               decoded = null;
             }
             cropped = Bitmap.createBitmap(upright, crop[0], crop[1], crop[2], crop[3]);
+            UltraHdrJpeg.preserveGainmapOnCrop(
+                upright, cropped, crop[0], crop[1], crop[2], crop[3]);
           }
           try (OutputStream out = new BufferedOutputStream(new FileOutputStream(finalImage), 65536)) {
             if (!cropped.compress(Bitmap.CompressFormat.JPEG, 97, out))
@@ -225,6 +242,7 @@ public final class PhotoStore {
           output.setAttribute(ExifInterface.TAG_ORIENTATION, savedOrientation);
           output.setAttribute(ExifInterface.TAG_SOFTWARE, RawDevelopment.SOFTWARE);
           output.saveAttributes();
+          UltraHdrJpeg.repairMpfAfterExifSave(finalImage);
         } finally {
           if (cropped != null && !cropped.isRecycled()) cropped.recycle();
           if (upright != null && !upright.isRecycled()) upright.recycle();
@@ -327,6 +345,7 @@ public final class PhotoStore {
     if (idx < 0) return;
     exif.setAttribute(ExifInterface.TAG_ORIENTATION, String.valueOf(CLOCKWISE[(idx + degrees / 90) % 4]));
     exif.saveAttributes();
+    UltraHdrJpeg.repairMpfAfterExifSave(jpeg);
   }
 
   /** Orientation is metadata only: a failure to update it must never lose the photo. */
@@ -430,7 +449,10 @@ public final class PhotoStore {
       ExifInterface exif = new ExifInterface(file);
       Matrix m = orientationMatrix(exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, 1));
       Bitmap oriented = Bitmap.createBitmap(raw, 0, 0, raw.getWidth(), raw.getHeight(), m, true);
-      if (oriented != raw) raw.recycle();
+      if (oriented != raw) {
+        UltraHdrJpeg.preserveGainmapOnTransform(raw, oriented, m);
+        raw.recycle();
+      }
       return oriented;
     } catch (Exception ignored) {
       return raw;

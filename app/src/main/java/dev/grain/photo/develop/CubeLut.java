@@ -23,7 +23,8 @@ public final class CubeLut {
   public enum Input {
     FLOG2_FGAMUT("F-Log2 / F-Gamut"),
     SLOG3_SGAMUT3_CINE("S-Log3 / S-Gamut3.Cine"),
-    SLOG3_SGAMUT3("S-Log3 / S-Gamut3");
+    SLOG3_SGAMUT3("S-Log3 / S-Gamut3"),
+    APPLE_LOG_REC2020("Apple Log / Rec.2020");
 
     public final String label;
 
@@ -167,6 +168,10 @@ public final class CubeLut {
       r = (float) SLog3.encode(t[0] * lr + t[1] * lg + t[2] * lb);
       g = (float) SLog3.encode(t[3] * lr + t[4] * lg + t[5] * lb);
       b = (float) SLog3.encode(t[6] * lr + t[7] * lg + t[8] * lb);
+    } else if (input == Input.APPLE_LOG_REC2020) {
+      r = (float) AppleRender.appleLogEncode(flog2Linear(r));
+      g = (float) AppleRender.appleLogEncode(flog2Linear(g));
+      b = (float) AppleRender.appleLogEncode(flog2Linear(b));
     }
     int n1 = size - 1;
     float x = (r <= 0 ? 0 : r >= 1 ? 1 : r) * n1;

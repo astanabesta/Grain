@@ -580,6 +580,11 @@ public final class MainActivity extends ComponentActivity
     }
     if (r.fuji == null) return "ISP";
     if (r.fuji.sony()) return "s709";
+    if (r.fuji.apple()) {
+      dev.grain.photo.develop.AppleRender.Style st =
+          dev.grain.photo.develop.AppleRender.Style.fromSimulation(r.fuji.filmSimulation);
+      if (st != null) return st.dialCode;
+    }
     if (r.fuji == FujiRecipe.REGGIES_SUPERIA) return "SUP";
     if (r.fuji == FujiRecipe.KODAK_GOLD_200) return "GLD";
     if (r.fuji == FujiRecipe.BRIGHT_KODAK) return "BKD";
@@ -648,6 +653,14 @@ public final class MainActivity extends ComponentActivity
         return new int[] {0xffe8c547, 0xff1a1a1a, 0xff1a1a1a};
       case "s709":
         return new int[] {0xff151515, 0xffe8e8e8, 0xffe86a2d};
+      case "i16":
+        return new int[] {0xffebeae6, 0xff1c1c1e, 0xffd96b38};
+      case "iRS":
+        return new int[] {0xfff5e6e2, 0xff2c1e1d, 0xffc97b6d};
+      case "iRC":
+        return new int[] {0xff18191b, 0xfff2f0ea, 0xff4a78a8};
+      case "iAM":
+        return new int[] {0xfff3dfb9, 0xff2e1f12, 0xffd67a22};
       case "A":
       case "EB":
         return new int[] {0xff2b2b2b, 0xfff4f1e8, 0xff9a9a9a};
@@ -686,11 +699,18 @@ public final class MainActivity extends ComponentActivity
     updateLabels();
     camera.update(snapshot());
     Recipe r = Recipe.ALL[id];
-    String sub = r.raw ? (r.standard ? "film simulation · developed from RAW" : "recipe · developed from RAW") : "phone ISP look";
+    String sub =
+        r.raw
+            ? (r.fuji.apple()
+                ? "Smart HDR 5 · Display P3 + Ultra HDR"
+                : r.standard
+                    ? "film simulation · developed from RAW"
+                    : "recipe · developed from RAW")
+            : "phone ISP look";
     if (r.raw) {
       if (ready && !camera.rawAvailable())
         message("RAW isn’t available here: " + camera.rawUnavailableReason());
-      else if (!luts.has(r.fuji.filmSimulation))
+      else if (!r.fuji.apple() && !luts.has(r.fuji.filmSimulation))
         message(
             r.fuji.sony()
                 ? "Import Sony’s free s709 LUT to use " + r.name + " (MENU → I.Q. → Import LUT zip)"
@@ -791,18 +811,23 @@ public final class MainActivity extends ComponentActivity
       tiles.add(tile);
       ImageView art = new ImageView(this);
       art.setScaleType(ImageView.ScaleType.CENTER_CROP);
-      boolean lutPreview = f.raw && luts.has(f.fuji.filmSimulation) && artwork != null;
+      boolean lutPreview =
+          f.raw && (f.fuji.apple() || luts.has(f.fuji.filmSimulation)) && artwork != null;
       String previewKey =
           lutPreview
-              ? (f.fuji.sensorCalibrated() ? f.fuji.key : f.fuji.filmSimulation)
+              ? ((f.fuji.apple() || f.fuji.sensorCalibrated()) ? f.fuji.key : f.fuji.filmSimulation)
               : null;
       Bitmap cachedPreview = previewKey != null ? lutPreviews.get(previewKey) : null;
       art.setImageBitmap(cachedPreview != null ? cachedPreview : artwork);
       if (lutPreview) {
         if (cachedPreview == null) previewThroughLut(art, previewKey, f.fuji, artwork);
         art.setContentDescription(
-            "Reference picture through " + (f.fuji.sony() ? "Sony’s " : "Fujifilm’s ") + f.fuji.filmLabel
-                + " LUT; approximate");
+            f.fuji.apple()
+                ? "Reference picture through Apple " + f.fuji.filmLabel + "; approximate"
+                : "Reference picture through "
+                    + (f.fuji.sony() ? "Sony’s " : "Fujifilm’s ")
+                    + f.fuji.filmLabel
+                    + " LUT; approximate");
       } else {
         float[][] artGrades = {
           {1.03f, 1, .93f}, {.92f, 1.02f, 1.06f}, {1.1f, 1.01f, .84f}, {.74f, .8f, .88f},
@@ -839,7 +864,11 @@ public final class MainActivity extends ComponentActivity
       tile.addView(title, new LinearLayout.LayoutParams(-1, dp(29)));
       TextView iso =
           text(
-              f.standard ? f.fuji.sony() ? "SONY LOOK" : "FILM SIMULATION" : f.raw ? "RAW · RECIPE" : "ISP LOOK",
+              f.raw && f.fuji.apple()
+                  ? "SMART HDR 5 · P3"
+                  : f.standard
+                      ? f.fuji.sony() ? "SONY LOOK" : "FILM SIMULATION"
+                      : f.raw ? "RAW · RECIPE" : "ISP LOOK",
               8,
               f.raw ? ORANGE : MUTED);
       iso.setTypeface(Typeface.SANS_SERIF, Typeface.BOLD);
@@ -901,7 +930,11 @@ public final class MainActivity extends ComponentActivity
                     (wasTuned ? "Back to " : "Already at ")
                         + (current.fuji.sony()
                             ? "plain s709"
-                            : current.standard ? "Fujifilm’s standard settings" : "the published recipe"));
+                            : current.fuji.apple()
+                                ? "default Photographic Style"
+                                : current.standard
+                                    ? "Fujifilm’s standard settings"
+                                    : "the published recipe"));
                 return;
               }
               strengths[recipe] = 80;
@@ -952,7 +985,8 @@ public final class MainActivity extends ComponentActivity
             int w = artwork.getWidth(), h = artwork.getHeight();
             int[] px = new int[w * h];
             artwork.getPixels(px, 0, w, 0, 0, w, h);
-            LutPreview.apply(px, luts.load(fuji.filmSimulation), fuji.sensorCalibrated() ? fuji : null);
+            CubeLut lut = fuji.apple() ? null : luts.load(fuji.filmSimulation);
+            LutPreview.apply(px, lut, (fuji.apple() || fuji.sensorCalibrated()) ? fuji : null);
             Bitmap out = Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888);
             runOnUiThread(
                 () -> {
@@ -970,41 +1004,46 @@ public final class MainActivity extends ComponentActivity
   private void fillRecipePanel(LinearLayout panel, Recipe r, Dialog dialog) {
     panel.removeAllViews();
     if (!r.raw) return;
-    boolean hasLut = luts.has(r.fuji.filmSimulation);
+    boolean apple = r.fuji.apple();
+    boolean hasLut = apple || luts.has(r.fuji.filmSimulation);
     boolean hasRaw = !ready || camera.rawAvailable();
     boolean sony = r.fuji.sony();
     TextView state =
         text(
             !hasRaw
                 ? "RAW unavailable: " + camera.rawUnavailableReason()
-                : hasLut
-                    ? (sony ? "Sony " : "Fujifilm ") + r.fuji.filmLabel + " LUT ready · " + luts.summary()
-                    : sony
-                        ? "Needs Sony’s free official s709 LUT (s709Cubes.zip, about 0.5 MB)"
-                        : "Needs Fujifilm’s free official LUT pack (" + r.fuji.filmLabel + " inside)",
+                : apple
+                    ? "Built-in iPhone 16 Pro Smart HDR 5 RAW pipeline · Display P3 + Ultra HDR ready"
+                    : hasLut
+                        ? (sony ? "Sony " : "Fujifilm ") + r.fuji.filmLabel + " LUT ready · " + luts.summary()
+                        : sony
+                            ? "Needs Sony’s free official s709 LUT (s709Cubes.zip, about 0.5 MB)"
+                            : "Needs Fujifilm’s free official LUT pack (" + r.fuji.filmLabel + " inside)",
             10,
             hasLut && hasRaw ? INK : ORANGE);
     state.setGravity(Gravity.START);
     panel.addView(state, new LinearLayout.LayoutParams(-1, -2));
-    LinearLayout actions = row();
-    actions.setPadding(0, dp(8), 0, dp(8));
-    TextView importButton =
-        button(
-            hasLut ? "Re-import" : sony ? "Import s709 zip" : "Import LUT pack",
-            10,
-            PAPER,
-            () -> pickLuts(() -> fillRecipePanel(panel, r, dialog)));
-    importButton.setBackground(bg(INK, 25, 0, 0));
-    actions.addView(importButton, new LinearLayout.LayoutParams(0, dp(36), 1));
-    View gap = new View(this);
-    actions.addView(gap, size(8, 1));
-    TextView get =
-        sony
-            ? button("Download from Sony ↗", 10, INK, this::openSonyDownload)
-            : button("Download from Fujifilm ↗", 10, INK, this::openLutDownload);
-    get.setBackground(bg(PAPER, 25, LINE, 1));
-    actions.addView(get, new LinearLayout.LayoutParams(0, dp(36), 1));
-    panel.addView(actions);
+    if (!apple) {
+      LinearLayout actions = row();
+      actions.setPadding(0, dp(8), 0, dp(8));
+      TextView importButton =
+          button(
+              hasLut ? "Re-import" : sony ? "Import s709 zip" : "Import LUT pack",
+              10,
+              PAPER,
+              () -> pickLuts(() -> fillRecipePanel(panel, r, dialog)));
+      importButton.setBackground(bg(INK, 25, 0, 0));
+      actions.addView(importButton, new LinearLayout.LayoutParams(0, dp(36), 1));
+      View gap = new View(this);
+      actions.addView(gap, size(8, 1));
+      TextView get =
+          sony
+              ? button("Download from Sony ↗", 10, INK, this::openSonyDownload)
+              : button("Download from Fujifilm ↗", 10, INK, this::openLutDownload);
+      get.setBackground(bg(PAPER, 25, LINE, 1));
+      actions.addView(get, new LinearLayout.LayoutParams(0, dp(36), 1));
+      panel.addView(actions);
+    }
     FujiRecipe.Tuning work = tuning.effective(r).tuning();
     FujiRecipe.Tuning defaults = r.fuji.tuning();
     LinearLayout head = row();
@@ -1083,10 +1122,16 @@ public final class MainActivity extends ComponentActivity
             ? "Default: Sony s709 at standard settings (every setting 0 / Off, Auto white"
                 + " balance). LUT: Sony’s official s709, S-Log3 / S-Gamut3.Cine to Rec.709 — "
                 + r.fuji.source
-            : r.standard
-                ? "Default: Fujifilm " + r.fuji.filmLabel + " at standard settings (every setting"
-                    + " 0 / Off, Auto white balance). LUT: Fujifilm’s official F-Log2 pack."
-                : "Default: the recipe by " + r.fuji.author + " as published — " + r.fuji.source;
+            : apple
+                ? "Default: iPhone 16 Pro "
+                    + r.fuji.filmLabel
+                    + " Photographic Style, developed directly in wide-gamut Display P3 with ISO"
+                    + " 21496-1 Ultra HDR highlight headroom — "
+                    + r.fuji.source
+                : r.standard
+                    ? "Default: Fujifilm " + r.fuji.filmLabel + " at standard settings (every setting"
+                        + " 0 / Off, Auto white balance). LUT: Fujifilm’s official F-Log2 pack."
+                    : "Default: the recipe by " + r.fuji.author + " as published — " + r.fuji.source;
     if (!r.fuji.exposureNote.isEmpty())
       creditText +=
           "\nTypical exposure compensation: " + r.fuji.exposureNote
@@ -1109,18 +1154,28 @@ public final class MainActivity extends ComponentActivity
                     + " stretched so clipped areas still reach white. The settings and extras are"
                     + " Grain’s approximations. s709 is lower in contrast and darker than"
                     + " Fujifilm’s stills looks, as Sony designed it."
-                : "Tuning changes the developed photo; the viewfinder is the phone’s preview, with the"
-                    + " nearest white-balance preset when the film uses a fixed white balance. Each"
-                    + " photo is developed from the sensor RAW with Fujifilm’s LUT plus Grain’s stills"
-                    + " tone model. Fixed white balances use Fujifilm’s preset white points measured"
-                    + " from Fujifilm RAW files. Dynamic range and D-Range Priority, WB shift,"
-                    + " Clarity, Grain, Color Chrome, FX Blue, the Acros filters and the extras are"
-                    + " Grain’s approximations.");
+                : apple
+                    ? "Developed directly from the sensor RAW with no external LUT required: 1.0 EV"
+                        + " linear highlight headroom, quarter-resolution edge-aware Smart HDR 5"
+                        + " local tone mapping (shadow-adapted noise reduction, zero silhouette"
+                        + " halos), hue-preserving RefBaselineRGBTone global S-curve, OKLab skin"
+                        + " undertone & sky/foliage calibration in native Display P3, plus an"
+                        + " Android 14+ Ultra HDR Gainmap for OLED highlights."
+                    : "Tuning changes the developed photo; the viewfinder is the phone’s preview, with the"
+                        + " nearest white-balance preset when the film uses a fixed white balance. Each"
+                        + " photo is developed from the sensor RAW with Fujifilm’s LUT plus Grain’s stills"
+                        + " tone model. Fixed white balances use Fujifilm’s preset white points measured"
+                        + " from Fujifilm RAW files. Dynamic range and D-Range Priority, WB shift,"
+                        + " Clarity, Grain, Color Chrome, FX Blue, the Acros filters and the extras are"
+                        + " Grain’s approximations.");
     panel.addView(note);
   }
 
-  /** Gallery: the LUT a photo was developed with ("SONY-S709" reads as Sony s709). */
+  /** Gallery: the LUT or built-in colour pipeline a photo was developed with. */
   private static String lutLabel(String lut) {
+    dev.grain.photo.develop.AppleRender.Style st =
+        dev.grain.photo.develop.AppleRender.Style.fromSimulation(lut);
+    if (st != null) return st.label + " · P3 Ultra HDR";
     return FujiRecipe.sonyLut(lut) ? "Sony s709 LUT" : lut + " LUT";
   }
 
@@ -1570,7 +1625,7 @@ public final class MainActivity extends ComponentActivity
           .show();
       return false;
     }
-    if (!luts.has(r.fuji.filmSimulation)) {
+    if (!r.fuji.apple() && !luts.has(r.fuji.filmSimulation)) {
       boolean sony = r.fuji.sony();
       new AlertDialog.Builder(this)
           .setTitle("One-time setup")
@@ -1828,7 +1883,7 @@ public final class MainActivity extends ComponentActivity
     int start = Math.max(0, indexOfFilm(recipe));
     for (int k = 1; k < dialFilms.length && out.size() < 3; k++) {
       Recipe f = dialFilms[(start + k) % dialFilms.length];
-      if (f.raw && f.id != recipe && luts.has(f.fuji.filmSimulation)) out.add(f);
+      if (f.raw && f.id != recipe && (f.fuji.apple() || luts.has(f.fuji.filmSimulation))) out.add(f);
     }
     return out.toArray(new Recipe[0]);
   }
@@ -2096,7 +2151,7 @@ public final class MainActivity extends ComponentActivity
               // Drop the outer reference so RawDevelopment can free the 225 MB merge frame before JPEG encode.
               mergedFrame = null;
 
-              CubeLut lut = luts.load(film.filmSimulation);
+              CubeLut lut = film.apple() ? null : luts.load(film.filmSimulation);
               long devStart = System.nanoTime();
               RawDevelopment.Output out =
                   RawDevelopment.develop(
@@ -2219,7 +2274,7 @@ public final class MainActivity extends ComponentActivity
             for (int i = 0; i < bracket.length; i++) {
               FujiRecipe f = bracketTuning[i];
               boolean fTuned = !f.sameSettings(bracket[i].fuji);
-              CubeLut lut = luts.load(f.filmSimulation);
+              CubeLut lut = f.apple() ? null : luts.load(f.filmSimulation);
               JSONObject frameReceipt = i == 0 ? receipt : new JSONObject(receipt.toString());
               if (bracket.length > 1) {
                 frameReceipt.put("bracket", (i + 1) + " of " + bracket.length);
@@ -2572,6 +2627,21 @@ public final class MainActivity extends ComponentActivity
     panelScroll = new ScrollView(this);
     panelScroll.setVerticalScrollBarEnabled(false);
     panel.addView(panelScroll, new LinearLayout.LayoutParams(-1, 0, 1));
+    syncWindowColorMode();
+  }
+
+  private void syncWindowColorMode() {
+    Window w = getWindow();
+    if (w == null) return;
+    boolean hdrView = "play".equals(mode) || panel != null;
+    int wanted =
+        (hdrView && Build.VERSION.SDK_INT >= 34)
+            ? android.content.pm.ActivityInfo.COLOR_MODE_HDR
+            : android.content.pm.ActivityInfo.COLOR_MODE_WIDE_COLOR_GAMUT;
+    try {
+      if (w.getColorMode() != wanted) w.setColorMode(wanted);
+    } catch (Throwable ignored) {
+    }
   }
 
   private void setDarkSystemBars(boolean dark) {
@@ -2595,6 +2665,7 @@ public final class MainActivity extends ComponentActivity
       panel = null;
     }
     page = "camera";
+    syncWindowColorMode();
     syncMagnifier();
   }
 
@@ -5433,6 +5504,7 @@ public final class MainActivity extends ComponentActivity
   private void closeOverlays() {
     if (back != null) back.hideOverlay();
     mode = "camera";
+    syncWindowColorMode();
     // Closing an overlay re-lays out the camera back and rebuilds the preview surface, and reading
     // the preview back in that window is what used to take the app down. Hold the read-back off
     // until it has settled.
@@ -6072,6 +6144,7 @@ public final class MainActivity extends ComponentActivity
                 playPanX = 0f;
                 playPanY = 0f;
                 mode = "play";
+                syncWindowColorMode();
                 back.showOverlay(buildPlayback());
                 showPlayed();
               });

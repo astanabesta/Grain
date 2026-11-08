@@ -386,6 +386,13 @@ public final class RawDeveloper {
      * numerical seams.
      */
     public long maxBandPixels = 32_000_000L;
+    /** For built-in Apple profiles: output Display P3 code values (true) or convert to sRGB (false). */
+    public boolean outputDisplayP3 = true;
+    /** Populate {@link #outGainmap} (quarter-res ISO 21496-1 Ultra HDR gainmap) on Apple profiles. */
+    public boolean computeGainmap = false;
+    /** Quarter-resolution ({@link #outGainmapW} x {@link #outGainmapH}) single-channel gainmap. */
+    public byte[] outGainmap;
+    public int outGainmapW, outGainmapH;
   }
 
   public static Map<String, Object> develop(
@@ -410,7 +417,7 @@ public final class RawDeveloper {
       long totalQuarterNs = 0, totalQuarterDenoiseMs = 0;
       if (!canBand) {
         long tq = System.nanoTime();
-        job.prepareBand(0, f.height);
+        job.prepareBand(0, f.height, 0, f.height);
         job.quarter(pool, threads);
         totalQuarterNs = System.nanoTime() - tq;
         totalQuarterDenoiseMs = job.quarterDenoiseMs;
@@ -439,12 +446,13 @@ public final class RawDeveloper {
         job.releaseBand();
       } else {
         if (!job.firstVersion) job.lockGlobalChromaNoise();
+        int ltmPad = job.appleStyle != null && job.stillsTone ? (2 * job.ltmR + 2) : 0;
         int glowRad =
             job.glow
                 ? 3 * Math.max(job.haloA[0] > 0 || job.haloA[1] > 0 ? job.haloR : 0, job.bloomA > 0 ? job.bloomR : 0)
                 : 0;
         int postRad = Math.max(2 * QRC + QR, job.clarityK != 0 ? 3 * job.clarityR : 0);
-        int padRows = Math.max(64, (glowRad + 2 * QR + postRad + 4) * 4); // exact cascaded support
+        int padRows = Math.max(64, (ltmPad + glowRad + 2 * QR + postRad + 4) * 4); // exact cascaded support
         long maxRows = Math.max(128L, o.maxBandPixels / Math.max(1, f.width));
         int bandOutRows =
             (int) Math.max(128L, ((maxRows - 2L * padRows) / stripH) * stripH);
@@ -453,14 +461,14 @@ public final class RawDeveloper {
           int outY1 = Math.min(f.height, outY0 + bandOutRows);
           int srcY0 = Math.max(0, (outY0 - padRows) & ~3);
           int srcY1 = outY1 >= f.height ? f.height : Math.min(f.height, (outY1 + padRows + 3) & ~3);
+          final int localOut0 = outY0 - srcY0, localOut1 = outY1 - srcY0;
           long tq = System.nanoTime();
-          job.prepareBand(srcY0, srcY1 - srcY0);
+          job.prepareBand(srcY0, srcY1 - srcY0, localOut0, localOut1);
           job.quarter(pool, threads);
           totalQuarterNs += System.nanoTime() - tq;
           totalQuarterDenoiseMs += job.quarterDenoiseMs;
           // Allocate strip workers only AFTER quarterDenoise has freed its temporary planes, and
           // release them before the next band's quarter pass begins.
-          final int localOut0 = outY0 - srcY0, localOut1 = outY1 - srcY0;
           final int strips = (localOut1 - localOut0 + stripH - 1) / stripH;
           AtomicInteger next = new AtomicInteger();
           List<Worker> bandWorkers = new ArrayList<>(stripThreads);
@@ -565,18 +573,33 @@ public final class RawDeveloper {
     final float[] glowKeep = new float[3], haloA = new float[3];
     final float bloomA, clarityK;
     final int[] clipRaw = new int[4];
-    final int haloR, bloomR, clarityR;
-    float[] qLin, qClip, band;
+    final int haloR, bloomR, clarityR, ltmR;
+    final AppleRender.Style appleStyle;
+    final AppleRender.ToneTable appleTone;
+    final boolean outputDisplayP3, stillsTone;
+    final double recipeHighlight, recipeShadow;
+    final byte[] gainmapOut;
+    int bandLocalOut0, bandLocalOut1;
+    float[] qLin, qClip, band, ltmGainQ;
     float[][] glowQ;
 
     Job(RawFrame f, FujiRecipe r, CubeLut lut, Options o, Map<String, Object> stats) {
       this.f = f;
       this.lut = lut;
-      // Sony's s709 film needs Sony's S-Log3 LUT; Fujifilm films need an F-Log2 table
+      this.appleStyle = AppleRender.Style.fromSimulation(r.filmSimulation);
+      this.outputDisplayP3 = o.outputDisplayP3;
+      this.stillsTone = o.stillsTone;
+      this.recipeHighlight = r.highlight;
+      this.recipeShadow = r.shadow;
+      boolean apple = appleStyle != null;
+      // Sony's s709 film needs Sony's S-Log3 LUT; Fujifilm films need an F-Log2 table; Apple is built in
       boolean sony = r.sony();
-      if (sony != (lut.input != CubeLut.Input.FLOG2_FGAMUT))
-        throw new IllegalArgumentException(
-            r.name + " needs " + (sony ? "Sony's S-Log3 LUT" : "an F-Log2 LUT") + ", not " + lut.input.label);
+      if (!apple) {
+        if (lut == null) throw new IllegalArgumentException(r.name + " requires a colour LUT");
+        if (sony != (lut.input != CubeLut.Input.FLOG2_FGAMUT))
+          throw new IllegalArgumentException(
+              r.name + " needs " + (sony ? "Sony's S-Log3 LUT" : "an F-Log2 LUT") + ", not " + lut.input.label);
+      }
       W = f.width;
       H = f.height;
       for (int k = 0; k < 4; k++) {
@@ -635,6 +658,10 @@ public final class RawDeveloper {
       double shiftR = Math.pow(2, WB_SHIFT_LOG2_PER_STEP * effShiftRed);
       double shiftB = Math.pow(2, WB_SHIFT_LOG2_PER_STEP * effShiftBlue);
       double gR = nG / nR * shiftR, gB = nG / nB * shiftB;
+      if (apple && wbMode == FujiRecipe.WhiteBalance.AUTO) {
+        gR *= appleStyle.wbRedMul;
+        gB *= appleStyle.wbBlueMul;
+      }
       for (int k = 0; k < 4; k++) gainK[k] = (float) (colorK[k] == 0 ? gR : colorK[k] == 2 ? gB : 1);
       clipFactor = (float) Math.min(1, Math.min(gR, gB));
       stats.put("wbGains", new double[] {round(gR, 4), 1, round(gB, 4)});
@@ -680,14 +707,30 @@ public final class RawDeveloper {
       double[] hist = new double[HIST_BINS];
       double[] meter = meter(cm.cameraToRec2020, hist);
       double logAverage = meter[0], rawClipped = meter[1];
-      double key = sony ? SONY_KEY : METERING_KEY;
+      double key = apple ? AppleRender.METERING_KEY : sony ? SONY_KEY : METERING_KEY;
       double gain = key * Math.pow(2, o.exposureEv) / Math.max(1e-6, logAverage);
       double faceEv = faceExposureEv(cm.cameraToRec2020, logAverage, key, o, stats);
       if (faceEv != 0) gain *= Math.pow(2, faceEv);
       gain = Math.max(1 / 64.0, Math.min(512, gain));
       if (o.fixedGain > 0) gain = o.fixedGain;
-      for (int i = 0; i < 9; i++) m[i] = (float) (cm.cameraToRec2020[i] * gain);
-      monoFilter = r.monochrome() && r.monoFilter > 0 && r.monoFilter < MONO_FILTER_TRANSMISSION.length;
+      if (apple) {
+        // Compose camera -> linear Rec.2020 -> linear Display P3 directly into m[0..8]
+        float[] r2p3 = AppleRender.REC2020_TO_P3;
+        double[] c2r = cm.cameraToRec2020;
+        for (int row = 0; row < 3; row++) {
+          for (int col = 0; col < 3; col++) {
+            double sum =
+                r2p3[row * 3] * c2r[col]
+                    + r2p3[row * 3 + 1] * c2r[3 + col]
+                    + r2p3[row * 3 + 2] * c2r[6 + col];
+            m[row * 3 + col] = (float) (sum * gain);
+          }
+        }
+      } else {
+        for (int i = 0; i < 9; i++) m[i] = (float) (cm.cameraToRec2020[i] * gain);
+      }
+      monoFilter =
+          !apple && r.monochrome() && r.monoFilter > 0 && r.monoFilter < MONO_FILTER_TRANSMISSION.length;
       if (monoFilter) {
         double[] w = monoWeights(lut), t = MONO_FILTER_TRANSMISSION[r.monoFilter], mix = new double[3];
         double sum = 0;
@@ -716,73 +759,104 @@ public final class RawDeveloper {
       // --- dynamic range and the white point
       double gEv = Math.log(gain) / Math.log(2);
       double clipEv = Math.log(gain * clipFactor / 0.18) / Math.log(2);
-      // D-Range Priority replaces DR and the tone curve (approximation, see DRP_* constants)
-      boolean drp = r.dynamicRange.priority();
-      double highlight = drp ? DRP_HIGHLIGHT : r.highlight, shadow = drp ? DRP_SHADOW : r.shadow;
-      double extraEv = r.dynamicRange == FujiRecipe.DynamicRange.DRP_STRONG ? DRP_STRONG_EXTRA_EV : 0;
-      ToneModel.Curve probe =
-          sensorProfile != PROFILE_NONE
-              ? ToneModel.calibratedCurve(0, highlight, shadow, o.stillsTone, 1, r.key)
-              : ToneModel.curve(0, highlight, shadow, o.stillsTone, 1, !sony);
-      double whiteEv = ToneModel.whiteEv(probe, lut);
-      double above = fractionAbove(hist, whiteEv - gEv);
-      int steps;
-      switch (r.dynamicRange) {
-        case DR200:
-          steps = 1;
-          break;
-        case DR400:
-        case DRP_WEAK:
-        case DRP_STRONG:
-          steps = 2;
-          break;
-        case DR100:
-          steps = 0;
-          break;
-        default:
-          steps = above > 0.01 ? 1 : 0;
+      final ToneModel.Curve curve;
+      if (apple) {
+        double clipLin = gain * clipFactor;
+        float clipEnvEv =
+            (float) (Math.log(Math.max(1e-5, clipLin) / AppleRender.METERING_KEY) / Math.log(2));
+        float clipDeltaEv =
+            o.stillsTone
+                ? AppleRender.localToneDeltaEv(clipEnvEv, appleStyle, r.highlight, r.shadow)
+                : 0f;
+        double clipPostLtm = clipLin * Math.pow(2.0, clipDeltaEv);
+        double whiteLin =
+            o.stillsTone ? Math.max(0.95, Math.min(1.85, clipPostLtm * 0.98)) : 1.65;
+        appleTone = new AppleRender.ToneTable(appleStyle, whiteLin, r.highlight, r.shadow);
+        curve = ToneModel.curve(0, 0, 0, false, 1, false);
+        tone =
+            new ToneTable(
+                x -> {
+                  double v = FLog2.encode(x);
+                  return v < 0 ? 0 : v > 1 ? 1 : v;
+                });
+        stats.put("dynamicRange", "Smart HDR 5 spatially-varying local tone map + Ultra HDR");
+        stats.put("rawClipEv", round(clipEv, 3));
+        stats.put("appleWhiteLinear", round(whiteLin, 4));
+        stats.put(
+            "toneModel",
+            "Apple Smart HDR 5: quarter-res edge-aware LTM + RefBaselineRGBTone ("
+                + appleStyle.id
+                + ")");
+      } else {
+        appleTone = null;
+        // D-Range Priority replaces DR and the tone curve (approximation, see DRP_* constants)
+        boolean drp = r.dynamicRange.priority();
+        double highlight = drp ? DRP_HIGHLIGHT : r.highlight, shadow = drp ? DRP_SHADOW : r.shadow;
+        double extraEv = r.dynamicRange == FujiRecipe.DynamicRange.DRP_STRONG ? DRP_STRONG_EXTRA_EV : 0;
+        ToneModel.Curve probe =
+            sensorProfile != PROFILE_NONE
+                ? ToneModel.calibratedCurve(0, highlight, shadow, o.stillsTone, 1, r.key)
+                : ToneModel.curve(0, highlight, shadow, o.stillsTone, 1, !sony);
+        double whiteEv = ToneModel.whiteEv(probe, lut);
+        double above = fractionAbove(hist, whiteEv - gEv);
+        int steps;
+        switch (r.dynamicRange) {
+          case DR200:
+            steps = 1;
+            break;
+          case DR400:
+          case DRP_WEAK:
+          case DRP_STRONG:
+            steps = 2;
+            break;
+          case DR100:
+            steps = 0;
+            break;
+          default:
+            steps = above > 0.01 ? 1 : 0;
+        }
+        stats.put(
+            "dynamicRange",
+            sony
+                ? "Not used: Sony s709 has its own highlight roll-off"
+                : drp
+                ? r.dynamicRange.label + " (approximation: DR400 tone with Highlight " + FujiRecipe.signed(DRP_HIGHLIGHT)
+                    + ", Shadow " + FujiRecipe.signed(DRP_SHADOW)
+                    + (extraEv > 0 ? ", highlight range +" + extraEv + " EV" : "") + ")"
+                : (r.dynamicRange == FujiRecipe.DynamicRange.AUTO ? "Auto: DR" : "DR") + (100 << steps));
+        if (r.dynamicRange == FujiRecipe.DynamicRange.AUTO)
+          stats.put("dynamicRangeAutoRule", "DR200 when >1% of the frame would render white at DR100 (approximation)");
+        stats.put("sceneFractionAboveWhite", round(above, 5));
+        stats.put("curveWhiteEv", round(whiteEv, 3));
+        stats.put("rawClipEv", round(clipEv, 3));
+        double shoulder = 1;
+        if (o.stillsTone) {
+          // The shoulder maps the RAW clip point to white when the RAW clips early; DR-P Strong also
+          // stretches the curve's white over extraEv more scene range when the RAW has it.
+          double wanted = whiteEv + extraEv;
+          double target = clipEv < wanted ? Math.max(ToneModel.KNEE_EV + 0.75, clipEv) : wanted;
+          if (target != whiteEv) shoulder = (whiteEv - ToneModel.KNEE_EV) / (target - ToneModel.KNEE_EV);
+        }
+        stats.put("shoulderScale", round(shoulder, 4));
+        curve =
+            sensorProfile != PROFILE_NONE
+                ? ToneModel.calibratedCurve(steps, highlight, shadow, o.stillsTone, shoulder, r.key)
+                : ToneModel.curve(steps, highlight, shadow, o.stillsTone, shoulder, !sony);
+        tone =
+            new ToneTable(
+                x -> {
+                  double v = curve.apply(FLog2.encode(x));
+                  return v < 0 ? 0 : v > 1 ? 1 : v;
+                });
+        stats.put(
+            "toneModel",
+            sony
+                ? ToneModel.VERSION + ": shoulder remap and tuning only (Sony s709 tone, no Fujifilm offsets)"
+                : sensorProfile != PROFILE_NONE
+                    ? ToneModel.VERSION + " + phone-sensor calibration (" + r.key + ")"
+                    : ToneModel.VERSION);
+        stats.put("toneOffsetsAtKnots", curve.knots());
       }
-      stats.put(
-          "dynamicRange",
-          sony
-              ? "Not used: Sony s709 has its own highlight roll-off"
-              : drp
-              ? r.dynamicRange.label + " (approximation: DR400 tone with Highlight " + FujiRecipe.signed(DRP_HIGHLIGHT)
-                  + ", Shadow " + FujiRecipe.signed(DRP_SHADOW)
-                  + (extraEv > 0 ? ", highlight range +" + extraEv + " EV" : "") + ")"
-              : (r.dynamicRange == FujiRecipe.DynamicRange.AUTO ? "Auto: DR" : "DR") + (100 << steps));
-      if (r.dynamicRange == FujiRecipe.DynamicRange.AUTO)
-        stats.put("dynamicRangeAutoRule", "DR200 when >1% of the frame would render white at DR100 (approximation)");
-      stats.put("sceneFractionAboveWhite", round(above, 5));
-      stats.put("curveWhiteEv", round(whiteEv, 3));
-      stats.put("rawClipEv", round(clipEv, 3));
-      double shoulder = 1;
-      if (o.stillsTone) {
-        // The shoulder maps the RAW clip point to white when the RAW clips early; DR-P Strong also
-        // stretches the curve's white over extraEv more scene range when the RAW has it.
-        double wanted = whiteEv + extraEv;
-        double target = clipEv < wanted ? Math.max(ToneModel.KNEE_EV + 0.75, clipEv) : wanted;
-        if (target != whiteEv) shoulder = (whiteEv - ToneModel.KNEE_EV) / (target - ToneModel.KNEE_EV);
-      }
-      stats.put("shoulderScale", round(shoulder, 4));
-      final ToneModel.Curve curve =
-          sensorProfile != PROFILE_NONE
-              ? ToneModel.calibratedCurve(steps, highlight, shadow, o.stillsTone, shoulder, r.key)
-              : ToneModel.curve(steps, highlight, shadow, o.stillsTone, shoulder, !sony);
-      tone =
-          new ToneTable(
-              x -> {
-                double v = curve.apply(FLog2.encode(x));
-                return v < 0 ? 0 : v > 1 ? 1 : v;
-              });
-      stats.put(
-          "toneModel",
-          sony
-              ? ToneModel.VERSION + ": shoulder remap and tuning only (Sony s709 tone, no Fujifilm offsets)"
-              : sensorProfile != PROFILE_NONE
-                  ? ToneModel.VERSION + " + phone-sensor calibration (" + r.key + ")"
-                  : ToneModel.VERSION);
-      stats.put("toneOffsetsAtKnots", curve.knots());
 
       int iso = Math.max(50, f.iso);
 
@@ -895,10 +969,19 @@ public final class RawDeveloper {
       if (r.grainLarge) amp *= 1.15f;
       // sensor noise left after NR already reads as grain: top up to the recipe amplitude only
       float cMid = (float) toneCode(curve, 0.18);
-      float[] lo = new float[3], hi = new float[3];
-      lut.sample(cMid - 0.02f, cMid - 0.02f, cMid - 0.02f, lo);
-      lut.sample(cMid + 0.02f, cMid + 0.02f, cMid + 0.02f, hi);
-      double lutSlope = Math.max(0, (hi[1] - lo[1]) / 0.04);
+      double lutSlope;
+      if (apple) {
+        double yLo = appleTone.eval((float) FLog2.decode(cMid - 0.02));
+        double yHi = appleTone.eval((float) FLog2.decode(cMid + 0.02));
+        double encLo = yLo <= 0.0031308 ? 12.92 * yLo : 1.055 * Math.pow(yLo, 1.0 / 2.4) - 0.055;
+        double encHi = yHi <= 0.0031308 ? 12.92 * yHi : 1.055 * Math.pow(yHi, 1.0 / 2.4) - 0.055;
+        lutSlope = Math.max(0, (encHi - encLo) / 0.04);
+      } else {
+        float[] lo = new float[3], hi = new float[3];
+        lut.sample(cMid - 0.02f, cMid - 0.02f, cMid - 0.02f, lo);
+        lut.sample(cMid + 0.02f, cMid + 0.02f, cMid + 0.02f, hi);
+        lutSlope = Math.max(0, (hi[1] - lo[1]) / 0.04);
+      }
       double residual =
           kNr > 0 ? Math.sqrt(nrKeep * nrKeep + Math.pow((1 - nrKeep) * GF_RESIDUAL, 2)) : 1;
       double noiseOut = lutSlope * sigmaMid * residual;
@@ -946,6 +1029,20 @@ public final class RawDeveloper {
       haloR = boxRadius(haloSigma * longSide);
       bloomR = boxRadius(BLOOM_SIGMA * longSide);
       clarityR = boxRadius(CLARITY_SIGMA * longSide);
+      ltmR = apple ? Math.min(36, Math.max(3, boxRadius(0.018 * longSide))) : 0;
+      int fullQH = (H + 3) / 4;
+      if (apple && o.computeGainmap) {
+        o.outGainmapW = qW;
+        o.outGainmapH = fullQH;
+        o.outGainmap = new byte[qW * fullQH];
+        gainmapOut = o.outGainmap;
+        stats.put("ultraHdrGainmap", qW + "x" + fullQH + " (max " + AppleRender.GAINMAP_RATIO_MAX + "x)");
+      } else {
+        o.outGainmap = null;
+        o.outGainmapW = 0;
+        o.outGainmapH = 0;
+        gainmapOut = null;
+      }
       for (int k = 0; k < 4; k++) clipRaw[k] = (int) Math.ceil(black[k] + CLIP_LEVEL * (f.white - black[k]));
       int claritySteps = Math.max(-5, Math.min(5, r.clarity));
       clarityK = (float) (CLARITY_PER_STEP * claritySteps);
@@ -999,21 +1096,32 @@ public final class RawDeveloper {
         stats.put("chromaNoiseRadius", nrRadius);
       } else stats.put("development", "Clean");
 
-      stats.put("lut", lut.title.isEmpty() ? r.filmSimulation : lut.title);
-      stats.put("lutGamut", lut.gamut);
-      stats.put("lutModel", lut.model);
-      stats.put("lutInput", lut.input.label);
+      if (apple) {
+        stats.put("appleStyle", appleStyle.id);
+        stats.put("colorSpace", outputDisplayP3 ? "Display P3" : "sRGB");
+        stats.put("lut", appleStyle.label + " (built-in Apple Smart HDR 5 RAW pipeline)");
+        stats.put("lutGamut", outputDisplayP3 ? "Display P3" : "Rec.709 / sRGB");
+        stats.put("lutModel", "Smart HDR 5 + Photographic Styles");
+        stats.put("lutInput", "Scene-linear Display P3");
+      } else {
+        stats.put("lut", lut.title.isEmpty() ? r.filmSimulation : lut.title);
+        stats.put("lutGamut", lut.gamut);
+        stats.put("lutModel", lut.model);
+        stats.put("lutInput", lut.input.label);
+      }
     }
 
-    void prepareBand(int srcY0, int srcH) {
+    void prepareBand(int srcY0, int srcH, int localOut0, int localOut1) {
       this.bandY0 = srcY0;
       this.bandH = srcH;
+      this.bandLocalOut0 = localOut0;
+      this.bandLocalOut1 = localOut1;
       this.qH = (srcH + 3) / 4;
       int qn = qW * qH;
       qS = new float[qn];
-      if (glow) {
+      if (glow || appleStyle != null) {
         qLin = new float[3 * qn];
-        qClip = new float[qn];
+        if (glow) qClip = new float[qn];
       } else {
         qY = new float[qn];
         qU = new float[qn];
@@ -1024,7 +1132,7 @@ public final class RawDeveloper {
     void releaseBand() {
       qY = qU = qV = qS = null;
       dY = pU = pV = kq = null;
-      qLin = qClip = band = colSum = null;
+      qLin = qClip = band = colSum = ltmGainQ = null;
       glowQ = null;
     }
 
@@ -1139,9 +1247,14 @@ public final class RawDeveloper {
       }
       for (Future<Void> fu : pool.invokeAll(tasks)) fu.get();
       long t = System.nanoTime();
+      if (appleStyle != null) {
+        buildAppleLtm();
+      }
       if (glow) {
         buildGlow();
         quarterCodes();
+      } else if (appleStyle != null) {
+        quarterCodesLinear();
       }
       if (firstVersion) quarterFirstVersion();
       else quarterDenoise();
@@ -1247,7 +1360,7 @@ public final class RawDeveloper {
             if (B > G) B += w * (G - B);
           }
           int i = by * qW + bx;
-          if (glow) {
+          if (glow || appleStyle != null) {
             qLin[3 * i] = m[0] * R + m[1] * G + m[2] * B;
             qLin[3 * i + 1] = m[3] * R + m[4] * G + m[5] * B;
             qLin[3 * i + 2] = m[6] * R + m[7] * G + m[8] * B;
@@ -1264,6 +1377,99 @@ public final class RawDeveloper {
           qS[i] = shG;
         }
       }
+    }
+
+    /**
+     * Apple Smart HDR 5 quarter-resolution local tone map + Ultra HDR gainmap builder: extracts an
+     * edge-preserving log2 illumination envelope (self-guided filter so silhouette edges produce
+     * zero halos while surface texture stays intact), converts it to local linear gain, scales
+     * {@code qLin} and {@code qS} (so shadow NR tracks shadow lift), and records ISO 21496-1
+     * highlight headroom into {@code gainmapOut}.
+     */
+    void buildAppleLtm() {
+      int n = qW * qH;
+      ltmGainQ = new float[n];
+      float invKey = (float) (1.0 / AppleRender.METERING_KEY);
+      float invLn2 = (float) (1.0 / Math.log(2.0));
+
+      float[] env;
+      if (stillsTone) {
+        if (colSum == null) colSum = new float[qW];
+        env = new float[n];
+        float[] m1 = new float[n], m2 = new float[n], box = new float[n];
+        for (int i = 0; i < n; i++) {
+          float norm =
+              AppleRender.sceneNormDisplayP3(qLin[3 * i], qLin[3 * i + 1], qLin[3 * i + 2]);
+          float e = (float) Math.log(Math.max(1e-5f, norm) * invKey) * invLn2;
+          env[i] = e;
+          m2[i] = e * e;
+        }
+        boxMean(env, m1, ltmR, box);
+        boxMean(m2, m2, ltmR, box);
+        for (int i = 0; i < n; i++) {
+          float mean = m1[i], var = Math.max(0f, m2[i] - mean * mean);
+          float ai = var / (var + 0.36f);
+          m1[i] = ai;
+          m2[i] = (1f - ai) * mean;
+        }
+        boxMean(m1, m1, ltmR, box);
+        boxMean(m2, m2, ltmR, box);
+        for (int i = 0; i < n; i++) env[i] = m1[i] * env[i] + m2[i];
+      } else {
+        env = null;
+      }
+
+      int gmBy0 = bandLocalOut0 / 4;
+      int gmBy1 = (bandLocalOut1 + 3) / 4;
+      int baseGlobalBy = bandY0 / 4;
+      int fullQH = (H + 3) / 4;
+
+      for (int by = 0; by < qH; by++) {
+        boolean writeGm =
+            gainmapOut != null && by >= gmBy0 && by < gmBy1 && (baseGlobalBy + by) < fullQH;
+        int gmRowOff = writeGm ? (baseGlobalBy + by) * qW : 0;
+        int rowOff = by * qW;
+        for (int bx = 0; bx < qW; bx++) {
+          int i = rowOff + bx;
+          float lr = qLin[3 * i], lg = qLin[3 * i + 1], lb = qLin[3 * i + 2];
+          float g =
+              env != null
+                  ? (float)
+                      Math.pow(
+                          2.0,
+                          AppleRender.localToneDeltaEv(
+                              env[i], appleStyle, recipeHighlight, recipeShadow))
+                  : 1f;
+          ltmGainQ[i] = g;
+          if (writeGm) {
+            float rawPeak = Math.max(lr, Math.max(lg, lb));
+            float sdrPeak = appleTone.eval(rawPeak * g);
+            gainmapOut[gmRowOff + bx] = AppleRender.computeGainmapByte(rawPeak, sdrPeak);
+          }
+          qLin[3 * i] = lr * g;
+          qLin[3 * i + 1] = lg * g;
+          qLin[3 * i + 2] = lb * g;
+          qS[i] *= g;
+        }
+      }
+    }
+
+    /** Quarter-resolution log codes directly from {@code qLin} when glow is off on Apple profiles. */
+    void quarterCodesLinear() {
+      int n = qW * qH;
+      qY = new float[n];
+      qU = new float[n];
+      qV = new float[n];
+      for (int i = 0; i < n; i++) {
+        float c0 = tone.apply(qLin[3 * i]);
+        float c1 = tone.apply(qLin[3 * i + 1]);
+        float c2 = tone.apply(qLin[3 * i + 2]);
+        float yq = 0.25f * (c0 + 2 * c1 + c2);
+        qY[i] = yq;
+        qU[i] = c0 - yq;
+        qV[i] = c2 - yq;
+      }
+      qLin = qClip = null;
     }
 
     /**
@@ -1880,13 +2086,14 @@ public final class RawDeveloper {
       int k0 = (yy & 1) << 1;
       int cEven = j.colorK[k0], cOdd = j.colorK[k0 | 1];
       final float[][] gq = j.glowQ;
+      final float[] ltm = j.ltmGainQ;
       final float[] gR = gq == null ? null : gq[0], gG = gq == null ? null : gq[1], gB = gq == null ? null : gq[2];
       final float kR = j.glowKeep[0], kG = j.glowKeep[1], kB = j.glowKeep[2];
       final int[] qx0 = j.qx0;
       final float[] qfx = j.qfx;
       int q0 = 0, q1 = 0;
       float fy = 0;
-      if (gq != null) {
+      if (gq != null || ltm != null) {
         float v = (yy - 1.5f) * 0.25f;
         int y0q = (int) Math.floor(v);
         if (y0q < 0) {
@@ -1942,6 +2149,17 @@ public final class RawDeveloper {
         float lr = m[0] * R + m[1] * G + m[2] * B;
         float lg = m[3] * R + m[4] * G + m[5] * B;
         float lb = m[6] * R + m[7] * G + m[8] * B;
+        if (ltm != null) {
+          int i0 = q0 + qx0[x], i1 = q1 + qx0[x];
+          float fx = qfx[x];
+          float g0 = ltm[i0] + fx * (ltm[i0 + 1] - ltm[i0]);
+          float g1 = ltm[i1] + fx * (ltm[i1 + 1] - ltm[i1]);
+          float gLtm = g0 + fy * (g1 - g0);
+          lr *= gLtm;
+          lg *= gLtm;
+          lb *= gLtm;
+          gRow[x] *= gLtm;
+        }
         if (gq != null) {
           int i0 = q0 + qx0[x], i1 = q1 + qx0[x];
           float fx = qfx[x];
@@ -2148,64 +2366,79 @@ public final class RawDeveloper {
       final float[] ga = j.grainA, gb = j.grainB;
       final boolean post = j.post, cce = j.cceDepth > 0, mono = j.monoFilter;
       final boolean fv = j.firstVersion;
+      final AppleRender.Style appleStyle = j.appleStyle;
       final int sp = j.sensorProfile, rColor = j.recipeColor, rCce = j.recipeCce;
       final float chroma = j.chroma, cceDepth = j.cceDepth, blueDepth = j.blueDepth;
       int src = (r + HALO) * W, dst = r * W;
       int rowA = ((y + j.grainOy) & 1023) << 10, rowB = j.mod997[y + j.grainOy] * 997;
       int ox = j.grainOx;
       for (int x = 0; x < W; x++) {
-        j.lut.sample(cr[src + x], cg[src + x], cb[src + x], lutOut);
-        if (blueDepth > 0) fxBlue(lutOut, blueDepth); // both developments (v0.3.3)
-        float vr = lutOut[0], vg = lutOut[1], vb = lutOut[2];
-        if (mono) vr = vg = vb = j.filterMono(cr[src + x], cg[src + x], cb[src + x], vg);
-        if (sp != PROFILE_NONE && !mono) {
-          applySensorCalibration(lutOut, sp, rColor, rCce);
+        float vr, vg, vb;
+        if (appleStyle != null) {
+          float lr = CubeLut.flog2Linear(cr[src + x]);
+          float lg = CubeLut.flog2Linear(cg[src + x]);
+          float lb = CubeLut.flog2Linear(cb[src + x]);
+          AppleRender.applyRgbTone(lr, lg, lb, j.appleTone, lutOut);
+          AppleRender.gradeDisplayP3(lutOut, appleStyle, rColor, j.outputDisplayP3);
           vr = lutOut[0];
           vg = lutOut[1];
           vb = lutOut[2];
-        } else if (post && fv) {
-          // First version (v0.2.0), unchanged: Color Chrome Effect / Color in OKLab
-          float lr = j.decode(vr), lg = j.decode(vg), lb = j.decode(vb);
-          float l = (float) Math.cbrt(0.4122214708f * lr + 0.5363325363f * lg + 0.0514459929f * lb);
-          float mm = (float) Math.cbrt(0.2119034982f * lr + 0.6806995451f * lg + 0.1073969566f * lb);
-          float s = (float) Math.cbrt(0.0883024619f * lr + 0.2817188376f * lg + 0.6299787005f * lb);
-          float L = 0.2104542553f * l + 0.7936177850f * mm - 0.0040720468f * s;
-          float A = 1.9779984951f * l - 2.4285922050f * mm + 0.4505937099f * s;
-          float Bb = 0.0259040371f * l + 0.7827717662f * mm - 0.8086757660f * s;
-          if (cce) {
-            float C = (float) Math.sqrt(A * A + Bb * Bb);
-            float w = C <= FV_CCE_C0 ? 0 : C >= FV_CCE_C1 ? 1 : (C - FV_CCE_C0) / (FV_CCE_C1 - FV_CCE_C0);
-            w = w * w * (3 - 2 * w);
-            float dL = cceDepth * w;
-            L -= dL * L;
+        } else {
+          j.lut.sample(cr[src + x], cg[src + x], cb[src + x], lutOut);
+          if (blueDepth > 0) fxBlue(lutOut, blueDepth); // both developments (v0.3.3)
+          vr = lutOut[0];
+          vg = lutOut[1];
+          vb = lutOut[2];
+          if (mono) vr = vg = vb = j.filterMono(cr[src + x], cg[src + x], cb[src + x], vg);
+          if (sp != PROFILE_NONE && !mono) {
+            applySensorCalibration(lutOut, sp, rColor, rCce);
+            vr = lutOut[0];
+            vg = lutOut[1];
+            vb = lutOut[2];
+          } else if (post && fv) {
+            // First version (v0.2.0), unchanged: Color Chrome Effect / Color in OKLab
+            float lr = j.decode(vr), lg = j.decode(vg), lb = j.decode(vb);
+            float l = (float) Math.cbrt(0.4122214708f * lr + 0.5363325363f * lg + 0.0514459929f * lb);
+            float mm = (float) Math.cbrt(0.2119034982f * lr + 0.6806995451f * lg + 0.1073969566f * lb);
+            float s = (float) Math.cbrt(0.0883024619f * lr + 0.2817188376f * lg + 0.6299787005f * lb);
+            float L = 0.2104542553f * l + 0.7936177850f * mm - 0.0040720468f * s;
+            float A = 1.9779984951f * l - 2.4285922050f * mm + 0.4505937099f * s;
+            float Bb = 0.0259040371f * l + 0.7827717662f * mm - 0.8086757660f * s;
+            if (cce) {
+              float C = (float) Math.sqrt(A * A + Bb * Bb);
+              float w = C <= FV_CCE_C0 ? 0 : C >= FV_CCE_C1 ? 1 : (C - FV_CCE_C0) / (FV_CCE_C1 - FV_CCE_C0);
+              w = w * w * (3 - 2 * w);
+              float dL = cceDepth * w;
+              L -= dL * L;
+            }
+            A *= chroma;
+            Bb *= chroma;
+            float l2 = L + 0.3963377774f * A + 0.2158037573f * Bb;
+            float m2 = L - 0.1055613458f * A - 0.0638541728f * Bb;
+            float s2 = L - 0.0894841775f * A - 1.2914855480f * Bb;
+            l2 = l2 * l2 * l2;
+            m2 = m2 * m2 * m2;
+            s2 = s2 * s2 * s2;
+            vr = j.encode(4.0767416621f * l2 - 3.3077115913f * m2 + 0.2309699292f * s2);
+            vg = j.encode(-1.2684380046f * l2 + 2.6097574011f * m2 - 0.3413193965f * s2);
+            vb = j.encode(-0.0041960863f * l2 - 0.7034186147f * m2 + 1.7076147010f * s2);
+          } else if (post) {
+            // display-code opponent space (BT.709 luma): cheap stand-in for a perceptual space
+            float Yd = 0.2126f * vr + 0.7152f * vg + 0.0722f * vb;
+            float u = vb - Yd, v = vr - Yd;
+            if (cce) {
+              float C = (float) Math.sqrt(u * u + v * v);
+              float w = C <= CCE_C0 ? 0 : C >= CCE_C1 ? 1 : (C - CCE_C0) / (CCE_C1 - CCE_C0);
+              w = w * w * (3 - 2 * w);
+              float dL = cceDepth * w;
+              Yd -= dL * Yd;
+            }
+            u *= chroma;
+            v *= chroma;
+            vr = Yd + v;
+            vb = Yd + u;
+            vg = (Yd - 0.2126f * vr - 0.0722f * vb) * (1f / 0.7152f);
           }
-          A *= chroma;
-          Bb *= chroma;
-          float l2 = L + 0.3963377774f * A + 0.2158037573f * Bb;
-          float m2 = L - 0.1055613458f * A - 0.0638541728f * Bb;
-          float s2 = L - 0.0894841775f * A - 1.2914855480f * Bb;
-          l2 = l2 * l2 * l2;
-          m2 = m2 * m2 * m2;
-          s2 = s2 * s2 * s2;
-          vr = j.encode(4.0767416621f * l2 - 3.3077115913f * m2 + 0.2309699292f * s2);
-          vg = j.encode(-1.2684380046f * l2 + 2.6097574011f * m2 - 0.3413193965f * s2);
-          vb = j.encode(-0.0041960863f * l2 - 0.7034186147f * m2 + 1.7076147010f * s2);
-        } else if (post) {
-          // display-code opponent space (BT.709 luma): cheap stand-in for a perceptual space
-          float Yd = 0.2126f * vr + 0.7152f * vg + 0.0722f * vb;
-          float u = vb - Yd, v = vr - Yd;
-          if (cce) {
-            float C = (float) Math.sqrt(u * u + v * v);
-            float w = C <= CCE_C0 ? 0 : C >= CCE_C1 ? 1 : (C - CCE_C0) / (CCE_C1 - CCE_C0);
-            w = w * w * (3 - 2 * w);
-            float dL = cceDepth * w;
-            Yd -= dL * Yd;
-          }
-          u *= chroma;
-          v *= chroma;
-          vr = Yd + v;
-          vb = Yd + u;
-          vg = (Yd - 0.2126f * vr - 0.0722f * vb) * (1f / 0.7152f);
         }
         int xx = x + ox;
         float nz = (ga[rowA + (xx & 1023)] + gb[rowB + j.mod997[xx]]) * 0.70710678f;

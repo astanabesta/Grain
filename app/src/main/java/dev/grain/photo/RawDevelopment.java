@@ -6,7 +6,9 @@ import android.graphics.BitmapFactory;
 import android.graphics.Matrix;
 import android.graphics.PointF;
 import android.media.FaceDetector;
+import android.os.Build;
 import androidx.exifinterface.media.ExifInterface;
+import dev.grain.photo.develop.AppleRender;
 import dev.grain.photo.develop.CubeLut;
 import dev.grain.photo.develop.Faces;
 import dev.grain.photo.develop.FujiRecipe;
@@ -64,14 +66,18 @@ final class RawDevelopment {
     }
     final int outW = frame.width, outH = frame.height;
     final Bitmap bitmap = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888);
+    Bitmap gainmapBmp = null;
     File tmp = null;
     boolean success = false;
     try {
+      boolean apple = recipe.apple();
       RawDeveloper.Options options = new RawDeveloper.Options();
       options.faceExposure = faceExposure;
       options.exposureEv = ev;
       options.grainSeed = seed;
       options.threads = Math.max(1, Math.min(8, Runtime.getRuntime().availableProcessors()));
+      options.outputDisplayP3 = apple;
+      options.computeGainmap = apple && Build.VERSION.SDK_INT >= 34;
       Map<String, Object> stats =
           RawDeveloper.develop(
               frame,
@@ -87,14 +93,31 @@ final class RawDevelopment {
       frame = null;
       if (releaseFrameAfterDevelop) capture.releaseFrame();
 
+      if (apple) {
+        UltraHdrJpeg.tagDisplayP3(bitmap);
+        gainmapBmp =
+            UltraHdrJpeg.attachGainmapIfSupported(
+                bitmap,
+                options.outGainmap,
+                options.outGainmapW,
+                options.outGainmapH,
+                AppleRender.GAINMAP_RATIO_MAX);
+        options.outGainmap = null;
+      }
+
       long t = System.nanoTime();
       tmp = File.createTempFile("develop-", ".jpg", context.getCacheDir());
       try (OutputStream out = new BufferedOutputStream(new FileOutputStream(tmp), 65536)) {
         if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out))
           throw new IllegalStateException("JPEG encoding failed");
       }
+      boolean wroteGainmap = gainmapBmp != null;
       // Free the native ARGB_8888 pixel buffer (~448 MB at 112 MP) before EXIF rewrite and save.
       bitmap.recycle();
+      if (gainmapBmp != null) {
+        gainmapBmp.recycle();
+        gainmapBmp = null;
+      }
 
       ExifInterface exif = new ExifInterface(tmp);
       if (capture.phoneJpeg != null)
@@ -126,8 +149,17 @@ final class RawDevelopment {
       exif.setAttribute(ExifInterface.TAG_SOFTWARE, SOFTWARE);
       exif.setAttribute(
           ExifInterface.TAG_IMAGE_DESCRIPTION,
-          recipe.name + " (" + recipe.filmLabel + " LUT" + (tuned ? ", tuned" : "") + ")");
+          recipe.name
+              + " ("
+              + recipe.filmLabel
+              + (apple ? ", Display P3 + Ultra HDR" : " LUT")
+              + (tuned ? ", tuned" : "")
+              + ")");
       exif.saveAttributes();
+      if (wroteGainmap) {
+        boolean repaired = UltraHdrJpeg.repairMpfAfterExifSave(tmp);
+        stats.put("ultraHdrMpfRepaired", repaired);
+      }
 
       JSONObject json = new JSONObject(stats);
       if (faceSearch != null) json.put("faceSearch", faceSearch);
@@ -137,6 +169,7 @@ final class RawDevelopment {
       return new Output(tmp, json);
     } finally {
       if (!bitmap.isRecycled()) bitmap.recycle();
+      if (gainmapBmp != null && !gainmapBmp.isRecycled()) gainmapBmp.recycle();
       if (!success && tmp != null && tmp.exists() && !tmp.delete()) {
         android.util.Log.w("Grain", "Temp JPEG kept");
       }

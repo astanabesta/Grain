@@ -220,9 +220,12 @@ public final class FujiRecipe {
     this.source = source;
     this.filmSimulation = filmSimulation;
     this.filmLabel = filmLabel;
-    boolean sony = sonyLut(filmSimulation);
-    // Sony s709 has no Fujifilm dynamic range or Color Chrome settings: fixed, whatever is tuned
-    this.dynamicRange = sony ? DynamicRange.DR100 : dynamicRange == null ? DynamicRange.AUTO : dynamicRange;
+    boolean sony = sonyLut(filmSimulation), apple = appleLut(filmSimulation);
+    // Sony s709 and Apple Smart HDR 5 have no Fujifilm dynamic range or Color Chrome settings
+    this.dynamicRange =
+        sony
+            ? DynamicRange.DR100
+            : apple ? DynamicRange.AUTO : dynamicRange == null ? DynamicRange.AUTO : dynamicRange;
     this.highlight = highlight;
     this.shadow = shadow;
     this.color = color;
@@ -231,8 +234,8 @@ public final class FujiRecipe {
     this.clarity = clarity;
     this.grainRoughness = grainRoughness;
     this.grainLarge = grainLarge;
-    this.colorChrome = sony ? 0 : colorChrome;
-    this.colorChromeBlue = sony ? 0 : colorChromeBlue;
+    this.colorChrome = (sony || apple) ? 0 : colorChrome;
+    this.colorChromeBlue = (sony || apple) ? 0 : colorChromeBlue;
     this.wbMode = wbMode == null ? WhiteBalance.AUTO : wbMode;
     this.kelvin = kelvin(kelvin);
     this.whiteBalance = this.wbMode == WhiteBalance.KELVIN ? this.kelvin + "K" : this.wbMode.label;
@@ -735,7 +738,7 @@ public final class FujiRecipe {
 
   /** True for the packs' technical F-Log2 to Rec.709 transforms, which are not film simulations. */
   public static boolean isTechnical(String lutName) {
-    if (sonyLut(lutName)) return false; // Sony's s709 is a look, not a technical conversion
+    if (sonyLut(lutName) || appleLut(lutName)) return false;
     String n = lutName.toUpperCase(java.util.Locale.ROOT);
     return n.endsWith("709") || n.startsWith("FLOG2") || n.startsWith("F-LOG");
   }
@@ -750,14 +753,76 @@ public final class FujiRecipe {
   public static final String SONY_S709_PAGE =
       "https://support.d-imaging.sony.co.jp/support/ilc/movie/en/grading/02.html";
 
+  /** Apple's iPhone 16 Pro Photographic Styles documentation page. */
+  public static final String APPLE_STYLES_PAGE =
+      "https://support.apple.com/guide/iphone/apply-photographic-styles-iphb362b394e/ios";
+
   public static boolean sonyLut(String lutName) {
     return lutName != null && lutName.toUpperCase(java.util.Locale.ROOT).startsWith(SONY_PREFIX);
+  }
+
+  public static boolean appleLut(String lutName) {
+    return AppleRender.isAppleSimulation(lutName);
   }
 
   /** Sony's look on S-Log3 rather than a Fujifilm film simulation. */
   public boolean sony() {
     return sonyLut(filmSimulation);
   }
+
+  /** Built-in iPhone 16 Pro Smart HDR 5 + Photographic Style RAW profile (no external LUT needed). */
+  public boolean apple() {
+    return appleLut(filmSimulation);
+  }
+
+  private static FujiRecipe appleStyle(String key, String name, AppleRender.Style style) {
+    return new FujiRecipe(
+        key,
+        name,
+        "Apple (Smart HDR 5)",
+        APPLE_STYLES_PAGE,
+        style.id,
+        style.label,
+        DynamicRange.AUTO,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        false,
+        0,
+        0,
+        "Auto",
+        0,
+        0);
+  }
+
+  /** iPhone 16 Pro Standard: balanced Smart HDR 5 local tone map, clean skin, Display P3 + Ultra HDR. */
+  public static final FujiRecipe IPHONE_STANDARD =
+      appleStyle("iphone-16-standard", "iPhone 16 Pro · Standard", AppleRender.Style.STANDARD);
+
+  /** iPhone 16 Pro Natural Rose: luminous portrait skin undertone, tamed yellow cast, airy contrast. */
+  public static final FujiRecipe IPHONE_NATURAL_ROSE =
+      appleStyle(
+          "iphone-16-natural-rose", "iPhone 16 Pro · Natural Rose", AppleRender.Style.NATURAL_ROSE);
+
+  /** iPhone 16 Pro Rich Contrast: deeper shadow anchor, crisp separation, saturated P3 colours. */
+  public static final FujiRecipe IPHONE_RICH_CONTRAST =
+      appleStyle(
+          "iphone-16-rich-contrast",
+          "iPhone 16 Pro · Rich Contrast",
+          AppleRender.Style.RICH_CONTRAST);
+
+  /** iPhone 16 Pro Amber Cozy: golden-hour warmth across midtones & highlights with protected skin. */
+  public static final FujiRecipe IPHONE_AMBER_COZY =
+      appleStyle("iphone-16-amber-cozy", "iPhone 16 Pro · Amber Cozy", AppleRender.Style.AMBER_COZY);
+
+  /** Built-in iPhone 16 Pro RAW profiles in Film picker order. */
+  public static final FujiRecipe[] APPLE_STYLES = {
+    IPHONE_STANDARD, IPHONE_NATURAL_ROSE, IPHONE_RICH_CONTRAST, IPHONE_AMBER_COZY
+  };
 
   /**
    * Sony's s709 at standard settings: Sony's official look for its cinema cameras ("developed
@@ -830,11 +895,14 @@ public final class FujiRecipe {
 
   /** Human-readable settings, in the order Fujifilm cameras list them. */
   public String[][] settings() {
-    boolean mono = monochrome(), drp = dynamicRange.priority(), sony = sony();
+    boolean mono = monochrome(), drp = dynamicRange.priority(), sony = sony(), apple = apple();
     String notForMono = " (not applied to black and white)";
     java.util.List<String[]> rows = new java.util.ArrayList<>();
     if (sony) rows.add(new String[] {"Look", "Sony " + filmLabel + " (S-Log3 / S-Gamut3.Cine)"});
-    else {
+    else if (apple) {
+      rows.add(new String[] {"Photographic style", filmLabel});
+      rows.add(new String[] {"Color space", "Display P3 + Ultra HDR Gainmap"});
+    } else {
       rows.add(new String[] {"Film simulation", filmLabel + (monoFilter > 0 ? MONO_FILTERS[monoFilter] : "")});
       rows.add(new String[] {"Dynamic range", dynamicRange.label});
     }
@@ -846,7 +914,7 @@ public final class FujiRecipe {
     rows.add(new String[] {"High ISO NR", signed(noiseReduction)});
     rows.add(new String[] {"Clarity", signed(clarity)});
     rows.add(new String[] {"Grain", grainRoughness == 0 ? "Off" : level(grainRoughness) + " / " + (grainLarge ? "Large" : "Small")});
-    if (!sony) {
+    if (!sony && !apple) {
       rows.add(new String[] {"Color Chrome Effect", level(colorChrome) + (mono && colorChrome > 0 ? notForMono : "")});
       rows.add(new String[] {"Color Chrome FX Blue", level(colorChromeBlue) + (mono && colorChromeBlue > 0 ? notForMono : "")});
     }

@@ -1,15 +1,21 @@
-## Grain Photo vVERSION — Fix 112 MP Out-of-Memory & Rate-Limit-Free In-App Updates (`Android`)
+## Grain Photo vVERSION — iPhone 16 Pro Smart HDR 5 + Photographic Styles, Display P3 & Ultra HDR (`Android`)
 
-- **Android (`Grain-vVERSION.apk`):** Download **`Grain-vVERSION.apk`** below and tap it once to install directly over `v0.8.7` / `v0.8.8` (no uninstall needed; keeps all LUTs, recipes, and photos). From `v0.8.9` onward, **MENU → SET UP → APP UPDATE** no longer hits GitHub's `HTTP 403` shared-IP API limit.
+- **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, and photos).
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** Download **`Grain-iOS-vVERSION.ipa`** below and install onto any iPhone (iOS 16+, including **iPhone XR / XS** and newer) using **[Sideloadly](https://sideloadly.io/)**, **[AltStore](https://altstore.io/)**, or **[SideStore](https://sidestore.io/)**.
 
-### What's fixed in v0.8.8 – v0.8.9
+### What's new in v0.9.0
 
-#### 1. Fixed `Update check failed: Update server returned HTTP 403` (`v0.8.9`)
-- **Root cause:** unauthenticated calls to `api.github.com` share a 60 requests/hour quota per carrier/ISP CGNAT public IP, returning `HTTP 403` on mobile data and shared broadband.
-- **Fixed:** `AppUpdater` now resolves updates directly via `github.com/.../releases/latest` HTTP 302 redirect + `SHA256SUMS.txt` + `releases.atom` without consuming `api.github.com` quota, and offers a one-tap **Open Releases** fallback dialog if a network ever blocks automated checks.
+#### 1. Built-in iPhone 16 Pro RAW Pipeline (Smart HDR 5 + Photographic Styles)
+Four ready-to-shoot RAW profiles sit right on the Film dial (`i16`, `iRS`, `iRC`, `iAM`) — **no external `.cube` LUT download required**, fully compatible with `FS BKT`, `HI-RES 36MP / 48MP / 112MP`, and recipe tuning:
+- **iPhone 16 Pro · Standard (`i16`):** Balanced Smart HDR 5 local shadow lift, natural halo-free silhouette edges, protected true-warm skin, tamed CMOS greens, and cerulean skies.
+- **iPhone 16 Pro · Natural Rose (`iRS`):** Luminous portrait skin undertone that tames indoor warm/yellow cast while keeping neutral backgrounds neutral.
+- **iPhone 16 Pro · Rich Contrast (`iRC`):** Deeper black-toe shadow anchor, crisp separation, and richer Display P3 pigment density while keeping skin chroma protected.
+- **iPhone 16 Pro · Amber Cozy (`iAM`):** Golden-hour warmth across midtones and creamy sunlit highlights without turning faces neon orange.
 
-#### 2. Fixed `"Hi-Res merge failed: not enough memory"` on 9-shot `HI-RES 3 112MP` (`v0.8.8`)
-- **Band-tiled RAW development (`RawDeveloper`):** frames above 32 MP develop in overlapping horizontal bands with exact cascaded halo/bloom/denoise/clarity support, global auto-exposure & chroma-noise calibration, and compact `16`-row ultra-wide strip workers. Stress-tested at `12220 × 9164` (`112 MP`) across 8 threads inside a 384 MB JVM heap.
-- **Zero-copy file-streamed JPEG save:** releases the 224 MB merged `RawFrame` before JPEG encode, streams `Bitmap.compress(JPEG, 95, …)` straight to disk (`0 MB` Java `byte[]`), recycles the 448 MB `Bitmap` before EXIF write, and uses `BitmapRegionDecoder` for non-`full` crops.
-- **One-tap `SAVE` to phone Gallery:** completed Hi-Res captures now include a **`SAVE`** action on the completion banner to export a copy directly to `Pictures/Grain` in your phone's system Gallery.
+#### 2. Scene-Linear Local Tone Mapping + Hue-Preserving `RefBaselineRGBTone`
+- **Edge-aware quarter-resolution `ProfileGainTableMap` operator:** extracts a self-guided log-EV illumination envelope (`0.68 · Y + 0.32 · max(R,G,B)`) that lifts foreground shadows and recovers bright skies/windows while keeping local micro-contrast intact and silhouette edges halo-free; sensor noise variance scales locally with shadow gain so lifted shadows stay clean.
+- **DNG `RefBaselineRGBTone` global S-curve:** sorted `(max, mid, min)` tone operator keeps HSV hue angle invariant across bright highlights and deep shadows.
+
+#### 3. Wide-Gamut Display P3 + Android 14+ Ultra HDR `Gainmap`
+- **Native Display P3 output:** develops directly from camera RAW into linear Display P3 and embeds the Display P3 ICC colour space in the saved JPEG.
+- **ISO 21496-1 Ultra HDR `Gainmap` (Android 14+ / API 34+):** encodes true pre-shoulder linear RAW highlight headroom (up to `3.0×` OLED luminance above diffuse white) into a quarter-resolution single-channel gainmap, preserves gainmaps across aspect crops (`3:2`, `16:9`, `1:1`, `XPAN`) and EXIF saves (in-place CIPA DC-007 `MPF` repair), and dynamically switches Grain's `PLAY` / Gallery viewer into `COLOR_MODE_HDR`.

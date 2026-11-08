@@ -63,7 +63,7 @@ public final class Recipe {
       "Reggie Ballesteros’ published Fujifilm recipe: Classic Negative, moodier, grainier and more"
           + " contrasty than his Portra, made for rich skin tones in directional light."
     };
-    Recipe[] all = new Recipe[fixed.length + sims.length + recipes.length + 4];
+    Recipe[] all = new Recipe[fixed.length + sims.length + recipes.length + 8];
     System.arraycopy(fixed, 0, all, 0, fixed.length);
     for (int i = 0; i < sims.length; i++) {
       int id = fixed.length + i;
@@ -125,13 +125,50 @@ public final class Recipe {
                 + " cobalt blues and crisp Summilux black-toe micro-contrast, calibrated for phone"
                 + " sensors through Fujifilm’s Classic Chrome LUT.",
             false);
+    int appleStdId = leicaXId + 1;
+    all[appleStdId] =
+        new Recipe(
+            appleStdId,
+            FujiRecipe.IPHONE_STANDARD,
+            "Apple’s iPhone 16 Pro flagship Smart HDR 5 look: balanced local shadow lift, natural"
+                + " halo-free edges, protected true-warm skin, cerulean skies and Display P3 +"
+                + " Ultra HDR highlight headroom — built directly into Grain’s RAW engine.",
+            false);
+    int appleRoseId = appleStdId + 1;
+    all[appleRoseId] =
+        new Recipe(
+            appleRoseId,
+            FujiRecipe.IPHONE_NATURAL_ROSE,
+            "iPhone 16 Pro Natural / Rose Gold Photographic Style: luminous portrait skin"
+                + " undertone that tames indoor yellow cast while keeping backgrounds neutral, in"
+                + " wide-gamut Display P3 + Ultra HDR.",
+            false);
+    int appleRichId = appleRoseId + 1;
+    all[appleRichId] =
+        new Recipe(
+            appleRichId,
+            FujiRecipe.IPHONE_RICH_CONTRAST,
+            "iPhone 16 Pro Rich Contrast Photographic Style: deeper Leica-like shadow anchor,"
+                + " crisp tonal separation and richer Display P3 pigment density while keeping"
+                + " natural skin chroma protected, with Ultra HDR highlights.",
+            false);
+    int appleAmberId = appleRichId + 1;
+    all[appleAmberId] =
+        new Recipe(
+            appleAmberId,
+            FujiRecipe.IPHONE_AMBER_COZY,
+            "iPhone 16 Pro Amber / Cozy Photographic Style: golden-hour warmth across midtones"
+                + " and creamy sunlit highlights without turning faces orange, in Display P3 +"
+                + " Ultra HDR.",
+            false);
     return all;
   }
 
   /**
-   * The order films are listed in: the ISP looks, the published recipes in FujiRecipe.PUBLISHED
-   * order (Reggie's Portra and Reggie's Superia first), then the plain film simulations. Ids are
-   * unchanged; a recipe missing from PUBLISHED still appears, after the listed ones.
+   * The order films are listed in: the ISP looks, the built-in iPhone 16 Pro Smart HDR 5 RAW
+   * profiles, the published recipes in FujiRecipe.PUBLISHED order (Reggie's Portra and Reggie's
+   * Superia first), then the plain film simulations. Ids are unchanged; a recipe missing from
+   * PUBLISHED still appears, after the listed ones.
    */
   public static final Recipe[] DISPLAY_ORDER = displayOrder();
 
@@ -144,6 +181,12 @@ public final class Recipe {
         out[n++] = r;
         placed[r.id] = true;
       }
+    for (FujiRecipe a : FujiRecipe.APPLE_STYLES)
+      for (Recipe r : ALL)
+        if (!placed[r.id] && r.raw && r.fuji.key.equals(a.key)) {
+          out[n++] = r;
+          placed[r.id] = true;
+        }
     for (FujiRecipe p : FujiRecipe.PUBLISHED)
       for (Recipe r : ALL)
         if (!placed[r.id] && r.raw && !r.standard && r.fuji.key.equals(p.key)) {
@@ -212,6 +255,8 @@ public final class Recipe {
   public static float rawCaptureBias(FujiRecipe f) {
     // Sony's s709 has no dynamic range setting: 1/3 EV of highlight room, like DR-Auto
     if (f.sony()) return -1f / 3;
+    // Apple Smart HDR 5 + Ultra HDR captures 1.0 EV of linear highlight headroom (ProRAW style)
+    if (f.apple()) return -1.0f;
     if ("kodak-800-v3".equals(f.key) && f.dynamicRange == FujiRecipe.DynamicRange.DR400)
       return -1.25f; // phone-sensor optimal headroom: 1.25 EV highlight safety without 4x shadow photon loss
     if ("cinestill-800t".equals(f.key) && f.dynamicRange == FujiRecipe.DynamicRange.DR400)
@@ -305,9 +350,11 @@ public final class Recipe {
                   "kind",
                   fuji.sony()
                       ? "RAW development + Sony's official s709 LUT (S-Log3 / S-Gamut3.Cine)"
-                      : standard
-                          ? "RAW development + official Fujifilm F-Log2 LUT, film simulation"
-                          : "RAW development + official Fujifilm F-Log2 LUT")
+                      : fuji.apple()
+                          ? "RAW development + Apple Smart HDR 5 & Photographic Styles (Display P3 + Ultra HDR)"
+                          : standard
+                              ? "RAW development + official Fujifilm F-Log2 LUT, film simulation"
+                              : "RAW development + official Fujifilm F-Log2 LUT")
               .put("author", fuji.author)
               .put("source", fuji.source)
               .put("filmSimulationLut", fuji.filmSimulation)
@@ -315,7 +362,11 @@ public final class Recipe {
               .put("tuned", changed)
               .put(
                   "defaultSettings",
-                  fuji.sony() ? "Sony s709, standard settings" : standard ? "Fujifilm standard settings" : "published recipe")
+                  fuji.sony()
+                      ? "Sony s709, standard settings"
+                      : fuji.apple()
+                          ? "iPhone 16 Pro Photographic Style"
+                          : standard ? "Fujifilm standard settings" : "published recipe")
               .put("captureEvBias", rawCaptureBias(f));
       if (changed) {
         JSONObject defaults = new JSONObject();

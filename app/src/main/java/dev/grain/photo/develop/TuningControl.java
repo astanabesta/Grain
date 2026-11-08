@@ -66,7 +66,7 @@ public final class TuningControl {
   public static List<TuningControl> fujifilm(FujiRecipe film) {
     List<TuningControl> s = new ArrayList<>();
     String[] levels = {"Off", "Weak", "Strong"};
-    boolean mono = film.monochrome(), sony = film.sony();
+    boolean mono = film.monochrome(), sony = film.sony(), apple = film.apple();
     if (mono)
       s.add(
           new TuningControl(
@@ -77,7 +77,7 @@ public final class TuningControl {
     FujiRecipe.DynamicRange[] ranges = FujiRecipe.DynamicRange.values();
     String[] rangeLabels = new String[ranges.length];
     for (int i = 0; i < ranges.length; i++) rangeLabels[i] = ranges[i].label;
-    if (!sony)
+    if (!sony && !apple)
       s.add(
           new TuningControl(
               "Dynamic range",
@@ -165,7 +165,7 @@ public final class TuningControl {
               t.grainRoughness = (i + 1) / 2;
               t.grainLarge = i == 2 || i == 4;
             }));
-    if (!mono && !sony) {
+    if (!mono && !sony && !apple) {
       s.add(new TuningControl("Color Chrome Effect", levels, t -> t.colorChrome, (t, i) -> t.colorChrome = i));
       s.add(
           new TuningControl(
