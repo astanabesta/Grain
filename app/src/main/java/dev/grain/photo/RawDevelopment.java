@@ -76,7 +76,7 @@ final class RawDevelopment {
       options.exposureEv = ev;
       options.grainSeed = seed;
       options.threads = Math.max(1, Math.min(8, Runtime.getRuntime().availableProcessors()));
-      options.outputDisplayP3 = apple;
+      options.outputDisplayP3 = false;
       options.computeGainmap = apple && Build.VERSION.SDK_INT >= 34;
       Map<String, Object> stats =
           RawDeveloper.develop(
@@ -94,7 +94,7 @@ final class RawDevelopment {
       if (releaseFrameAfterDevelop) capture.releaseFrame();
 
       if (apple) {
-        UltraHdrJpeg.tagDisplayP3(bitmap);
+        if (options.outputDisplayP3) UltraHdrJpeg.tagDisplayP3(bitmap);
         gainmapBmp =
             UltraHdrJpeg.attachGainmapIfSupported(
                 bitmap,
@@ -152,7 +152,7 @@ final class RawDevelopment {
           recipe.name
               + " ("
               + recipe.filmLabel
-              + (apple ? ", Display P3 + Ultra HDR" : " LUT")
+              + (apple ? ", Vibrant sRGB + Ultra HDR" : " LUT")
               + (tuned ? ", tuned" : "")
               + ")");
       exif.saveAttributes();

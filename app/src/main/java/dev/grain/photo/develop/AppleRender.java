@@ -89,7 +89,7 @@ public final class AppleRender {
     }
   }
 
-  /** iPhone 16 Pro Smart HDR 5 Photographic Styles offered natively in Grain. */
+  /** Apple iPhone Smart HDR & Photographic Styles offered natively in Grain. */
   public enum Style {
     STANDARD(
         "APPLE-STANDARD",
@@ -97,21 +97,32 @@ public final class AppleRender {
         "Smart HDR 5 · Standard",
         1.000,
         1.000,
-        0.96f,
-        1.12f,
+        0.68f,
+        0.82f,
         1.26,
-        0.72,
-        1.04),
+        0.60,
+        1.05),
+    XS_MAX_WARM(
+        "APPLE-XS-MAX",
+        "iXS",
+        "A12 Smart HDR · XS Max Warm",
+        1.044,
+        0.942,
+        0.74f,
+        0.85f,
+        1.23,
+        0.62,
+        1.06),
     NATURAL_ROSE(
         "APPLE-NATURAL-ROSE",
         "iRS",
         "Smart HDR 5 · Natural Rose",
         1.000,
         1.000,
-        1.02f,
-        1.14f,
-        1.20,
-        0.74,
+        0.72f,
+        0.80f,
+        1.19,
+        0.61,
         1.06),
     RICH_CONTRAST(
         "APPLE-RICH-CONTRAST",
@@ -119,21 +130,21 @@ public final class AppleRender {
         "Smart HDR 5 · Rich Contrast",
         1.000,
         1.000,
-        0.52f,
-        1.22f,
+        0.40f,
+        0.86f,
         1.42,
-        0.68,
-        0.98),
+        0.58,
+        1.02),
     AMBER_COZY(
         "APPLE-AMBER-COZY",
         "iAM",
         "Smart HDR 5 · Amber Cozy",
-        1.032,
-        0.958,
-        0.92f,
-        1.10f,
-        1.28,
-        0.72,
+        1.036,
+        0.952,
+        0.68f,
+        0.82f,
+        1.27,
+        0.60,
         1.05);
 
     public final String id;
@@ -399,68 +410,113 @@ public final class AppleRender {
       // Foliage yellow-green sector (~128 deg)
       float cLeaf = ua * (-0.6157f) + ub * 0.7880f;
       float cLeaf2 = cLeaf > 0f ? cLeaf * cLeaf : 0f;
-      float wLeaf = (cLeaf2 * cLeaf2) * sstep(0.025f, 0.085f, C);
+      float wLeaf = (cLeaf2 * cLeaf2) * sstep(0.020f, 0.075f, C);
 
       // Sky blue-cyan sector (~252 deg)
       float cSky = ua * (-0.3090f) + ub * (-0.9511f);
       float cSky2 = cSky > 0f ? cSky * cSky : 0f;
-      float wSky = (cSky2 * cSky2) * sstep(0.025f, 0.085f, C);
+      float wSky = (cSky2 * cSky2) * sstep(0.020f, 0.075f, C);
 
       // Warm gold/amber sector (~78 deg)
       float cGold = ua * 0.2079f + ub * 0.9781f;
       float cGold2 = cGold > 0f ? cGold * cGold : 0f;
-      float wGold = (cGold2 * cGold2) * sstep(0.025f, 0.085f, C);
+      float wGold = (cGold2 * cGold2) * sstep(0.020f, 0.075f, C);
 
       // Deep red sector (~24 deg)
       float cRed = ua * 0.9135f + ub * 0.4067f;
       float cRed2 = cRed > 0f ? cRed * cRed : 0f;
-      float wRed = (cRed2 * cRed2 * cRed2) * sstep(0.07f, 0.14f, C);
+      float wRed = (cRed2 * cRed2 * cRed2) * sstep(0.050f, 0.120f, C);
 
-      float shEnv = 0.55f + 0.45f * sstep(0.04f, 0.18f, L);
-      float hlEnv = 1f - 0.50f * sstep(0.82f, 0.99f, L);
+      float shEnv = 0.60f + 0.40f * sstep(0.04f, 0.18f, L);
+      float hlEnv = 1f - 0.45f * sstep(0.84f, 0.99f, L);
       float env = shEnv * hlEnv;
 
-      // User Color slider (-4..+4), protecting skin from half of positive saturation boosts
-      float stepGain = 0.062f * colorStep * env * (colorStep > 0 ? (1f - 0.48f * wSkin) : 1f);
-      float cScale = Math.max(0f, 1f + stepGain);
+      // Non-skin background vibrance gate: boosts moderate/rich background colours while keeping
+      // near-neutrals (C < 0.008) clean and protecting human skin (1 - 0.82 * wSkin).
+      float vibGate = sstep(0.008f, 0.030f, C) * (1f - 0.35f * sstep(0.16f, 0.28f, C));
+      float bgVib = (1f - 0.82f * wSkin) * vibGate * env;
 
-      // Apple skin-chroma ceiling: prevents orange/oversaturated faces under warm indoor light
-      if (wSkin > 0f && C > 0.072f) {
-        float excess = (C - 0.072f) * 0.34f * wSkin;
-        cScale *= Math.max(0.76f, (C - excess) / C);
-      }
+      // User Color slider (-4..+4), protecting skin from half of positive saturation boosts
+      float stepGain = 0.065f * colorStep * env * (colorStep > 0 ? (1f - 0.48f * wSkin) : 1f);
+      float cScale = Math.max(0f, 1f + stepGain);
 
       float rotDeg;
       float midSkin = wSkin * sstep(0.20f, 0.46f, L) * (1f - sstep(0.78f, 0.94f, L));
       switch (style) {
+        case XS_MAX_WARM:
+          // Iconic A12 Smart HDR iPhone XS Max: golden-honey warmth, velvety warm-peach skin,
+          // lush sunlit greens, deep cobalt skies, and vibrant warm-lit backgrounds.
+          L += 0.012f * midSkin;
+          cScale *=
+              (1f
+                  + 0.22f * bgVib
+                  + 0.06f * wLeaf
+                  + 0.08f * wSky
+                  + 0.05f * wRed
+                  + 0.07f * wGold * (1f - 0.65f * wSkin)
+                  + 0.02f * wSkin);
+          L -= (0.026f * wSky + 0.020f * wLeaf + 0.015f * wRed) * L;
+          rotDeg = 1.8f * wSkin + 4.5f * wLeaf - 3.2f * wSky - 1.2f * wGold;
+          break;
         case NATURAL_ROSE:
-          // DXOMARK top-ranked portrait undertone: tames yellow cast, gently rosy-peach skin, open L
+          // Portrait undertone: tames indoor yellow cast on skin while keeping backgrounds vibrant
           L += 0.013f * midSkin;
-          cScale *= (1f - 0.06f * wSkin - 0.12f * wLeaf + 0.04f * wSky - 0.04f * wGold);
-          L -= 0.012f * wLeaf * L;
-          rotDeg = -3.6f * wSkin + 7.8f * wLeaf - 3.8f * wSky;
+          cScale *=
+              (1f
+                  + 0.17f * bgVib
+                  - 0.04f * wSkin
+                  + 0.04f * wLeaf
+                  + 0.06f * wSky
+                  + 0.03f * wRed);
+          L -= (0.020f * wSky + 0.018f * wLeaf) * L;
+          rotDeg = -3.6f * wSkin + 6.5f * wLeaf - 3.6f * wSky;
           break;
         case RICH_CONTRAST:
-          // Tone -50 / Dramatic: richer P3 pigment density, deeper skies, protected natural skin
-          cScale *= (1f + 0.08f * (1f - 0.65f * wSkin) - 0.10f * wLeaf + 0.07f * wSky + 0.05f * wRed);
-          L -= (0.020f * wSky + 0.016f * wLeaf + 0.014f * wRed) * L;
-          rotDeg = 0.4f * wSkin + 7.2f * wLeaf - 4.2f * wSky;
+          // Tone -50 / Dramatic: deep blacks, high pigment density, vibrant skies/greens, safe skin
+          cScale *=
+              (1f
+                  + 0.26f * bgVib
+                  + 0.06f * wLeaf
+                  + 0.09f * wSky
+                  + 0.07f * wRed
+                  + 0.04f * wGold * (1f - wSkin));
+          L -= (0.030f * wSky + 0.026f * wLeaf + 0.020f * wRed) * L;
+          rotDeg = 0.4f * wSkin + 6.5f * wLeaf - 3.8f * wSky;
           break;
         case AMBER_COZY:
-          // Golden-hour warmth in midtones and skin without turning skin neon orange
-          L += 0.009f * midSkin;
-          cScale *= (1f + 0.08f * wGold + 0.04f * wRed - 0.03f * wSkin - 0.10f * wLeaf + 0.04f * wSky);
-          L -= 0.012f * wLeaf * L;
-          rotDeg = 2.2f * wSkin - 1.8f * wGold + 7.0f * wLeaf - 3.5f * wSky;
+          // Golden-hour warmth across midtones, lush backgrounds, and protected warm skin
+          L += 0.010f * midSkin;
+          cScale *=
+              (1f
+                  + 0.20f * bgVib
+                  + 0.05f * wLeaf
+                  + 0.06f * wSky
+                  + 0.05f * wRed
+                  + 0.08f * wGold * (1f - 0.65f * wSkin));
+          L -= (0.022f * wSky + 0.020f * wLeaf + 0.014f * wRed) * L;
+          rotDeg = 2.0f * wSkin - 1.6f * wGold + 5.5f * wLeaf - 3.4f * wSky;
           break;
         case STANDARD:
         default:
-          // Balanced Smart HDR 5 standard: true-warm neutral, cerulean skies, tamed CMOS greens
+          // Balanced Smart HDR 5 standard: true-warm protected skin + punchy iPhone background colour
           L += 0.008f * midSkin;
-          cScale *= (1f + 0.02f * (1f - wSkin) - 0.11f * wLeaf + 0.06f * wSky);
-          L -= (0.012f * wSky + 0.014f * wLeaf) * L;
-          rotDeg = 0.6f * wSkin + 7.5f * wLeaf - 4.0f * wSky;
+          cScale *=
+              (1f
+                  + 0.20f * bgVib
+                  + 0.05f * wLeaf
+                  + 0.07f * wSky
+                  + 0.04f * wRed
+                  + 0.03f * wGold * (1f - wSkin));
+          L -= (0.024f * wSky + 0.022f * wLeaf + 0.014f * wRed) * L;
+          rotDeg = 0.5f * wSkin + 6.2f * wLeaf - 3.5f * wSky;
           break;
+      }
+
+      // Apple skin-chroma ceiling (applied after style scaling): prevents orange/oversaturated faces
+      float postSkinC = C * cScale;
+      if (wSkin > 0f && postSkinC > 0.074f) {
+        float excess = (postSkinC - 0.074f) * 0.36f * wSkin;
+        cScale *= Math.max(0.74f, (postSkinC - excess) / postSkinC);
       }
 
       float rad = rotDeg * 0.0174532925f;
@@ -472,15 +528,21 @@ public final class AppleRender {
       Bb = sa * sn + sb * cs;
     }
 
-    if (style == Style.AMBER_COZY) {
+    if (style == Style.AMBER_COZY || style == Style.XS_MAX_WARM) {
       float wWarmHi =
-          sstep(0.68f, 0.84f, L) * (1f - sstep(0.94f, 0.995f, L)) * (1f - 0.5f * sstep(0.05f, 0.14f, C));
-      A += 0.0009f * wWarmHi;
-      Bb += 0.0032f * wWarmHi;
+          sstep(0.66f, 0.84f, L)
+              * (1f - sstep(0.94f, 0.995f, L))
+              * (1f - 0.5f * sstep(0.05f, 0.14f, C));
+      float kHi = style == Style.XS_MAX_WARM ? 0.88f : 1.0f;
+      A += 0.0009f * kHi * wWarmHi;
+      Bb += 0.0031f * kHi * wWarmHi;
     } else if (style == Style.NATURAL_ROSE) {
       // Subtle rosy highlight delicacy on low-chroma skin/highlights, zero cast on pure white
       float wRose =
-          sstep(0.55f, 0.75f, L) * (1f - sstep(0.90f, 0.98f, L)) * sstep(0.012f, 0.04f, C) * (1f - sstep(0.08f, 0.14f, C));
+          sstep(0.55f, 0.75f, L)
+              * (1f - sstep(0.90f, 0.98f, L))
+              * sstep(0.012f, 0.04f, C)
+              * (1f - sstep(0.08f, 0.14f, C));
       A += 0.0014f * wRose;
       Bb -= 0.0006f * wRose;
     }

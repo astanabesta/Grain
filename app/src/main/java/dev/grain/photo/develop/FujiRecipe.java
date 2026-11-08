@@ -775,11 +775,18 @@ public final class FujiRecipe {
     return appleLut(filmSimulation);
   }
 
-  private static FujiRecipe appleStyle(String key, String name, AppleRender.Style style) {
+  private static FujiRecipe appleStyle(
+      String key,
+      String name,
+      String author,
+      AppleRender.Style style,
+      int sharpness,
+      int noiseReduction,
+      int clarity) {
     return new FujiRecipe(
         key,
         name,
-        "Apple (Smart HDR 5)",
+        author,
         APPLE_STYLES_PAGE,
         style.id,
         style.label,
@@ -787,9 +794,9 @@ public final class FujiRecipe {
         0,
         0,
         0,
-        0,
-        0,
-        0,
+        sharpness,
+        noiseReduction,
+        clarity,
         0,
         false,
         0,
@@ -799,29 +806,68 @@ public final class FujiRecipe {
         0);
   }
 
-  /** iPhone 16 Pro Standard: balanced Smart HDR 5 local tone map, clean skin, Display P3 + Ultra HDR. */
+  /** iPhone 16 Pro Standard: crisp detail, vibrant background colour, protected skin + Ultra HDR. */
   public static final FujiRecipe IPHONE_STANDARD =
-      appleStyle("iphone-16-standard", "iPhone 16 Pro · Standard", AppleRender.Style.STANDARD);
+      appleStyle(
+          "iphone-16-standard",
+          "iPhone 16 Pro · Standard",
+          "Apple (Smart HDR 5)",
+          AppleRender.Style.STANDARD,
+          2,
+          -4,
+          1);
 
-  /** iPhone 16 Pro Natural Rose: luminous portrait skin undertone, tamed yellow cast, airy contrast. */
+  /** iPhone XS Max Warm: iconic A12 Smart HDR golden-warm AWB, lush vibrant backgrounds & crisp detail. */
+  public static final FujiRecipe IPHONE_XS_MAX =
+      appleStyle(
+          "iphone-xs-max-warm",
+          "iPhone XS Max · Warm",
+          "Apple (A12 Smart HDR)",
+          AppleRender.Style.XS_MAX_WARM,
+          2,
+          -4,
+          1);
+
+  /** iPhone 16 Pro Natural Rose: luminous portrait skin undertone, tamed yellow cast, vibrant scene. */
   public static final FujiRecipe IPHONE_NATURAL_ROSE =
       appleStyle(
-          "iphone-16-natural-rose", "iPhone 16 Pro · Natural Rose", AppleRender.Style.NATURAL_ROSE);
+          "iphone-16-natural-rose",
+          "iPhone 16 Pro · Natural Rose",
+          "Apple (Smart HDR 5)",
+          AppleRender.Style.NATURAL_ROSE,
+          1,
+          -4,
+          1);
 
-  /** iPhone 16 Pro Rich Contrast: deeper shadow anchor, crisp separation, saturated P3 colours. */
+  /** iPhone 16 Pro Rich Contrast: deeper shadow anchor, crisp detail, rich pigment vibrancy. */
   public static final FujiRecipe IPHONE_RICH_CONTRAST =
       appleStyle(
           "iphone-16-rich-contrast",
           "iPhone 16 Pro · Rich Contrast",
-          AppleRender.Style.RICH_CONTRAST);
+          "Apple (Smart HDR 5)",
+          AppleRender.Style.RICH_CONTRAST,
+          2,
+          -4,
+          2);
 
   /** iPhone 16 Pro Amber Cozy: golden-hour warmth across midtones & highlights with protected skin. */
   public static final FujiRecipe IPHONE_AMBER_COZY =
-      appleStyle("iphone-16-amber-cozy", "iPhone 16 Pro · Amber Cozy", AppleRender.Style.AMBER_COZY);
+      appleStyle(
+          "iphone-16-amber-cozy",
+          "iPhone 16 Pro · Amber Cozy",
+          "Apple (Smart HDR 5)",
+          AppleRender.Style.AMBER_COZY,
+          2,
+          -4,
+          1);
 
-  /** Built-in iPhone 16 Pro RAW profiles in Film picker order. */
+  /** Built-in Apple iPhone RAW profiles in Film picker order. */
   public static final FujiRecipe[] APPLE_STYLES = {
-    IPHONE_STANDARD, IPHONE_NATURAL_ROSE, IPHONE_RICH_CONTRAST, IPHONE_AMBER_COZY
+    IPHONE_STANDARD,
+    IPHONE_XS_MAX,
+    IPHONE_NATURAL_ROSE,
+    IPHONE_RICH_CONTRAST,
+    IPHONE_AMBER_COZY
   };
 
   /**

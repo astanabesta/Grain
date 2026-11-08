@@ -386,8 +386,8 @@ public final class RawDeveloper {
      * numerical seams.
      */
     public long maxBandPixels = 32_000_000L;
-    /** For built-in Apple profiles: output Display P3 code values (true) or convert to sRGB (false). */
-    public boolean outputDisplayP3 = true;
+    /** For built-in Apple profiles: output Display P3 code values (true) or Universal Vibrant sRGB (false). */
+    public boolean outputDisplayP3 = false;
     /** Populate {@link #outGainmap} (quarter-res ISO 21496-1 Ultra HDR gainmap) on Apple profiles. */
     public boolean computeGainmap = false;
     /** Quarter-resolution ({@link #outGainmapW} x {@link #outGainmapH}) single-channel gainmap. */
@@ -446,7 +446,7 @@ public final class RawDeveloper {
         job.releaseBand();
       } else {
         if (!job.firstVersion) job.lockGlobalChromaNoise();
-        int ltmPad = job.appleStyle != null && job.stillsTone ? (2 * job.ltmR + 2) : 0;
+        int ltmPad = job.appleStyle != null && job.stillsTone ? (2 * job.ltmR + 4) : 0;
         int glowRad =
             job.glow
                 ? 3 * Math.max(job.haloA[0] > 0 || job.haloA[1] > 0 ? job.haloR : 0, job.bloomA > 0 ? job.bloomR : 0)
@@ -892,15 +892,23 @@ public final class RawDeveloper {
       firstVersion = r.development == FujiRecipe.Development.FIRST_VERSION;
       // First version: no luma NR at -4 (as v0.2.0); each step up adds 1/8 of Clean's fine luma NR
       double lumaShare = firstVersion ? (nrStep + 4) / 8.0 : 1;
-      double kNr = Math.max(0, LUMA_NR_K * Math.pow(2, 0.125 * nrStep) * o.lumaNr * lumaShare);
-      nrKeep = (float) Math.max(0, Math.min(0.6, 0.2 - 0.05 * nrStep));
+      double appleFineScale = apple ? 0.48 : 1.0;
+      double kNr =
+          Math.max(
+              0, LUMA_NR_K * appleFineScale * Math.pow(2, 0.125 * nrStep) * o.lumaNr * lumaShare);
+      nrKeep =
+          apple
+              ? (float) Math.max(0.15, Math.min(0.72, 0.42 - 0.06 * nrStep))
+              : (float) Math.max(0, Math.min(0.6, 0.2 - 0.05 * nrStep));
       epsFine = (float) (kNr * kNr);
       // First version: none at Sharpness -2 (v0.2.0 never sharpened); +-0.1 per step, softer below
       sharpen =
           (float)
               ((firstVersion
                       ? Math.max(-0.2, Math.min(1.2, SHARPEN_STEP * (r.sharpness + 2)))
-                      : Math.max(0, Math.min(1.2, SHARPEN_BASE + SHARPEN_STEP * r.sharpness)))
+                      : apple
+                          ? Math.max(0, Math.min(1.45, 0.62 + 0.14 * r.sharpness))
+                          : Math.max(0, Math.min(1.2, SHARPEN_BASE + SHARPEN_STEP * r.sharpness)))
                   * o.sharpen);
       int isoNr = Math.max(50, f.iso);
       int baseRadius = isoNr <= 200 ? 1 : isoNr <= 800 ? 2 : isoNr <= 3200 ? 3 : 4;
@@ -913,10 +921,16 @@ public final class RawDeveloper {
       nrA = new float[NR_TABLE + 1];
       nrB = new float[NR_TABLE + 1];
       noiseTables(curve, gain, nS, nO, NOISE_MIX * NOISE_MIX, nrA, nrB);
-      double kLow = Math.max(0, LOW_NR_K * Math.pow(2, 0.125 * nrStep) * o.lumaNr);
+      double appleLowScale = apple ? 0.38 : 1.0;
+      double kLow = Math.max(0, LOW_NR_K * appleLowScale * Math.pow(2, 0.125 * nrStep) * o.lumaNr);
       epsLow = (float) (kLow * kLow * Q_NOISE / 16);
-      epsChroma = (float) (CHROMA_EPS * Q_NOISE / 16 * Math.pow(2, 0.25 * nrStep));
-      lowKeep = (float) Math.max(0.05, Math.min(0.3, 0.1 - 0.02 * nrStep));
+      epsChroma =
+          (float)
+              (CHROMA_EPS * (apple ? 1.35 : 1.0) * Q_NOISE / 16 * Math.pow(2, 0.25 * nrStep));
+      lowKeep =
+          apple
+              ? (float) Math.max(0.15, Math.min(0.70, 0.45 - 0.05 * nrStep))
+              : (float) Math.max(0.05, Math.min(0.3, 0.1 - 0.02 * nrStep));
       cKeep = (float) Math.max(0, Math.min(0.5, 0.2 - 0.025 * nrStep));
       qW = (W + 3) / 4;
       bandY0 = 0;
@@ -1396,25 +1410,44 @@ public final class RawDeveloper {
       if (stillsTone) {
         if (colSum == null) colSum = new float[qW];
         env = new float[n];
-        float[] m1 = new float[n], m2 = new float[n], box = new float[n];
+        float[] m1 = new float[n], m2 = new float[n], box = new float[n], det = new float[n];
         for (int i = 0; i < n; i++) {
           float norm =
               AppleRender.sceneNormDisplayP3(qLin[3 * i], qLin[3 * i + 1], qLin[3 * i + 2]);
-          float e = (float) Math.log(Math.max(1e-5f, norm) * invKey) * invLn2;
-          env[i] = e;
-          m2[i] = e * e;
+          env[i] = (float) Math.log(Math.max(1e-5f, norm) * invKey) * invLn2;
+        }
+        // Redescending texture-stripping pass: isolates fine/medium surface detail (<= 0.65 EV)
+        // so LTM never flattens foliage/hair/brick texture, while multi-stop silhouettes pass
+        // through untouched (w -> 0 at large jumps) so edges stay completely halo-free.
+        boxMean(env, m1, 2, box);
+        for (int i = 0; i < n; i++) {
+          float d = env[i] - m1[i];
+          float u = d * (1f / 0.65f);
+          float u2 = u * u;
+          float w = 1f / (1f + u2 * u2);
+          float tex = w * d;
+          det[i] = tex;
+          float ec = env[i] - tex;
+          env[i] = ec;
+          m2[i] = ec * ec;
         }
         boxMean(env, m1, ltmR, box);
         boxMean(m2, m2, ltmR, box);
         for (int i = 0; i < n; i++) {
           float mean = m1[i], var = Math.max(0f, m2[i] - mean * mean);
-          float ai = var / (var + 0.36f);
+          float ai = var / (var + 0.25f);
           m1[i] = ai;
           m2[i] = (1f - ai) * mean;
         }
         boxMean(m1, m1, ltmR, box);
         boxMean(m2, m2, ltmR, box);
-        for (int i = 0; i < n; i++) env[i] = m1[i] * env[i] + m2[i];
+        for (int i = 0; i < n; i++) {
+          float macro = m1[i] * env[i] + m2[i];
+          float floorGuard = sstep(-4.2f, -2.0f, macro);
+          env[i] =
+              AppleRender.localToneDeltaEv(macro, appleStyle, recipeHighlight, recipeShadow)
+                  + 0.22f * floorGuard * det[i];
+        }
       } else {
         env = null;
       }
@@ -1432,14 +1465,7 @@ public final class RawDeveloper {
         for (int bx = 0; bx < qW; bx++) {
           int i = rowOff + bx;
           float lr = qLin[3 * i], lg = qLin[3 * i + 1], lb = qLin[3 * i + 2];
-          float g =
-              env != null
-                  ? (float)
-                      Math.pow(
-                          2.0,
-                          AppleRender.localToneDeltaEv(
-                              env[i], appleStyle, recipeHighlight, recipeShadow))
-                  : 1f;
+          float g = env != null ? (float) Math.pow(2.0, env[i]) : 1f;
           ltmGainQ[i] = g;
           if (writeGm) {
             float rawPeak = Math.max(lr, Math.max(lg, lb));
@@ -1449,7 +1475,7 @@ public final class RawDeveloper {
           qLin[3 * i] = lr * g;
           qLin[3 * i + 1] = lg * g;
           qLin[3 * i + 2] = lb * g;
-          qS[i] *= g;
+          qS[i] *= Math.min(g, 1.25f);
         }
       }
     }
@@ -2158,7 +2184,7 @@ public final class RawDeveloper {
           lr *= gLtm;
           lg *= gLtm;
           lb *= gLtm;
-          gRow[x] *= gLtm;
+          gRow[x] *= Math.min(gLtm, 1.25f);
         }
         if (gq != null) {
           int i0 = q0 + qx0[x], i1 = q1 + qx0[x];

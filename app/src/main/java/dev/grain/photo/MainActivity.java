@@ -655,6 +655,8 @@ public final class MainActivity extends ComponentActivity
         return new int[] {0xff151515, 0xffe8e8e8, 0xffe86a2d};
       case "i16":
         return new int[] {0xffebeae6, 0xff1c1c1e, 0xffd96b38};
+      case "iXS":
+        return new int[] {0xfff7e6c4, 0xff2c1d10, 0xffd4882a};
       case "iRS":
         return new int[] {0xfff5e6e2, 0xff2c1e1d, 0xffc97b6d};
       case "iRC":
@@ -699,10 +701,12 @@ public final class MainActivity extends ComponentActivity
     updateLabels();
     camera.update(snapshot());
     Recipe r = Recipe.ALL[id];
-    String sub =
+      String sub =
         r.raw
             ? (r.fuji.apple()
-                ? "Smart HDR 5 · Display P3 + Ultra HDR"
+                ? ("iphone-xs-max-warm".equals(r.fuji.key)
+                    ? "A12 Smart HDR · Warm + Ultra HDR"
+                    : "Smart HDR 5 · Vibrant + Ultra HDR")
                 : r.standard
                     ? "film simulation · developed from RAW"
                     : "recipe · developed from RAW")
@@ -865,7 +869,7 @@ public final class MainActivity extends ComponentActivity
       TextView iso =
           text(
               f.raw && f.fuji.apple()
-                  ? "SMART HDR 5 · P3"
+                  ? ("iphone-xs-max-warm".equals(f.fuji.key) ? "A12 SMART HDR" : "SMART HDR 5 · HDR")
                   : f.standard
                       ? f.fuji.sony() ? "SONY LOOK" : "FILM SIMULATION"
                       : f.raw ? "RAW · RECIPE" : "ISP LOOK",
@@ -1013,7 +1017,7 @@ public final class MainActivity extends ComponentActivity
             !hasRaw
                 ? "RAW unavailable: " + camera.rawUnavailableReason()
                 : apple
-                    ? "Built-in iPhone 16 Pro Smart HDR 5 RAW pipeline · Display P3 + Ultra HDR ready"
+                    ? "Built-in Apple Smart HDR RAW pipeline · Crisp Detail + Vibrant sRGB + Ultra HDR"
                     : hasLut
                         ? (sony ? "Sony " : "Fujifilm ") + r.fuji.filmLabel + " LUT ready · " + luts.summary()
                         : sony
@@ -1155,12 +1159,13 @@ public final class MainActivity extends ComponentActivity
                     + " Grain’s approximations. s709 is lower in contrast and darker than"
                     + " Fujifilm’s stills looks, as Sony designed it."
                 : apple
-                    ? "Developed directly from the sensor RAW with no external LUT required: 1.0 EV"
-                        + " linear highlight headroom, quarter-resolution edge-aware Smart HDR 5"
-                        + " local tone mapping (shadow-adapted noise reduction, zero silhouette"
-                        + " halos), hue-preserving RefBaselineRGBTone global S-curve, OKLab skin"
-                        + " undertone & sky/foliage calibration in native Display P3, plus an"
-                        + " Android 14+ Ultra HDR Gainmap for OLED highlights."
+                    ? "Developed directly from the sensor RAW with no external LUT required: 2/3 EV"
+                        + " highlight headroom, texture-preserving Smart HDR local tone mapping"
+                        + " (redescending detail isolation + Deep-Fusion micro-contrast, zero"
+                        + " silhouette halos), hue-preserving RefBaselineRGBTone global S-curve,"
+                        + " OKLab background vibrance with protected skin tones in Universal"
+                        + " Vibrant sRGB, plus an Android 14+ Ultra HDR Gainmap for OLED"
+                        + " highlights."
                     : "Tuning changes the developed photo; the viewfinder is the phone’s preview, with the"
                         + " nearest white-balance preset when the film uses a fixed white balance. Each"
                         + " photo is developed from the sensor RAW with Fujifilm’s LUT plus Grain’s stills"

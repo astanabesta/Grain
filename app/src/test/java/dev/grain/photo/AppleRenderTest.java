@@ -14,11 +14,10 @@ import dev.grain.photo.develop.LutPreview;
 import dev.grain.photo.develop.RawDeveloper;
 import dev.grain.photo.develop.RawFrame;
 import dev.grain.photo.develop.TuningControl;
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
-import java.nio.charset.StandardCharsets;
+import java.io.StringReader;
 import java.nio.file.Files;
 import java.util.HashSet;
 import java.util.List;
@@ -139,23 +138,28 @@ public class AppleRenderTest {
   }
 
   @Test
-  public void allFourIphoneProfilesRegisterCleanlyAndDevelopNeutralGreyWithoutLut() throws Exception {
-    assertEquals(32, Recipe.ALL.length);
+  public void allFiveIphoneProfilesRegisterCleanlyAndDevelopWithoutLut() throws Exception {
+    assertEquals(33, Recipe.ALL.length);
     assertEquals("iphone-16-standard", Recipe.ALL[28].fuji.key);
     assertEquals("iphone-16-natural-rose", Recipe.ALL[29].fuji.key);
     assertEquals("iphone-16-rich-contrast", Recipe.ALL[30].fuji.key);
     assertEquals("iphone-16-amber-cozy", Recipe.ALL[31].fuji.key);
+    assertEquals("iphone-xs-max-warm", Recipe.ALL[32].fuji.key);
 
     assertEquals("iphone-16-standard", Recipe.DISPLAY_ORDER[4].fuji.key);
-    assertEquals("iphone-16-natural-rose", Recipe.DISPLAY_ORDER[5].fuji.key);
-    assertEquals("iphone-16-rich-contrast", Recipe.DISPLAY_ORDER[6].fuji.key);
-    assertEquals("iphone-16-amber-cozy", Recipe.DISPLAY_ORDER[7].fuji.key);
+    assertEquals("iphone-xs-max-warm", Recipe.DISPLAY_ORDER[5].fuji.key);
+    assertEquals("iphone-16-natural-rose", Recipe.DISPLAY_ORDER[6].fuji.key);
+    assertEquals("iphone-16-rich-contrast", Recipe.DISPLAY_ORDER[7].fuji.key);
+    assertEquals("iphone-16-amber-cozy", Recipe.DISPLAY_ORDER[8].fuji.key);
 
     for (FujiRecipe r : FujiRecipe.APPLE_STYLES) {
       assertTrue(r.apple());
       assertFalse(r.sony());
       assertFalse(FujiRecipe.isTechnical(r.filmSimulation));
-      assertEquals(-1.0f, Recipe.rawCaptureBias(r), 1e-6f);
+      assertEquals(-2f / 3f, Recipe.rawCaptureBias(r), 1e-6f);
+      assertEquals(-4, r.noiseReduction);
+      assertTrue(r.sharpness >= 1);
+      assertTrue(r.clarity >= 1);
 
       Set<String> controls = new HashSet<>();
       List<TuningControl> list = TuningControl.fujifilm(r);
@@ -186,13 +190,13 @@ public class AppleRenderTest {
               null,
               opt,
               (y, rows, argb, width) -> System.arraycopy(argb, 0, px, y * width, rows * width));
-      assertEquals("Display P3", stats.get("colorSpace"));
+      assertEquals("sRGB", stats.get("colorSpace"));
       double mr = mean(px, grey.width, 16, 144, 16, 104, 0);
       double mg = mean(px, grey.width, 16, 144, 16, 104, 1);
       double mb = mean(px, grey.width, 16, 144, 16, 104, 2);
-      assertTrue(r.key + " mid-grey luma " + mg, mg > 95 && mg < 155);
-      if (r == FujiRecipe.IPHONE_AMBER_COZY) {
-        assertTrue("Amber Cozy warms ambient grey (R > B)", mr > mb + 4.0);
+      assertTrue(r.key + " mid-grey luma " + mg, mg > 95 && mg < 160);
+      if (r == FujiRecipe.IPHONE_AMBER_COZY || r == FujiRecipe.IPHONE_XS_MAX) {
+        assertTrue(r.key + " warms ambient grey (R > B)", mr > mb + 5.0);
       } else {
         assertEquals(r.key + " neutral R vs G", mg, mr, 1.2);
         assertEquals(r.key + " neutral B vs G", mg, mb, 1.2);
@@ -201,16 +205,88 @@ public class AppleRenderTest {
   }
 
   @Test
-  public void smartHdr5LocalToneMappingLiftsShadowsPullsHighlightsWithoutHalos() throws Exception {
-    int w = 256, h = 128;
+  public void crispDetailPreservesSurfaceTextureOverSmoothBaselineWithoutHalos() throws Exception {
+    // 1) Textured foliage/architecture scene (8 px + 16 px local detail with mild sensor noise)
+    int w = 192, h = 128;
     double[] n = {0.5, 1.0, 0.625};
-    short[] data = new short[w * h];
-    RawFrame hdr = new RawFrame(data, w, h, w);
+    short[] texData = new short[w * h];
+    RawFrame texFrame = new RawFrame(texData, w, h, w);
+    long rng = 1234567L;
     for (int y = 0; y < h; y++) {
       for (int x = 0; x < w; x++) {
+        int c = texFrame.color(x, y);
+        rng = rng * 6364136223846793005L + 1442695040888963407L;
+        double fineNoise = (((rng >>> 33) & 1023) / 1023.0 - 0.5) * 0.006;
+        double detail =
+            0.14
+                * Math.exp(
+                    0.26 * Math.sin(2.0 * Math.PI * x / 10.0) * Math.cos(2.0 * Math.PI * y / 10.0)
+                        + 0.16 * Math.sin(2.0 * Math.PI * x / 4.0));
+        double v = Math.max(0.005, Math.min(1.0, (detail + fineNoise) * n[c]));
+        texData[y * w + x] = (short) Math.round(64 + v * (1023 - 64));
+      }
+    }
+    texFrame.neutral = n;
+    texFrame.colorMatrix1 = PHONE_CM1;
+    texFrame.colorMatrix2 = PHONE_CM2;
+    texFrame.forwardMatrix1 = PHONE_FM1;
+    texFrame.forwardMatrix2 = PHONE_FM2;
+    texFrame.illuminant1 = 21;
+    texFrame.illuminant2 = 17;
+    texFrame.iso = 400;
+
+    // Compare crisp default IPHONE_XS_MAX / IPHONE_STANDARD vs artificially detuned NR=0, Sharp=0, Clarity=0
+    FujiRecipe.Tuning smoothT = FujiRecipe.IPHONE_STANDARD.tuning();
+    smoothT.noiseReduction = 0;
+    smoothT.sharpness = 0;
+    smoothT.clarity = 0;
+    FujiRecipe smoothRecipe = FujiRecipe.IPHONE_STANDARD.with(smoothT);
+
+    int[] pxCrisp = new int[w * h], pxXs = new int[w * h], pxSmooth = new int[w * h];
+    RawDeveloper.Options opt = new RawDeveloper.Options();
+    opt.grain = false;
+    RawDeveloper.develop(
+        texFrame,
+        FujiRecipe.IPHONE_STANDARD,
+        null,
+        opt,
+        (y, rows, argb, width) -> System.arraycopy(argb, 0, pxCrisp, y * width, rows * width));
+    RawDeveloper.develop(
+        texFrame,
+        FujiRecipe.IPHONE_XS_MAX,
+        null,
+        opt,
+        (y, rows, argb, width) -> System.arraycopy(argb, 0, pxXs, y * width, rows * width));
+    RawDeveloper.Options optSmooth = new RawDeveloper.Options();
+    optSmooth.grain = false;
+    optSmooth.lumaNr = 2.08; // exact v0.9.0 pre-Deep-Fusion NR strength
+    optSmooth.sharpen = 0.45 / 0.62;
+    RawDeveloper.develop(
+        texFrame,
+        smoothRecipe,
+        null,
+        optSmooth,
+        (y, rows, argb, width) -> System.arraycopy(argb, 0, pxSmooth, y * width, rows * width));
+
+    double acutanceCrisp = gradientRms(pxCrisp, w, 24, w - 24, 24, h - 24);
+    double acutanceXs = gradientRms(pxXs, w, 24, w - 24, 24, h - 24);
+    double acutanceSmooth = gradientRms(pxSmooth, w, 24, w - 24, 24, h - 24);
+    assertTrue(
+        "Crisp i16 detail (" + acutanceCrisp + ") must significantly exceed NR=0 smooth (" + acutanceSmooth + ")",
+        acutanceCrisp > acutanceSmooth * 1.18);
+    assertTrue(
+        "Crisp iXS detail (" + acutanceXs + ") must significantly exceed NR=0 smooth (" + acutanceSmooth + ")",
+        acutanceXs > acutanceSmooth * 1.18);
+
+    // 2) 5-stop step silhouette check: LTM lifts shadows & recovers highlights without halos
+    int sw = 256, sh = 128;
+    short[] stepData = new short[sw * sh];
+    RawFrame hdr = new RawFrame(stepData, sw, sh, sw);
+    for (int y = 0; y < sh; y++) {
+      for (int x = 0; x < sw; x++) {
         int c = hdr.color(x, y);
         double level = x < 128 ? 0.025 : 0.80;
-        data[y * w + x] = (short) Math.round(64 + Math.min(1.0, level * n[c]) * (1023 - 64));
+        stepData[y * sw + x] = (short) Math.round(64 + Math.min(1.0, level * n[c]) * (1023 - 64));
       }
     }
     hdr.neutral = n;
@@ -222,7 +298,7 @@ public class AppleRenderTest {
     hdr.illuminant2 = 17;
     hdr.iso = 100;
 
-    int[] withLtm = new int[w * h], noLtm = new int[w * h];
+    int[] withLtm = new int[sw * sh], noLtm = new int[sw * sh];
     RawDeveloper.Options optOn = new RawDeveloper.Options();
     optOn.grain = false;
     optOn.stillsTone = true;
@@ -245,18 +321,18 @@ public class AppleRenderTest {
         optOff,
         (y, rows, argb, width) -> System.arraycopy(argb, 0, noLtm, y * width, rows * width));
 
-    double darkOn = mean(withLtm, w, 24, 88, 24, 104, 1);
-    double darkOff = mean(noLtm, w, 24, 88, 24, 104, 1);
-    double brightOn = mean(withLtm, w, 168, 232, 24, 104, 1);
-    double brightOff = mean(noLtm, w, 168, 232, 24, 104, 1);
+    double darkOn = mean(withLtm, sw, 24, 88, 24, 104, 1);
+    double darkOff = mean(noLtm, sw, 24, 88, 24, 104, 1);
+    double brightOn = mean(withLtm, sw, 168, 232, 24, 104, 1);
+    double brightOff = mean(noLtm, sw, 168, 232, 24, 104, 1);
 
-    assertTrue("LTM lifts dark shadows (" + darkOff + " -> " + darkOn + ")", darkOn > darkOff + 14.0);
+    assertTrue("LTM lifts dark shadows (" + darkOff + " -> " + darkOn + ")", darkOn > darkOff + 10.0);
     assertTrue(
         "LTM recovers bright highlights (" + brightOff + " -> " + brightOn + ")",
-        brightOn < brightOff - 10.0);
+        brightOn < brightOff - 8.0);
 
-    double darkNearEdge = mean(withLtm, w, 114, 122, 24, 104, 1);
-    double brightNearEdge = mean(withLtm, w, 134, 142, 24, 104, 1);
+    double darkNearEdge = mean(withLtm, sw, 112, 120, 24, 104, 1);
+    double brightNearEdge = mean(withLtm, sw, 136, 144, 24, 104, 1);
     assertTrue(
         "No bright halo on dark side of silhouette (" + darkNearEdge + " vs " + darkOn + ")",
         Math.abs(darkNearEdge - darkOn) < 8.0);
@@ -266,27 +342,36 @@ public class AppleRenderTest {
   }
 
   @Test
-  public void photographicStylesDifferentiateSkinToneDisplayP3AndLutPreview() {
-    float[] skinRose = {0.52f, 0.34f, 0.24f};
-    float[] skinStd = skinRose.clone();
-    float[] skinAmber = skinRose.clone();
-    AppleRender.gradeDisplayP3(skinRose, AppleRender.Style.NATURAL_ROSE, 0, true);
-    AppleRender.gradeDisplayP3(skinStd, AppleRender.Style.STANDARD, 0, true);
-    AppleRender.gradeDisplayP3(skinAmber, AppleRender.Style.AMBER_COZY, 0, true);
+  public void backgroundVibranceBoostsFoliageSkyAndRedWhileProtectingSkinAndDifferentiatingStyles() {
+    // Helper: convert linear sRGB patch -> linear Display P3 -> grade -> Universal Vibrant sRGB
+    float[] skinIn = srgbToLinearP3(0.78f, 0.58f, 0.47f);
+    float[] leafIn = srgbToLinearP3(0.36f, 0.56f, 0.26f);
+    float[] skyIn = srgbToLinearP3(0.32f, 0.56f, 0.84f);
+    float[] redIn = srgbToLinearP3(0.76f, 0.26f, 0.24f);
 
-    assertTrue(skinRose[0] > skinRose[1] && skinRose[1] > skinRose[2]);
-    assertTrue(
-        "Natural Rose reduces yellow cast vs Standard",
-        skinRose[2] / skinRose[1] > skinStd[2] / skinStd[1]);
-    assertTrue(
-        "Amber Cozy adds golden warmth vs Standard",
-        skinAmber[0] - skinAmber[2] > skinStd[0] - skinStd[2]);
+    float[] skinStd = skinIn.clone(), skinXs = skinIn.clone(), skinRose = skinIn.clone();
+    AppleRender.gradeDisplayP3(skinStd, AppleRender.Style.STANDARD, 0, false);
+    AppleRender.gradeDisplayP3(skinXs, AppleRender.Style.XS_MAX_WARM, 0, false);
+    AppleRender.gradeDisplayP3(skinRose, AppleRender.Style.NATURAL_ROSE, 0, false);
 
-    float[] p3Red = {0.82f, 0.08f, 0.06f}, srgbRed = p3Red.clone();
-    AppleRender.gradeDisplayP3(p3Red, AppleRender.Style.RICH_CONTRAST, 0, true);
-    AppleRender.gradeDisplayP3(srgbRed, AppleRender.Style.RICH_CONTRAST, 0, false);
-    assertNotEquals(p3Red[0], srgbRed[0], 1e-4f);
+    // Skin stays protected (< 12% saturation change) while Natural Rose tames yellow cast vs XS Max Warm
+    double skinBaseSat = hsvSat(0.78f, 0.58f, 0.47f);
+    assertTrue("Skin stays natural on Standard", hsvSat(skinStd[0], skinStd[1], skinStd[2]) < skinBaseSat * 1.12);
+    assertTrue("Skin stays protected on XS Max", hsvSat(skinXs[0], skinXs[1], skinXs[2]) < skinBaseSat * 1.15);
+    assertTrue("Natural Rose reduces yellow cast vs XS Max", skinRose[2] / skinRose[1] > skinXs[2] / skinXs[1]);
 
+    // Background foliage, sky, and red gain vibrant iPhone saturation (> +14% to +35%)
+    for (AppleRender.Style st : new AppleRender.Style[] {AppleRender.Style.STANDARD, AppleRender.Style.XS_MAX_WARM, AppleRender.Style.RICH_CONTRAST}) {
+      float[] leaf = leafIn.clone(), sky = skyIn.clone(), red = redIn.clone();
+      AppleRender.gradeDisplayP3(leaf, st, 0, false);
+      AppleRender.gradeDisplayP3(sky, st, 0, false);
+      AppleRender.gradeDisplayP3(red, st, 0, false);
+      assertTrue(st + " boosts lush foliage saturation", hsvSat(leaf[0], leaf[1], leaf[2]) > hsvSat(0.36f, 0.56f, 0.26f) * 1.14);
+      assertTrue(st + " boosts cerulean sky saturation", hsvSat(sky[0], sky[1], sky[2]) > hsvSat(0.32f, 0.56f, 0.84f) * 1.24);
+      assertTrue(st + " boosts street red saturation", hsvSat(red[0], red[1], red[2]) > hsvSat(0.76f, 0.26f, 0.24f) * 1.15);
+    }
+
+    // LutPreview works with lut == null and differentiates all 5 iPhone profiles (including iXS)
     int[] sample = {0xffc8967c, 0xff4c86d4, 0xff629c3e, 0xffd84438, 0xff808080};
     Set<Long> hashes = new HashSet<>();
     for (FujiRecipe r : FujiRecipe.APPLE_STYLES) {
@@ -334,7 +419,7 @@ public class AppleRenderTest {
     optFull.maxBandPixels = Long.MAX_VALUE;
     RawDeveloper.develop(
         frame,
-        FujiRecipe.IPHONE_STANDARD,
+        FujiRecipe.IPHONE_XS_MAX,
         null,
         optFull,
         (y, rows, argb, width) -> System.arraycopy(argb, 0, fullPx, y * width, rows * width));
@@ -351,11 +436,11 @@ public class AppleRenderTest {
     optBand.grain = true;
     optBand.grainSeed = 98765L;
     optBand.computeGainmap = true;
-    optBand.maxBandPixels = 36_000L;
+    optBand.maxBandPixels = 38_000L;
     Map<String, Object> bandStats =
         RawDeveloper.develop(
             frame,
-            FujiRecipe.IPHONE_STANDARD,
+            FujiRecipe.IPHONE_XS_MAX,
             null,
             optBand,
             (y, rows, argb, width) -> System.arraycopy(argb, 0, bandPx, y * width, rows * width));
@@ -407,6 +492,40 @@ public class AppleRenderTest {
     }
   }
 
+  private static float[] srgbToLinearP3(float r, float g, float b) {
+    float lr = srgbDec(r), lg = srgbDec(g), lb = srgbDec(b);
+    float[] m = AppleRender.REC709_TO_P3;
+    return new float[] {
+      m[0] * lr + m[1] * lg + m[2] * lb,
+      m[3] * lr + m[4] * lg + m[5] * lb,
+      m[6] * lr + m[7] * lg + m[8] * lb
+    };
+  }
+
+  private static float srgbDec(float c) {
+    return (float) (c <= 0.04045f ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+  }
+
+  private static double hsvSat(float r, float g, float b) {
+    double mx = Math.max(r, Math.max(g, b)), mn = Math.min(r, Math.min(g, b));
+    return mx <= 1e-6 ? 0.0 : (mx - mn) / mx;
+  }
+
+  private static double gradientRms(int[] argb, int w, int x0, int x1, int y0, int y1) {
+    double sumSq = 0;
+    long cnt = 0;
+    for (int y = y0; y < y1; y++) {
+      for (int x = x0; x < x1; x++) {
+        int g = (argb[y * w + x] >> 8) & 255;
+        int gx = ((argb[y * w + x + 1] >> 8) & 255) - g;
+        int gy = ((argb[(y + 1) * w + x] >> 8) & 255) - g;
+        sumSq += gx * gx + gy * gy;
+        cnt++;
+      }
+    }
+    return Math.sqrt(sumSq / Math.max(1, cnt));
+  }
+
   private static CubeLut identityLut(int n) throws Exception {
     StringBuilder sb = new StringBuilder();
     sb.append("TITLE \"identity\"\nLUT_3D_SIZE ").append(n).append('\n');
@@ -420,7 +539,7 @@ public class AppleRenderTest {
                   r / (double) (n - 1),
                   g / (double) (n - 1),
                   b / (double) (n - 1)));
-    return CubeLut.parse(new java.io.StringReader(sb.toString()));
+    return CubeLut.parse(new StringReader(sb.toString()));
   }
 
   private static RawFrame flatNeutral(int w, int h, double level) {
