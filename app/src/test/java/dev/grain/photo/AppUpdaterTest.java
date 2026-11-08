@@ -157,6 +157,64 @@ public class AppUpdaterTest {
   }
 
   @Test
+  public void checkLatestViaWebAvoidsApiRateLimitAndReadsSha256Sums() throws Exception {
+    assertEquals(
+        "https://github.com/astanabesta/Grain/releases",
+        AppUpdater.deriveWebReleasesBase(AppUpdater.DEFAULT_RELEASES_URL));
+    assertEquals(
+        "v0.8.9",
+        AppUpdater.extractTagFromReleaseLocation(
+            "https://github.com/astanabesta/Grain/releases/tag/v0.8.9"));
+
+    byte[] fakeApk = new byte[16 * 1024];
+    for (int i = 0; i < fakeApk.length; i++) fakeApk[i] = (byte) (i & 0xff);
+    String sha = sha256Hex(fakeApk);
+    String atom =
+        "<feed><entry><link href=\"https://github.com/astanabesta/Grain/releases/tag/v0.8.9\"/>"
+            + "<title>Grain v0.8.9</title>"
+            + "<content type=\"html\">&lt;h3&gt;Fixes&lt;/h3&gt;&lt;p&gt;No HTTP 403.&lt;/p&gt;</content>"
+            + "</entry></feed>";
+
+    final int[] portBox = new int[1];
+    try (MiniHttp web =
+        new MiniHttp(
+            (path, headers, out) -> {
+              String base = "http://127.0.0.1:" + portBox[0] + "/releases";
+              if ("/releases/latest".equals(path)) {
+                writeResponse(out, "302 Found", "text/html", base + "/tag/v0.8.9", new byte[0]);
+              } else if ("/releases/download/v0.8.9/SHA256SUMS.txt".equals(path)) {
+                byte[] sums = (sha + "  Grain-v0.8.9.apk\n").getBytes(StandardCharsets.UTF_8);
+                writeResponse(out, "200 OK", "text/plain", null, sums);
+              } else if ("/releases.atom".equals(path)) {
+                writeResponse(
+                    out,
+                    "200 OK",
+                    "application/atom+xml",
+                    null,
+                    atom.getBytes(StandardCharsets.UTF_8));
+              } else if ("/releases/download/v0.8.9/Grain-v0.8.9.apk".equals(path)) {
+                writeResponse(out, "200 OK", "application/octet-stream", null, fakeApk);
+              } else {
+                writeResponse(out, "404 Not Found", "text/plain", null, new byte[0]);
+              }
+            })) {
+      portBox[0] = web.port;
+      String webBase = "http://127.0.0.1:" + web.port + "/releases";
+      assertNull(AppUpdater.checkLatestViaWeb("0.8.9", webBase));
+      AppUpdater.Release rel = AppUpdater.checkLatestViaWeb("0.8.8", webBase);
+      assertNotNull(rel);
+      assertEquals("v0.8.9", rel.tagName);
+      assertEquals("Grain-v0.8.9.apk", rel.apkName);
+      assertEquals(sha, rel.expectedSha256);
+      assertTrue(rel.notes.contains("No HTTP 403."));
+
+      File dest = new File(Files.createTempDirectory("grain-web-upd").toFile(), rel.apkName);
+      File downloaded = AppUpdater.downloadApk(rel, dest, null, null, new AtomicBoolean(false));
+      assertArrayEquals(fakeApk, Files.readAllBytes(downloaded.toPath()));
+    }
+  }
+
+  @Test
   public void detectsXiaomiHyperOsAndSystemBlockedAborts() {
     assertTrue(AppUpdater.isXiaomiBrand("Xiaomi", "Redmi"));
     assertTrue(AppUpdater.isXiaomiBrand("Xiaomi", "POCO"));

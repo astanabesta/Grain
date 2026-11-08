@@ -34,6 +34,8 @@ import org.json.JSONObject;
 public final class AppUpdater {
   public static final String DEFAULT_RELEASES_URL =
       "https://api.github.com/repos/astanabesta/Grain/releases?per_page=10";
+  public static final String DEFAULT_WEB_RELEASES_URL =
+      "https://github.com/astanabesta/Grain/releases";
 
   public interface StatusListener {
     void onInstallStatus(int status, String message);
@@ -258,13 +260,216 @@ public final class AppUpdater {
     return fallback;
   }
 
-  /** Checks GitHub Releases synchronously (call from a background executor). */
+  /**
+   * Checks GitHub Releases synchronously (call from a background executor).
+   *
+   * <p>When no personal API token is configured and the default Grain repository URL is used, this
+   * resolves {@code github.com/.../releases/latest} + {@code SHA256SUMS.txt} directly instead of
+   * {@code api.github.com}, completely avoiding GitHub's 60 req/hr unauthenticated API rate limit
+   * on shared carrier/ISP CGNAT IPs (HTTP 403). If {@code api.github.com} is used and returns an
+   * error (such as HTTP 403/429), it also falls back automatically to the web redirect path.
+   */
   public static Release checkLatest(String currentVersion, String releasesUrl, String token)
       throws Exception {
-    String url =
-        releasesUrl == null || releasesUrl.trim().isEmpty() ? DEFAULT_RELEASES_URL : releasesUrl;
-    String json = fetchText(url, token, "application/vnd.github+json");
-    return parseLatestRelease(json, currentVersion);
+    boolean defaultRepo = releasesUrl == null || releasesUrl.trim().isEmpty();
+    boolean hasToken = token != null && !token.trim().isEmpty();
+    if (defaultRepo && !hasToken) {
+      try {
+        return checkLatestViaWeb(currentVersion, DEFAULT_WEB_RELEASES_URL);
+      } catch (Exception webErr) {
+        try {
+          String json = fetchText(DEFAULT_RELEASES_URL, null, "application/vnd.github+json");
+          return parseLatestRelease(json, currentVersion);
+        } catch (Exception ignored) {
+          throw webErr;
+        }
+      }
+    }
+    String url = defaultRepo ? DEFAULT_RELEASES_URL : releasesUrl.trim();
+    try {
+      String json = fetchText(url, token, "application/vnd.github+json");
+      return parseLatestRelease(json, currentVersion);
+    } catch (IOException apiErr) {
+      String webBase = defaultRepo ? DEFAULT_WEB_RELEASES_URL : deriveWebReleasesBase(url);
+      if (webBase != null) {
+        try {
+          return checkLatestViaWeb(currentVersion, webBase);
+        } catch (Exception ignored) {
+          // Fall through and throw the original API error.
+        }
+      }
+      throw apiErr;
+    }
+  }
+
+  /**
+   * Resolves the newest release via {@code <webReleasesBase>/latest} HTTP 302 redirect + {@code
+   * SHA256SUMS.txt} + optional {@code releases.atom} notes without touching {@code api.github.com}.
+   */
+  public static Release checkLatestViaWeb(String currentVersion, String webReleasesBase)
+      throws IOException {
+    String base = webReleasesBase.endsWith("/")
+        ? webReleasesBase.substring(0, webReleasesBase.length() - 1)
+        : webReleasesBase;
+    String tag = resolveLatestTagRedirect(base + "/latest");
+    if (tag == null || tag.isEmpty()) return null;
+    if (compareVersions(tag, currentVersion) <= 0) return null;
+
+    String apkName = "Grain-" + tag + ".apk";
+    String apkUrl = base + "/download/" + tag + "/" + apkName;
+    String shaUrl = base + "/download/" + tag + "/SHA256SUMS.txt";
+    String htmlUrl = base + "/tag/" + tag;
+
+    String expectedSha;
+    try {
+      String sums = fetchText(shaUrl, null, "text/plain");
+      expectedSha = parseSha256Sums(sums, apkName);
+    } catch (IOException e) {
+      // Release tag exists, or assets are still uploading; wait until SHA256SUMS.txt is published.
+      if (e.getMessage() != null && e.getMessage().contains("HTTP 404")) return null;
+      throw e;
+    }
+
+    String title = "Grain " + tag;
+    String notes = "";
+    try {
+      String atom = fetchText(base + ".atom", null, "application/atom+xml");
+      String[] parsed = parseAtomEntry(atom, tag);
+      if (parsed[0] != null && !parsed[0].isEmpty()) title = parsed[0];
+      if (parsed[1] != null && !parsed[1].isEmpty()) notes = parsed[1];
+    } catch (Exception ignored) {
+      // Notes are cosmetic; tag + SHA-256 + APK URL are sufficient to install safely.
+    }
+
+    return new Release(
+        tag,
+        cleanVersion(tag),
+        title,
+        notes,
+        apkName,
+        apkUrl,
+        shaUrl,
+        expectedSha,
+        -1L,
+        htmlUrl);
+  }
+
+  static String deriveWebReleasesBase(String apiUrl) {
+    if (apiUrl == null) return null;
+    String marker = "://api.github.com/repos/";
+    int idx = apiUrl.indexOf(marker);
+    if (idx < 0) return null;
+    String scheme = apiUrl.substring(0, idx);
+    String rest = apiUrl.substring(idx + marker.length());
+    String[] segs = rest.split("/");
+    if (segs.length < 2 || segs[0].isEmpty() || segs[1].isEmpty()) return null;
+    return scheme + "://github.com/" + segs[0] + "/" + segs[1] + "/releases";
+  }
+
+  static String extractTagFromReleaseLocation(String location) {
+    if (location == null || location.isEmpty()) return null;
+    String marker = "/releases/tag/";
+    int idx = location.indexOf(marker);
+    if (idx < 0) return null;
+    String tail = location.substring(idx + marker.length());
+    int q = tail.indexOf('?');
+    if (q >= 0) tail = tail.substring(0, q);
+    int h = tail.indexOf('#');
+    if (h >= 0) tail = tail.substring(0, h);
+    int s = tail.indexOf('/');
+    if (s >= 0) tail = tail.substring(0, s);
+    tail = tail.trim();
+    return tail.isEmpty() ? null : tail;
+  }
+
+  private static String resolveLatestTagRedirect(String latestUrl) throws IOException {
+    URL current = new URL(latestUrl);
+    for (int hop = 0; hop < 6; hop++) {
+      HttpURLConnection conn = (HttpURLConnection) current.openConnection();
+      conn.setInstanceFollowRedirects(false);
+      conn.setConnectTimeout(10_000);
+      conn.setReadTimeout(15_000);
+      conn.setRequestProperty("User-Agent", "Grain-Photo/" + BuildConfig.VERSION_NAME);
+      conn.setRequestProperty("Accept", "text/html,application/xhtml+xml");
+      try {
+        int code = conn.getResponseCode();
+        if (code == HttpURLConnection.HTTP_MOVED_PERM
+            || code == HttpURLConnection.HTTP_MOVED_TEMP
+            || code == HttpURLConnection.HTTP_SEE_OTHER
+            || code == 307
+            || code == 308) {
+          String loc = conn.getHeaderField("Location");
+          if (loc == null || loc.isEmpty()) return null;
+          String tag = extractTagFromReleaseLocation(loc);
+          if (tag != null) return tag;
+          current = new URL(current, loc);
+          continue;
+        }
+        if (code == HttpURLConnection.HTTP_NOT_FOUND) return null;
+        if (code >= 200 && code < 300) {
+          return extractTagFromReleaseLocation(current.toString());
+        }
+        throw new IOException("Update server returned HTTP " + code);
+      } finally {
+        conn.disconnect();
+      }
+    }
+    throw new IOException("Too many redirects");
+  }
+
+  /** Extracts {@code [title, plainTextSummary]} for {@code tag} from GitHub's {@code releases.atom}. */
+  static String[] parseAtomEntry(String atomXml, String tag) {
+    String[] res = new String[] {"", ""};
+    if (atomXml == null || tag == null) return res;
+    String needle = "/releases/tag/" + tag + "\"";
+    int pos = 0;
+    while (true) {
+      int entryStart = atomXml.indexOf("<entry>", pos);
+      if (entryStart < 0) break;
+      int entryEnd = atomXml.indexOf("</entry>", entryStart);
+      if (entryEnd < 0) break;
+      String entry = atomXml.substring(entryStart, entryEnd);
+      pos = entryEnd + 8;
+      if (!entry.contains(needle) && !entry.contains("/" + tag + "</id>")) continue;
+      res[0] = decodeXmlEntities(betweenTags(entry, "title")).trim();
+      String html = decodeXmlEntities(betweenTags(entry, "content"));
+      if (!html.isEmpty()) {
+        String text =
+            html.replaceAll("(?i)<h3[^>]*>", "\n### ")
+                .replaceAll("(?i)<h2[^>]*>", "## ")
+                .replaceAll("(?i)</h[1-6]>", "\n")
+                .replaceAll("(?i)<li[^>]*>", "- ")
+                .replaceAll("(?i)</li>", "\n")
+                .replaceAll("(?i)<p[^>]*>", "")
+                .replaceAll("(?i)</p>", "\n")
+                .replaceAll("(?i)<br\\s*/?>", "\n")
+                .replaceAll("<[^>]+>", "");
+        res[1] = summarizeNotes(decodeXmlEntities(text));
+      }
+      break;
+    }
+    return res;
+  }
+
+  private static String betweenTags(String xml, String tagName) {
+    String open = "<" + tagName;
+    int s = xml.indexOf(open);
+    if (s < 0) return "";
+    int gt = xml.indexOf('>', s + open.length());
+    if (gt < 0) return "";
+    int e = xml.indexOf("</" + tagName + ">", gt + 1);
+    if (e < 0) return "";
+    return xml.substring(gt + 1, e);
+  }
+
+  private static String decodeXmlEntities(String s) {
+    if (s == null || s.isEmpty()) return "";
+    return s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&");
   }
 
   /**

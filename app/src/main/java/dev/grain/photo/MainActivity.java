@@ -6390,6 +6390,20 @@ public final class MainActivity extends ComponentActivity
                 () -> {
                   if (!isDestroyed() && manual) {
                     message("Update check failed: " + e.getMessage());
+                    if (!isFinishing()) {
+                      new AlertDialog.Builder(this)
+                          .setTitle("Could not check for updates")
+                          .setMessage(
+                              "Automatic check failed ("
+                                  + e.getMessage()
+                                  + "). You can download the latest APK directly from GitHub"
+                                  + " Releases and install it over Grain.")
+                          .setPositiveButton(
+                              "Open Releases",
+                              (d, w) -> openUrl(AppUpdater.DEFAULT_WEB_RELEASES_URL + "/latest"))
+                          .setNegativeButton("Cancel", null)
+                          .show();
+                    }
                   }
                 });
           }
