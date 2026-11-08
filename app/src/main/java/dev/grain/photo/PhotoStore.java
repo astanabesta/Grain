@@ -497,6 +497,33 @@ public final class PhotoStore {
     return done;
   }
 
+  /**
+   * Writes a text file into Download/Grain. The camera report is longer than some clipboards will
+   * take in one piece, so it has to be possible to save it as a file as well as copy it.
+   */
+  public Uri writeText(String name, String body) throws Exception {
+    ContentValues v = new ContentValues();
+    v.put(MediaStore.Downloads.DISPLAY_NAME, name);
+    v.put(MediaStore.Downloads.MIME_TYPE, "text/plain");
+    v.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Grain");
+    v.put(MediaStore.Downloads.IS_PENDING, 1);
+    Uri uri = context.getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+    if (uri == null) throw new IOException("Cannot create " + name);
+    try {
+      try (OutputStream out = context.getContentResolver().openOutputStream(uri)) {
+        if (out == null) throw new IOException("No output stream for " + name);
+        out.write(body.getBytes(StandardCharsets.UTF_8));
+      }
+      ContentValues ready = new ContentValues();
+      ready.put(MediaStore.MediaColumns.IS_PENDING, 0);
+      context.getContentResolver().update(uri, ready, null, null);
+      return uri;
+    } catch (Exception error) {
+      context.getContentResolver().delete(uri, null, null);
+      throw error;
+    }
+  }
+
   private Uri insert(File source, String name, String mime, boolean download) throws Exception {
     ContentValues v = new ContentValues();
     Uri collection;

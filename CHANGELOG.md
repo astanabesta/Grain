@@ -8,6 +8,18 @@ one was a separate APK install on the device.
 
 ---
 
+## v0.8.4 — The Camera Report Can Now Be Saved, Not Just Copied (`Android`)
+
+- **The camera report can be saved as a text file** — the diagnostics dialog now has a
+  **Save as .txt** button that writes the whole report to `Download/Grain`. A long report could come
+  out cut off when copied, so it can now be handed over as a real file.
+- **A short summary to copy** — a **Copy summary** button copies only the lines that decide how
+  large a photo the phone can take: the biggest public output size for JPEG, RAW and YUV, the
+  Android 13+ maximum-resolution map, the vendor super-resolution and remosaic switches, and the
+  values behind them. It is short enough to survive any clipboard, so it always arrives intact.
+- **The report opens with that summary**, and the high-resolution block now comes **first** in the
+  JSON, so even a truncated copy still contains the part that matters.
+
 ## v0.8.3 — A Real Manual-Focus Scale, and a Probe for the 108 MP Path (`Android`)
 
 Both changes are **Android only for now**; the iOS build follows later.

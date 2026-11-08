@@ -290,6 +290,7 @@ tools/                          SDK-free syntax/math verifier, iOS type-check & 
 - **Stills only:** Grain is a dedicated still-photography camera (no video recording).
 - **Camera2 HAL capabilities vary by phone:** Check `MENU → SET UP → DIAGNOSTICS` to inspect what your device's HAL advertises (`RAW_SENSOR`, manual sensor range, `LENS_FOCUS_DISTANCE`, AF regions, face detect modes).
 - **Grain remembers its own crashes:** If the app ever crashes, the next launch shows the report on screen with a **Copy** button — exception, stack trace, Android version and device — so a crash is something you can send instead of guess at. The last report also stays in `MENU → SET UP → DIAGNOSTICS`.
+- **The camera report is long:** `MENU → SET UP → DIAGNOSTICS` has **Copy summary** (just the high-resolution paths, short enough for any clipboard) and **Save as .txt** (the whole report written to `Download/Grain`, so nothing can cut it off).
 - **Film asks for a LUT:** Import Fujifilm's F-Log2 `.zip` or Sony's `s709Cubes.zip` via `MENU → I.Q. → IMPORT LUT ZIP`.
 - **Update blocked by Xiaomi HyperOS / MIUI:** Grain automatically falls back to Android's system package installer via `FileProvider`; allow installation from Grain once if prompted.
 
@@ -306,6 +307,7 @@ tools/                          SDK-free syntax/math verifier, iOS type-check & 
 
 | Version | Highlights |
 | --- | --- |
+| **v0.8.4** | **The camera report can be saved, not just copied** (`Android`) — **Save as .txt** writes the whole report to `Download/Grain`, **Copy summary** copies only the high-resolution paths in a form that always survives the clipboard, and the report now opens with that summary and puts the high-resolution block first |
 | **v0.8.3** | **A real manual-focus scale under the screen** (`Android`) — the stops are engraved with the actual distances the lens reports (`∞` · `1 m` · `0.50 m` · `0.20 m` · `0.10 m` on the Redmi Note 13 Pro+), it drags with a thumb and works while the focus loupe is up. **MENU → SET UP → DIAGNOSTICS** now also dumps the camera's vendor super-resolution and remosaic paths, so we can find out whether the phone has a 108 MP mode of its own before building one |
 | **v0.8.2** | **The preview read-back can no longer crash Grain** — all three preview readers (histogram, focus loupe, peaking) now share one guarded read-back, so a frame that cannot be read is simply a frame with no overlay. Grain also now shows its own crash report on the next launch, with a **Copy** button |
 | **v0.8.1** | **Two Tripod High-Resolution Modes (`HI-RES 1 36MP` / `HI-RES 2 48MP`)** on Android & iOS — the existing `~36 MP` merge plus a new `~48 MP` (`~8000 × 6000`) merge from the same 4-frame sub-pixel registration — and a **fix for the focus-peaking crash** (preview read-back can no longer take the app down) |

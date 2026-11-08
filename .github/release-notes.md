@@ -1,24 +1,21 @@
-## Grain Photo vVERSION — A Real Manual-Focus Scale, and a Probe for the 108 MP Path (`Android`)
+## Grain Photo vVERSION — The Camera Report Can Now Be Saved, Not Just Copied (`Android`)
 
 - **Android (`Grain-vVERSION.apk`):** Install directly inside Grain (**MENU → SET UP → APP UPDATE**) or download **`Grain-vVERSION.apk`** below.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** Download **`Grain-iOS-vVERSION.ipa`** below and install onto any iPhone (iOS 16+, including **iPhone XR / XS** and newer) using **[Sideloadly](https://sideloadly.io/)**, **[AltStore](https://altstore.io/)**, or **[SideStore](https://sidestore.io/)**.
 
-### What's new in v0.8.3
+### What's new in v0.8.4
 
-Both changes below are **Android only for now** — the iOS build follows later.
+The camera report grew long enough that copying it could come out cut off, so it can now be **saved as a file** as well as copied.
 
-#### 1. A Manual-Focus Scale Under the Screen
-- **New:** Pick **MANUAL** in **MENU → FOCUS MODE** and a focus scale appears directly under the screen, in the space between the display and the bottom deck. It is there only while manual focus is selected, and it disappears the moment you go back to **AF-C** or **AF-S**.
-- **The stops are real distances, not step numbers.** A lens focuses by *dioptres*, and the distance is the reciprocal — one dioptre is one metre, ten dioptres is ten centimetres — so the scale is stretched at the far end and crowded at the near end, exactly like the distance scale engraved on a lens barrel.
-- On the Redmi Note 13 Pro+ the lens reports a closest focus of **10 cm**, so the scale runs from **∞** down to **10 cm** and is engraved **∞ · 1 m · 0.50 m · 0.20 m · 0.10 m**. The exact distance follows your thumb while you drag.
-- **It works while the focus loupe is up**, which is where manual focus is actually used: magnify, drag the scale, watch the focus plane settle.
-- **Also:** the **MF DISTANCE** menu item, the magnifier label and the focus toast now read the distance (`0.30 m`) instead of `STEP 7 / 30`.
+#### 1. Save the Report as a Text File
+- **New:** the diagnostics dialog now has a **Save as .txt** button. It writes the whole report to **`Download/Grain`** — a real file you can attach to a message, open in any text editor, or keep.
+- Nothing can cut a file off, so this is the reliable way to hand a full report over.
 
-#### 2. The HAL Probe — Is There a 108 MP Path?
-- **New:** **MENU → SET UP → DIAGNOSTICS** now also dumps everything the camera's own hardware says about its high-resolution paths: the vendor **super-resolution** and **remosaic** characteristics, the vendor **request keys** that switch them on, and every output size the scaler advertises — including the Android 13+ maximum-resolution map.
-- **Why:** on this phone the public Camera2 sizes stop at **4080 × 3060 (12.5 MP)** for *both* JPEG and RAW. Any bigger mode therefore has to come from the phone's own engine, and the probe establishes whether one exists before any of it is built.
-- **How to send it:** open **MENU → SET UP → DIAGNOSTICS**, tap **Copy**, and paste the text back. The **hal** block at the end of the report is the one that matters.
+#### 2. Copy Just the Part That Matters
+- **New:** a **Copy summary** button that copies only the few lines that decide how large a photo the phone can take: the biggest public output size for JPEG, RAW and YUV, the Android 13+ maximum-resolution map, the vendor switches for super-resolution and remosaic, and the values the vendor attaches to them.
+- It is short enough to survive any clipboard, so it always arrives intact.
+- The report now also **opens with that summary**, and the high-resolution block sits **first** in the JSON — so even a truncated copy still contains the part that matters.
 
-#### 3. Everything Else From v0.8.2 Still Here
-- The preview read-back can no longer crash Grain, and Grain still shows its own crash report on the next launch.
-- The two tripod high-resolution modes (`HI-RES 1 36MP` and `HI-RES 2 48MP`) are unchanged.
+#### 3. Everything Else From v0.8.3 Still Here
+- The manual-focus scale under the screen, engraved with the real distances the lens reports.
+- The high-resolution probe in `MENU → SET UP → DIAGNOSTICS`.

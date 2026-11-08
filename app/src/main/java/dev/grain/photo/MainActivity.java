@@ -33,6 +33,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.IntConsumer;
 import java.util.function.Supplier;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 /** Grain's single-camera-screen interaction design, implemented without Flutter or a WebView. */
@@ -3454,13 +3455,133 @@ public final class MainActivity extends ComponentActivity
 
   private void showDiagnostics() {
     try {
-      JSONObject j = new JSONObject(capabilities.toString());
+      String summary = halSummary();
+      JSONObject j = new JSONObject();
+      // The high-resolution paths go first: they are what a long report gets cut off before.
+      j.put("hal", capabilities.opt("hal"));
+      j.put("halSummary", summary);
+      for (Iterator<String> it = capabilities.keys(); it.hasNext(); ) {
+        String key = it.next();
+        if ("hal".equals(key)) continue;
+        j.put(key, capabilities.opt(key));
+      }
       String crash = CrashLog.lastCrash(this);
       j.put("lastCrash", crash == null || crash.isEmpty() ? "none" : crash);
-      showJson("Camera diagnostics", j);
+      showJson("Camera diagnostics", j, summary);
     } catch (Exception e) {
       showJson("Camera diagnostics", capabilities);
     }
+  }
+
+  /**
+   * One short report of the numbers that decide how large a photo this phone can take: the biggest
+   * public output size, and anything the vendor says about a larger one. Deliberately short, so it
+   * survives any clipboard, and it is the part that matters.
+   */
+  private String halSummary() {
+    JSONObject hal = capabilities.optJSONObject("hal");
+    if (hal == null) return "";
+    StringBuilder s = new StringBuilder();
+    s.append("Grain camera HAL summary\n");
+    s.append("device ")
+        .append(capabilities.optString("device"))
+        .append(" · sdk ")
+        .append(capabilities.optInt("sdk"))
+        .append(" · hardware level ")
+        .append(capabilities.optInt("hardwareLevel"));
+    JSONObject sizes = hal.optJSONObject("streamSizes");
+    if (sizes != null) {
+      s.append("\npublic sizes: jpeg ")
+          .append(largestSize(sizes.optJSONArray("jpeg")))
+          .append(" · raw ")
+          .append(largestSize(sizes.optJSONArray("raw")))
+          .append(" · yuv ")
+          .append(largestSize(sizes.optJSONArray("yuv")));
+    }
+    JSONObject max = hal.optJSONObject("maximumResolutionSizes");
+    if (max != null) {
+      s.append("\nmaximum-resolution map: jpeg ")
+          .append(largestSize(max.optJSONArray("jpeg")))
+          .append(" · raw ")
+          .append(largestSize(max.optJSONArray("raw")))
+          .append(" · yuv ")
+          .append(largestSize(max.optJSONArray("yuv")));
+    }
+    JSONArray requestKeys = hal.optJSONArray("vendorRequestKeys");
+    if (requestKeys != null) {
+      StringBuilder keys = new StringBuilder();
+      for (int i = 0; i < requestKeys.length(); i++) {
+        String key = requestKeys.optString(i, "");
+        if (!key.matches("(?i).*(superres|remosaic).*")) continue;
+        if (keys.length() > 0) keys.append(", ");
+        keys.append(key);
+      }
+      if (keys.length() > 0) s.append("\nvendor switches: ").append(keys);
+    }
+    JSONObject vendor = hal.optJSONObject("vendorCharacteristics");
+    if (vendor != null) {
+      for (Iterator<String> it = vendor.keys(); it.hasNext(); ) {
+        String key = it.next();
+        if (!key.matches("(?i).*(superres|remosaic|rawsize|sat\\.|scaler).*")) continue;
+        Object value = vendor.opt(key);
+        if (value == null || value == JSONObject.NULL) continue;
+        s.append("\n").append(key).append(" = ").append(summarise(value));
+      }
+    }
+    return s.toString();
+  }
+
+  /** The largest of a list of "width x height" strings, with its megapixels. */
+  private static String largestSize(JSONArray sizes) {
+    if (sizes == null) return "none";
+    long best = 0;
+    String bestText = "none";
+    for (int i = 0; i < sizes.length(); i++) {
+      String entry = sizes.optString(i, "");
+      int x = entry.indexOf('x');
+      if (x <= 0) continue;
+      long px;
+      try {
+        px = Long.parseLong(entry.substring(0, x).trim()) * Long.parseLong(entry.substring(x + 1).trim());
+      } catch (NumberFormatException e) {
+        continue;
+      }
+      if (px > best) {
+        best = px;
+        bestText =
+            entry + " (" + String.format(Locale.US, "%.1f MP", px / 1_000_000.0) + ")";
+      }
+    }
+    return bestText;
+  }
+
+  /** A vendor characteristic in one line: a stream list becomes "WxH fmt F", anything else prints. */
+  private static String summarise(Object value) {
+    if (!(value instanceof JSONArray)) return String.valueOf(value);
+    JSONArray array = (JSONArray) value;
+    if (array.length() == 0) return "empty";
+    if (array.length() % 4 == 0 && allIntegers(array)) {
+      StringBuilder s = new StringBuilder();
+      for (int i = 0; i < array.length(); i += 4) {
+        if (i > 0) s.append(", ");
+        s.append(array.optInt(i + 1)).append("x").append(array.optInt(i + 2)).append(" fmt ").append(array.optInt(i));
+      }
+      return s.toString();
+    }
+    StringBuilder s = new StringBuilder();
+    for (int i = 0; i < array.length(); i++) {
+      if (i > 0) s.append(", ");
+      s.append(array.opt(i));
+    }
+    return s.toString();
+  }
+
+  private static boolean allIntegers(JSONArray array) {
+    for (int i = 0; i < array.length(); i++) {
+      Object v = array.opt(i);
+      if (!(v instanceof Integer) && !(v instanceof Long)) return false;
+    }
+    return true;
   }
 
   private void exportTestFiles(PhotoStore.Photo photo) {
@@ -3477,6 +3598,15 @@ public final class MainActivity extends ComponentActivity
   }
 
   private void showJson(String title, JSONObject json) {
+    showJson(title, json, null);
+  }
+
+  /**
+   * Shows a JSON document. When a summary is given it gets its own button, because some clipboards
+   * will not take a very long string and the summary is the part that matters.
+   */
+  private void showJson(String title, JSONObject json, String summary) {
+    LinearLayout box = column();
     ScrollView scroll = new ScrollView(this);
     TextView text = text(json.toString(), 10, INK);
     try {
@@ -3488,25 +3618,50 @@ public final class MainActivity extends ComponentActivity
     text.setPadding(dp(16), dp(12), dp(16), dp(12));
     text.setTextIsSelectable(true);
     scroll.addView(text);
+    box.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
+    if (summary != null && !summary.isEmpty()) {
+      LinearLayout row = row();
+      row.setPadding(dp(8), dp(2), dp(8), dp(8));
+      row.addView(button("Copy summary", 11, () -> copyText(summary, "Summary copied")));
+      row.addView(button("Save as .txt", 11, () -> saveReport(title, json)));
+      box.addView(row);
+    }
     new AlertDialog.Builder(this)
         .setTitle(title)
-        .setView(scroll)
+        .setView(box)
         .setPositiveButton("Close", null)
-        .setNeutralButton(
-            "Copy",
-            (d, w) -> {
-              android.content.ClipboardManager clip =
-                  (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-              String plain;
-              try {
-                plain = json.toString(2).replace("\\/", "/");
-              } catch (Exception e) {
-                plain = json.toString();
-              }
-              clip.setPrimaryClip(ClipData.newPlainText(title, plain));
-              message("Diagnostics copied");
-            })
+        .setNeutralButton("Copy", (d, w) -> copyText(plainJson(json), title + " copied"))
         .show();
+  }
+
+  private static String plainJson(JSONObject json) {
+    try {
+      return json.toString(2).replace("\\/", "/");
+    } catch (Exception e) {
+      return json.toString();
+    }
+  }
+
+  private void copyText(String value, String message) {
+    android.content.ClipboardManager clip =
+        (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+    clip.setPrimaryClip(ClipData.newPlainText("Grain", value));
+    message(message);
+  }
+
+  /** Saves the report as a text file in Download/Grain: a long report can be cut off by the clipboard. */
+  private void saveReport(String title, JSONObject json) {
+    files.execute(
+        () -> {
+          try {
+            String name =
+                "grain-" + title.toLowerCase(Locale.ROOT).replace(' ', '-') + ".txt";
+            store.writeText(name, plainJson(json));
+            runOnUiThread(() -> message("Saved to Download/Grain · " + name));
+          } catch (Exception e) {
+            runOnUiThread(() -> message("Could not save the report: " + e.getMessage()));
+          }
+        });
   }
 
   private void loadImage(ImageView image, File file, int max) {
