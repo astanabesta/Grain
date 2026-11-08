@@ -16,7 +16,9 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.Locale;
 
 /**
  * Keeps the crash that would otherwise vanish.
@@ -128,6 +130,21 @@ public final class CrashLog {
     } catch (Throwable ignored) {
       // best effort
     }
+    // Also drop a copy in the public Downloads folder. If the app dies on every launch the user
+    // can never open the diagnostics screen to read the report - but the file is right there on
+    // the phone, where they can pick it up and send it.
+    try {
+      String stamp = new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date());
+      new PhotoStore(context.getApplicationContext())
+          .writeText("Grain-crash-" + stamp + ".txt", text);
+    } catch (Throwable ignored) {
+      // best effort
+    }
+  }
+
+  /** A full crash report for a throwable that was caught rather than fatal. */
+  public static String describe(Throwable error) {
+    return describe(Thread.currentThread(), error);
   }
 
   private static String describe(Thread thread, Throwable error) {

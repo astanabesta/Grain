@@ -207,6 +207,44 @@ public final class MainActivity extends ComponentActivity
   public void onCreate(Bundle saved) {
     super.onCreate(saved);
     CrashLog.install(this);
+    try {
+      onCreateBody(saved);
+    } catch (Throwable e) {
+      // A failure while opening must not take Grain down silently: the user would only see
+      // "Grain keeps stopping" and no reason at all. Show the reason instead and keep the app
+      // alive, so the report can still be copied.
+      android.util.Log.e("Grain", "Startup failed", e);
+      showStartupFailure(e);
+    }
+  }
+
+  /** Shows a startup failure as a dialog the user can copy, instead of a crash. */
+  private void showStartupFailure(Throwable error) {
+    final String text = CrashLog.describe(error);
+    try {
+      new AlertDialog.Builder(this)
+          .setTitle("Grain could not start")
+          .setMessage("Something went wrong while opening:\n\n" + error)
+          .setPositiveButton(
+              "Copy report",
+              (d, w) -> {
+                try {
+                  ClipboardManager clip =
+                      (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                  if (clip != null) clip.setPrimaryClip(ClipData.newPlainText("Grain crash", text));
+                  Toast.makeText(this, "Crash report copied", Toast.LENGTH_SHORT).show();
+                } catch (Throwable ignored) {
+                  // the clipboard is not worth crashing over
+                }
+              })
+          .setNegativeButton("Close", null)
+          .show();
+    } catch (Throwable ignored) {
+      // even the error dialog could not be shown
+    }
+  }
+
+  private void onCreateBody(Bundle saved) {
     preferences = getSharedPreferences("grain", MODE_PRIVATE);
     tuning = new RecipeTuning(preferences);
     Arrays.fill(strengths, 80);
@@ -2340,7 +2378,9 @@ public final class MainActivity extends ComponentActivity
         && (lastUpdateCheckMs == 0L
             || SystemClock.elapsedRealtime() - lastUpdateCheckMs > 15 * 60_000L)) {
       main.removeCallbacks(startupUpdateTask);
-      main.postDelayed(startupUpdateTask, 1800);
+      // Early: if the app dies a second after opening, a later check would never happen and the
+      // user would be stuck with a crashing build.
+      main.postDelayed(startupUpdateTask, 400);
     }
     if (!crashShown) {
       crashShown = true;
@@ -2349,7 +2389,7 @@ public final class MainActivity extends ComponentActivity
           () -> {
             if (!isFinishing() && !isDestroyed()) CrashLog.showPending(this);
           },
-          1200);
+          500);
     }
   }
 

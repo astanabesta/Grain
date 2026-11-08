@@ -8,6 +8,22 @@ one was a separate APK install on the device.
 
 ---
 
+## v0.8.6 — A Startup Failure Should Show Itself, Not Just Die (`Android`)
+
+**Android only for now**; the iOS build follows later.
+
+- **v0.8.5 (the guided nine-shot 112 MP mode) was reported to crash on launch** on the Redmi Note
+  13 Pro+. This release does not guess at the cause — it makes the failure visible and survivable,
+  so the real reason can be found and fixed.
+- **The app no longer dies silently at startup** — a failure while opening is shown in a dialog
+  with a **Copy report** button, and Grain stays open instead of vanishing into "Grain keeps
+  stopping". The crash report also appears half a second after launch now, so a crash in the very
+  first second still reports itself.
+- **Every crash now leaves a file on the phone** — `Grain-crash-<date>.txt` in `Download/Grain`.
+  If the app cannot open at all, the reason is still a file that can be picked up and sent.
+- **The update check starts almost immediately** after launch, so a build that dies a second after
+  opening can still be replaced from inside the app.
+
 ## v0.8.5 — A Guided Nine-Shot 112 MP Mode (`Android`)
 
 **Android only for now**; the iOS build follows later.
