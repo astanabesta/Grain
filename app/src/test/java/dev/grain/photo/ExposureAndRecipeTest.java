@@ -342,6 +342,87 @@ public class ExposureAndRecipeTest {
     assertEquals(3000, small[1]);
   }
 
+  @Test
+  public void hiResMergerTargets112MpWithNineFrames() {
+    // Nine frames resolve 3x linear: the phone's 12.5 MP sensor becomes ~112 MP from the same
+    // field of view, with nothing cropped and nothing panned.
+    int[] dims =
+        HiResMerger.targetDimensions(
+            4080, 3060, HiResMerger.TARGET_PIXELS_112, HiResMerger.MAX_SCALE_9);
+    assertEquals(0, dims[0] & 3);
+    assertEquals(0, dims[1] & 3);
+    long totalPx = (long) dims[0] * dims[1];
+    assertTrue("Expected ~112MP, got " + totalPx, totalPx >= 111_000_000L && totalPx <= 113_000_000L);
+    // The linear gain is 3x in both directions.
+    assertTrue("x gain " + dims[0], Math.abs(dims[0] / 4080.0 - 3.0) < 0.01);
+    assertTrue("y gain " + dims[1], Math.abs(dims[1] / 3060.0 - 3.0) < 0.01);
+
+    // The gain is capped at 3x: a target that would need more is rounded down to it.
+    int[] capped =
+        HiResMerger.targetDimensions(4000, 3000, HiResMerger.TARGET_PIXELS_112, HiResMerger.MAX_SCALE_9);
+    assertEquals(12000, capped[0]);
+    assertEquals(9000, capped[1]);
+
+    // The four-frame modes are untouched by the nine-frame scale.
+    int[] dims48 = HiResMerger.targetDimensions(4000, 3000, HiResMerger.TARGET_PIXELS_48);
+    assertEquals(8000, dims48[0]);
+    assertEquals(6000, dims48[1]);
+  }
+
+  @Test
+  public void hiResMergerAveragesNineFramesWithoutOverflowingAndRecordsThePhases() {
+    int w = 128, h = 96;
+    // Nine sub-pixel positions spread across one original pixel: the 3x3 phase grid the guide draws.
+    float[][] shifts = {
+      {0f, 0f}, {0.33f, 0f}, {0.67f, 0f},
+      {0f, 0.33f}, {0.33f, 0.33f}, {0.67f, 0.33f},
+      {0f, 0.67f}, {0.33f, 0.67f}, {0.67f, 0.67f}
+    };
+    HiResMerger.Accumulator acc = null;
+    for (int f = 0; f < 9; f++) {
+      short[] raw = new short[w * h];
+      for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+          float sx = x - shifts[f][0];
+          float sy = y - shifts[f][1];
+          float edge = 1f / (1f + (float) Math.exp(-(sx - 64f + 0.25f * (sy - 48f)) * 1.2f));
+          int c = (((y & 1) << 1) | (x & 1));
+          float chGain = c == 0 ? 0.72f : (c == 3 ? 0.55f : 0.90f);
+          float linear = (0.15f + 0.65f * edge) * chGain;
+          raw[y * w + x] = (short) Math.round(64f + linear * (1023f - 64f));
+        }
+      }
+      RawFrame rf = new RawFrame(raw, w, h, w);
+      rf.cfa = RawFrame.RGGB;
+      rf.noiseS = new double[] {1e-4, 1e-4, 1e-4, 1e-4};
+      rf.noiseO = new double[] {1e-5, 1e-5, 1e-5, 1e-5};
+      if (acc == null) acc = new HiResMerger.Accumulator(rf);
+      acc.addFrame(rf);
+    }
+    assertEquals(9, acc.framesAdded());
+    assertEquals(9, acc.phaseCells().length);
+    assertTrue(
+        "Expected several distinct sub-pixel phases, got " + acc.phasesFilled(),
+        acc.phasesFilled() >= 3);
+    assertTrue(acc.shiftsSummary().contains("f9:"));
+    RawFrame merged = acc.finish();
+    assertEquals(256, merged.width);
+    assertEquals(192, merged.height);
+    // The accumulator holds a running mean in the same 13-bit linear space as the RAW pipeline,
+    // so nine frames can never leave it - a sum of nine frames could (9 x 8191 > 65535).
+    int max = 0;
+    long sum = 0;
+    for (short v : merged.data) {
+      max = Math.max(max, v & 0xFFFF);
+      sum += v & 0xFFFF;
+    }
+    assertTrue("Merged pixel above the linear white point: " + max, max <= merged.white);
+    double avg = sum / (double) merged.data.length;
+    assertTrue(
+        "Merged average out of range: " + avg,
+        avg > merged.white * 0.15 && avg < merged.white * 0.65);
+  }
+
   private static Recipe findRecipe(String key) {
     for (Recipe r : Recipe.ALL) {
       if (r.fuji != null && key.equals(r.fuji.key)) return r;

@@ -89,6 +89,14 @@ final class CameraBack extends ViewGroup {
     final List<String> icons = new ArrayList<>();
     boolean isoAuto = true, aeLock, grid, showHistogram = true, showLevel = true, busy, infoOff,
         manual, exposureWarn, faceActive, updateAvailable;
+    /** True while a tripod super-resolution sequence is running: draws the phase guide. */
+    boolean hiResGuide;
+    /** The sub-pixel phase cells the frames have covered, as a bitmask over the 3x3 grid. */
+    int hiResPhaseMask;
+    /** How many of the nine phase cells are covered, and how many frames the sequence takes. */
+    int hiResPhases, hiResFrames;
+    /** The measured shift of the last frame from the anchor, in pixels. */
+    float hiResShiftPx;
     int battery = -1, afState, afArea;
     /** The peaking edge map, or null to draw nothing. */
     Bitmap peak;
@@ -2278,6 +2286,11 @@ final class CameraBack extends ViewGroup {
         if (!o.countdown.isEmpty()) {
           text(c, o.countdown, img.centerX(), img.centerY() + 9 * u, 24 * u, 0xffff8d55, Paint.Align.CENTER);
         }
+        if (o.hiResGuide) {
+          float gs = Math.max(5 * u, Math.min(img.width(), img.height()) * .035f);
+          cornerTicks(c, img, 11 * u);
+          hiResGuide(c, img.left + 7 * u, img.centerY() - gs * 1.7f, o, gs);
+        }
         if (o.busy) {
           float run = (now % 1400) / 1400f, seg = img.width() * .28f;
           float sx = img.left - seg + (img.width() + seg) * run;
@@ -2460,6 +2473,11 @@ final class CameraBack extends ViewGroup {
       if (!o.countdown.isEmpty()) {
         text(c, o.countdown, img.centerX(), img.centerY() + 22 * u, 64 * u, 0xffff8d55, Paint.Align.CENTER);
       }
+      if (o.hiResGuide) {
+        float gs = Math.max(5 * u, Math.min(img.width(), img.height()) * .035f);
+        cornerTicks(c, img, 11 * u);
+        hiResGuide(c, img.left + 7 * u, img.centerY() - gs * 1.7f, o, gs);
+      }
       if (o.toastTitle != null && now - o.toastAt < 1600) {
         float alpha = Math.min(1, (1600 - (now - o.toastAt)) / 300f);
         toast(c, o.toastTitle, o.toastSub, img.centerX(), img.centerY(), fs, alpha);
@@ -2476,6 +2494,56 @@ final class CameraBack extends ViewGroup {
         c.drawRect(Math.max(img.left, sx), img.bottom - 2 * u, Math.min(img.right, sx + seg), img.bottom, p);
         postInvalidateDelayed(40);
       }
+    }
+
+    /**
+     * The tripod super-resolution guide. The 3x3 grid is the phase space of one original sensor
+     * pixel: each cell is one of the nine sub-pixel positions a frame can land on. The merge can
+     * only reach sqrt(frames) x linear when the frames cover all nine, so the guide lights a cell
+     * as each frame lands on it and shows how far the last frame drifted from the anchor.
+     */
+    private void hiResGuide(Canvas c, float left, float top, OsdState o, float size) {
+      float cell = size, gap = size * .2f;
+      float gw = 3 * cell + 2 * gap, gh = 3 * cell + 2 * gap;
+      p.setStyle(Paint.Style.FILL);
+      p.setColor(0x8c000000);
+      c.drawRoundRect(left - 3 * u, top - 3 * u, left + gw + 3 * u, top + gh + 3 * u, 3 * u, 3 * u, p);
+      for (int i = 0; i < 9; i++) {
+        float x = left + (i % 3) * (cell + gap), y = top + (i / 3) * (cell + gap);
+        boolean lit = (o.hiResPhaseMask & (1 << i)) != 0;
+        p.setStyle(lit ? Paint.Style.FILL : Paint.Style.STROKE);
+        p.setColor(lit ? 0xffff8d55 : 0x80ffffff);
+        p.setStrokeWidth(Math.max(1, .9f * u));
+        c.drawRect(x, y, x + cell, y + cell, p);
+      }
+      p.setStyle(Paint.Style.FILL);
+      float fs = size * .56f;
+      text(c, "PHASE " + o.hiResPhases + "/9", left, top + gh + 5.4f * u, fs, 0xfff4f1e8, Paint.Align.LEFT);
+      int drift = o.hiResShiftPx < .7f ? 0x8fe08a : o.hiResShiftPx < 1.5f ? 0xffffd27a : 0xffff5a3c;
+      text(c, shiftText(o.hiResShiftPx), left + gw, top + gh + 5.4f * u, fs, drift, Paint.Align.RIGHT);
+      text(c, "TRIPOD · HOLD STEADY", left, top + gh + 10.4f * u, fs * .92f, 0x90ffffff, Paint.Align.LEFT);
+    }
+
+    /** The corner ticks that tell you the phone has not moved between the frames. */
+    private void cornerTicks(Canvas c, RectF r, float len) {
+      p.setStyle(Paint.Style.STROKE);
+      p.setStrokeWidth(Math.max(1, 1.1f * u));
+      p.setColor(0xffff8d55);
+      c.drawLine(r.left, r.top, r.left + len, r.top, p);
+      c.drawLine(r.left, r.top, r.left, r.top + len, p);
+      c.drawLine(r.right, r.top, r.right - len, r.top, p);
+      c.drawLine(r.right, r.top, r.right, r.top + len, p);
+      c.drawLine(r.left, r.bottom, r.left + len, r.bottom, p);
+      c.drawLine(r.left, r.bottom, r.left, r.bottom - len, p);
+      c.drawLine(r.right, r.bottom, r.right - len, r.bottom, p);
+      c.drawLine(r.right, r.bottom, r.right, r.bottom - len, p);
+      p.setStyle(Paint.Style.FILL);
+    }
+
+    /** The measured shift of the last frame, as a short label. */
+    private static String shiftText(float px) {
+      long h = Math.round(px * 100f);
+      return "\u0394 " + (h / 100) + "." + (h % 100 < 10 ? "0" : "") + (h % 100) + " px";
     }
 
     private void tagRight(Canvas c, String s, float right, float y, float size, int color) {

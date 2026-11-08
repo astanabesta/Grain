@@ -8,6 +8,28 @@ one was a separate APK install on the device.
 
 ---
 
+## v0.8.5 — A Guided Nine-Shot 112 MP Mode (`Android`)
+
+**Android only for now**; the iOS build follows later.
+
+- **`HI-RES 3 112MP`** — a new drive mode that shoots **nine** RAW frames of the same scene and
+  merges them into roughly **`12216 × 9164` (~112 MP)** from the **same field of view**. Nothing is
+  cropped or panned: the phone held sideways gives a landscape picture, because the orientation is
+  in the EXIF. Nine frames give nine samples of every original pixel, which is what a **3× linear**
+  reconstruction needs.
+- **The phase guide** — while the nine shots are taken, the screen shows a **3×3 grid**: the phase
+  space of one original sensor pixel, where each cell is one of the nine sub-pixel positions a
+  frame can land on. A cell lights up as its frame is measured, a **drift meter** under the grid
+  shows how far the last frame moved from the first (green / amber / red), **corner ticks** mark
+  the frame edges and the counter runs `1/9` … `9/9`. The first shot asks for a tripod.
+- **The exposure is now hard-locked** for the whole sequence — nine frames averaged together cannot
+  afford the brightness moving between them. This also fixes the four-shot modes, where the lock
+  was never actually applied on a phone with focus bracketing.
+- **The merge uses one working buffer instead of two**, so a 112 MP merge needs about half the
+  memory the old design needed, and the accumulator can no longer overflow at nine frames.
+- **It checks the phone's memory first** and merges smaller if 112 MP will not fit, rather than
+  dying half way through; the receipt records the size that was really merged.
+
 ## v0.8.4 — The Camera Report Can Now Be Saved, Not Just Copied (`Android`)
 
 - **The camera report can be saved as a text file** — the diagnostics dialog now has a

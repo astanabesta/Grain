@@ -103,10 +103,12 @@ public final class MainActivity extends ComponentActivity
       DRIVE_FS_BKT = 3,
       DRIVE_FOCUS_BKT = 4,
       DRIVE_HIRES_36 = 5,
-      DRIVE_HIRES_48 = 6;
+      DRIVE_HIRES_48 = 6,
+      DRIVE_HIRES_112 = 7;
 
   private static final String[] DRIVES = {
-    "SINGLE", "TIMER 3S", "TIMER 5S", "FS BKT", "FOCUS BKT", "HI-RES 1 36MP", "HI-RES 2 48MP"
+    "SINGLE", "TIMER 3S", "TIMER 5S", "FS BKT", "FOCUS BKT", "HI-RES 1 36MP", "HI-RES 2 48MP",
+    "HI-RES 3 112MP"
   };
   private static final String[] VIEW_MODES = {"EYE SENSOR", "EVF ONLY", "LCD ONLY"};
   private static final String[] EV_LABELS = {
@@ -162,6 +164,11 @@ public final class MainActivity extends ComponentActivity
   /** Tripod 4-Frame High-Resolution burst state. */
   private boolean hiResActive, hiResSavedAeLock;
   private int hiResStep;
+  /** The sub-pixel phase cells the Hi-Res frames have covered, and the last frame's shift. */
+  private int hiResPhaseMask, hiResPhases;
+  private float hiResShiftPx;
+  /** The pixel count this run is actually merging toward (the mode's target, or what fits). */
+  private long hiResTargetPixelsUsed;
   /** The drive mode this burst is running, so the merge size survives a mid-burst dial change. */
   private int hiResMode = DRIVE_HIRES_36;
   private long hiResStartNs;
@@ -1550,7 +1557,7 @@ public final class MainActivity extends ComponentActivity
     shutter.setContentDescription("Cancel timer");
     back.state.countdown = String.valueOf(remaining);
     status.setText(
-        drive == DRIVE_HIRES_36 || drive == DRIVE_HIRES_48
+        isHiRes(drive)
             ? "Tripod settling (" + remaining + "s) · tap shutter to cancel"
             : "Tap shutter again to cancel");
     main.postDelayed(() -> countdown(remaining - 1, token), 1000);
@@ -1594,10 +1601,13 @@ public final class MainActivity extends ComponentActivity
       }
       back.toast("FOCUS BKT", "manual focus distance unavailable · single frame");
     }
-    if (drive == DRIVE_HIRES_36 || drive == DRIVE_HIRES_48) {
+    if (isHiRes(drive)) {
       if (r.raw && camera.rawAvailable()) {
         hiResActive = true;
         hiResStep = 0;
+        hiResPhaseMask = 0;
+        hiResPhases = 0;
+        hiResShiftPx = 0;
         hiResMode = drive;
         hiResStartNs = System.nanoTime();
         hiResSavedAeLock = aeLock;
@@ -1657,13 +1667,27 @@ public final class MainActivity extends ComponentActivity
     pushOsd();
   }
 
+  /**
+   * Lights the sub-pixel phase cells the frames have covered so far, for the on-screen guide: the
+   * merge can only reach sqrt(frames) x linear when the nine frames land on nine different phases.
+   */
+  private void updateHiResGuide(int[] cells, float shiftPx) {
+    int mask = 0;
+    for (int cell : cells) if (cell >= 0 && cell < 9) mask |= 1 << cell;
+    hiResPhaseMask = mask;
+    hiResPhases = Integer.bitCount(mask);
+    hiResShiftPx = shiftPx;
+    pushOsd();
+  }
+
   private void runHiResStep() {
     if (!busy || !hiResActive || !resumed || !powerOn || camera == null) {
       abortHiRes();
       return;
     }
     final int step = hiResStep;
-    back.state.countdown = (step + 1) + "/4";
+    final int frames = hiResFramesFor(hiResMode);
+    back.state.countdown = (step + 1) + "/" + frames;
     pushOsd();
     Runnable fireCapture =
         () -> {
@@ -1671,19 +1695,29 @@ public final class MainActivity extends ComponentActivity
             abortHiRes();
             return;
           }
-          status.setText("HI-RES " + (step + 1) + "/4 · capturing RAW quadrant shift…");
+          status.setText(
+              (step == 0 ? "ON A TRIPOD · HOLD STEADY · " : "")
+                  + "HI-RES "
+                  + (step + 1)
+                  + "/"
+                  + frames
+                  + " · capturing RAW sub-pixel shift…");
           playShutterSound();
           camera.capture(snapshot());
         };
     if (step == 0) {
+      // The exposure is held for the whole sequence: nine frames averaged together cannot afford
+      // the exposure moving between them. The preview follows the lock so the framing does not
+      // breathe between the shots either.
+      camera.setAeLock(true);
+      camera.update(snapshot());
       if (camera.focusBracketingAvailable()) {
-        camera.prepareBracketStep(camera.currentFocusFraction(), 0, 4, fireCapture);
+        camera.prepareBracketStep(camera.currentFocusFraction(), 0, frames, fireCapture);
       } else {
-        camera.setAeLock(true);
         fireCapture.run();
       }
     } else {
-      pulseOisMicroShift(step);
+      pulseOisMicroShift(step, frames);
       main.postDelayed(fireCapture, 38);
     }
   }
@@ -1692,17 +1726,28 @@ public final class MainActivity extends ComponentActivity
    * Pulses a calibrated 14ms micro-vibration prior to frames 2..4 so the spring-mounted OIS lens
    * element displaces by ~0.35-0.75 px even when locked rigidly on a tripod.
    */
-  private void pulseOisMicroShift(int step) {
+  private void pulseOisMicroShift(int step, int frames) {
     try {
       Vibrator vib = getSystemService(Vibrator.class);
       if (vib != null && vib.hasVibrator()) {
-        int amp = step == 1 ? 105 : step == 2 ? 145 : 125;
-        vib.vibrate(VibrationEffect.createOneShot(14, amp));
+        vib.vibrate(VibrationEffect.createOneShot(14, oisAmplitude(step, frames)));
       } else if (shutter != null) {
         shutter.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
       }
     } catch (Throwable ignored) {
     }
+  }
+
+  /**
+   * The vibration amplitude for one step. Four frames use the three amplitudes that were measured
+   * to work. Nine frames walk a wider ladder, because the merge resolves sqrt(N) x linear and it
+   * can only do that if the nine frames land on nine different sub-pixel phases - so the
+   * amplitudes have to spread the frames out, not just make them wobble.
+   */
+  private static int oisAmplitude(int step, int frames) {
+    if (frames <= 4) return step == 1 ? 105 : step == 2 ? 145 : 125;
+    int[] ladder = {0, 55, 85, 115, 145, 180, 210, 240, 255};
+    return ladder[Math.max(1, Math.min(ladder.length - 1, step))];
   }
 
   private void abortHiRes() {
@@ -1938,23 +1983,37 @@ public final class MainActivity extends ComponentActivity
             : settings.ev;
     if (hiResActive) {
       final int hStep = hiResStep;
+      final int hFrames = hiResFramesFor(hiResMode);
       status.setText(
-          hStep < 3
-              ? "HI-RES " + (hStep + 1) + "/4 · aligning RAW sub-pixels…"
-              : "HI-RES 4/4 · merging " + hiResMegapixels(hiResMode) + "MP & developing " + filmName + "…");
+          hStep < hFrames - 1
+              ? "HI-RES " + (hStep + 1) + "/" + hFrames + " · aligning RAW sub-pixels…"
+              : "HI-RES "
+                  + hFrames
+                  + "/"
+                  + hFrames
+                  + " · merging "
+                  + hiResMegapixels(hiResMode)
+                  + "MP & developing "
+                  + filmName
+                  + "…");
       files.execute(
           () -> {
             try {
               if (hStep == 0) {
+                hiResTargetPixelsUsed = hiResEffectiveTargetPixels();
                 hiResAccumulator =
-                    new HiResMerger.Accumulator(capture.frame, hiResTargetPixelsFor(hiResMode));
+                    new HiResMerger.Accumulator(
+                        capture.frame, hiResTargetPixelsUsed, hiResMaxScale(hiResMode));
                 hiResAnchorDng = capture.dng;
                 hiResAnchorPhoneJpeg = keepRawFiles ? capture.phoneJpeg : null;
               } else if (capture.dng != null && capture.dng.exists() && !capture.dng.delete()) {
                 android.util.Log.w("Grain", "Temp HiRes step DNG kept");
               }
               hiResAccumulator.addFrame(capture.frame);
-              if (hStep < 3) {
+              final int[] cells = hiResAccumulator.phaseCells();
+              final float shiftPx = (float) hiResAccumulator.lastShiftPx();
+              runOnUiThread(() -> updateHiResGuide(cells, shiftPx));
+              if (hStep < hFrames - 1) {
                 runOnUiThread(
                     () -> {
                       if (isDestroyed() || !hiResActive || !resumed || !powerOn) {
@@ -1968,9 +2027,12 @@ public final class MainActivity extends ComponentActivity
                 return;
               }
 
-              // All 4 RAW frames accumulated: finalize the merged RawFrame & free accumulator before developing
+              // All the RAW frames are accumulated: finalize the merged RawFrame & free the
+              // accumulator before developing.
               long mergeStart = System.nanoTime();
               String shifts = hiResAccumulator.shiftsSummary();
+              int[] phaseCells = hiResAccumulator.phaseCells();
+              int phasesFilled = hiResAccumulator.phasesFilled();
               RawFrame mergedFrame = hiResAccumulator.finish();
               hiResAccumulator = null;
               long mergeMs = (System.nanoTime() - mergeStart) / 1_000_000;
@@ -2004,9 +2066,16 @@ public final class MainActivity extends ComponentActivity
 
               receipt.put(
                   "hiResMode",
-                  hiResMode == DRIVE_HIRES_48 ? "tripod_4shot_48mp" : "tripod_4shot_36mp");
+                  hiResMode == DRIVE_HIRES_112
+                            ? "tripod_9shot_112mp"
+                            : hiResMode == DRIVE_HIRES_48
+                                ? "tripod_4shot_48mp"
+                                : "tripod_4shot_36mp");
               receipt.put("hiResMegapixels", hiResMegapixels(hiResMode));
-              receipt.put("hiResFrames", 4);
+              receipt.put("hiResTargetMegapixels", (int) (hiResTargetPixelsUsed / 1_000_000L));
+              receipt.put("hiResFrames", hFrames);
+              receipt.put("hiResPhases", new org.json.JSONArray(phaseCells));
+              receipt.put("hiResPhasesFilled", phasesFilled);
               receipt.put("hiResShifts", shifts);
               receipt.put("hiResMergeMs", mergeMs);
               if (manual != null) receipt.put("developEv", developEv);
@@ -2056,8 +2125,9 @@ public final class MainActivity extends ComponentActivity
                     message(
                         String.format(
                             Locale.US,
-                            "%.1f MP Hi-Res merged from 4 RAW frames · %s",
+                            "%.1f MP Hi-Res merged from %d RAW frames · %s",
                             mp,
+                            hFrames,
                             filmName));
                   });
             } catch (Throwable e) {
@@ -4183,6 +4253,11 @@ public final class MainActivity extends ComponentActivity
     o.manual = shutterNs > 0 || isoSetting > 0;
     o.exposure = plan[2];
     o.exposureWarn = plan[3] > 0;
+    o.hiResGuide = hiResActive;
+    o.hiResPhaseMask = hiResPhaseMask;
+    o.hiResPhases = hiResPhases;
+    o.hiResFrames = hiResFramesFor(hiResMode);
+    o.hiResShiftPx = hiResShiftPx;
     o.drive =
         drive == DRIVE_SINGLE
             ? ""
@@ -4190,7 +4265,7 @@ public final class MainActivity extends ComponentActivity
                 ? "FS BKT"
                 : drive == DRIVE_FOCUS_BKT
                     ? "BKT " + FocusMath.BKT_COUNTS[bktFramesIndex]
-                    : drive == DRIVE_HIRES_36 || drive == DRIVE_HIRES_48
+                    : isHiRes(drive)
                         ? "HR " + hiResMegapixels(drive) + "MP"
                         : "◷ " + timerSeconds + "S";
     o.zoom = zoom > 1.04 ? String.format(Locale.US, "%.1f×", zoom) : "";
@@ -4940,22 +5015,67 @@ public final class MainActivity extends ComponentActivity
   private static int driveTimerSeconds(int drive) {
     if (drive == DRIVE_TIMER_3) return 3;
     if (drive == DRIVE_TIMER_5) return 5;
-    if (drive == DRIVE_HIRES_36 || drive == DRIVE_HIRES_48) return 4;
+    if (drive == DRIVE_HIRES_112) return 6;
+    if (isHiRes(drive)) return 4;
     return 0;
+  }
+
+  /** True for the tripod super-resolution drive modes. */
+  private static boolean isHiRes(int drive) {
+    return isHiRes(drive) || drive == DRIVE_HIRES_112;
   }
 
   /** The nominal output size of a tripod super-resolution drive mode, in megapixels. */
   private static int hiResMegapixels(int drive) {
+    if (drive == DRIVE_HIRES_112) return 112;
     return drive == DRIVE_HIRES_48 ? 48 : 36;
+  }
+
+  /** How many RAW frames a tripod super-resolution drive mode merges. */
+  private static int hiResFramesFor(int drive) {
+    return drive == DRIVE_HIRES_112 ? 9 : 4;
   }
 
   /** The target pixel count a tripod super-resolution drive mode merges toward. */
   private static long hiResTargetPixelsFor(int drive) {
+    if (drive == DRIVE_HIRES_112) return HiResMerger.TARGET_PIXELS_112;
     return drive == DRIVE_HIRES_48 ? HiResMerger.TARGET_PIXELS_48 : HiResMerger.TARGET_PIXELS;
+  }
+
+  /**
+   * The biggest super-resolution merge this device can hold in memory, in pixels. A merged frame
+   * of N pixels costs 2N bytes of Java heap for the accumulator and 4N bytes of native memory for
+   * the ARGB bitmap the developer fills, so a device that cannot hold that merges smaller rather
+   * than dying half way through the sequence.
+   */
+  private long hiResAffordablePixels() {
+    Runtime rt = Runtime.getRuntime();
+    double heapRoom = rt.maxMemory() * 0.42 / 2.0;
+    double ramRoom = Double.MAX_VALUE / 8;
+    try {
+      ActivityManager am = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
+      ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
+      am.getMemoryInfo(mi);
+      ramRoom = mi.availMem * 0.45 / 4.0;
+    } catch (Throwable ignored) {
+      // No memory info: trust the heap alone.
+    }
+    return (long) Math.max(12_000_000L, Math.min(heapRoom, ramRoom));
+  }
+
+  /** The pixel count this run will actually merge toward: the mode's target, or what fits. */
+  private long hiResEffectiveTargetPixels() {
+    return Math.min(hiResTargetPixelsFor(hiResMode), hiResAffordablePixels());
+  }
+
+  /** The linear gain a drive mode's frame count can resolve: sqrt(frames). */
+  private static double hiResMaxScale(int drive) {
+    return drive == DRIVE_HIRES_112 ? HiResMerger.MAX_SCALE_9 : 2.0;
   }
 
   /** Short label for a tripod super-resolution drive mode. */
   private static String hiResLabel(int drive) {
+    if (drive == DRIVE_HIRES_112) return "HI-RES 3 112MP";
     return drive == DRIVE_HIRES_48 ? "HI-RES 2 48MP" : "HI-RES 1 36MP";
   }
 
@@ -4975,8 +5095,13 @@ public final class MainActivity extends ComponentActivity
                     + " focus planes · "
                     + FocusMath.BKT_STEP_NAMES[bktStepMode].toLowerCase(Locale.ROOT)
                     + " step"
-                : drive == DRIVE_HIRES_36 || drive == DRIVE_HIRES_48
-                    ? "4s tripod settle · merges 4 RAWs into " + hiResMegapixels(drive) + "MP"
+                : isHiRes(drive)
+                    ? driveTimerSeconds(drive)
+                        + "s tripod settle · merges "
+                        + hiResFramesFor(drive)
+                        + " RAWs into "
+                        + hiResMegapixels(drive)
+                        + "MP"
                     : drive == DRIVE_SINGLE
                         ? "one frame per press"
                         : "self-timer · tap the shutter to cancel");
@@ -6099,9 +6224,12 @@ public final class MainActivity extends ComponentActivity
       receiptLine(
           s,
           "HI-RES",
-          "4 RAW frames · "
+          m.optInt("hiResFrames", 4)
+              + " RAW frames · "
               + m.optInt("hiResMegapixels", 36)
               + "MP · "
+              + m.optString("hiResPhasesFilled", "0")
+              + "/9 phases · "
               + m.optString("hiResShifts", ""));
     }
     receiptLine(s, "FS BKT", m.optString("bracket", ""));

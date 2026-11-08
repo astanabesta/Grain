@@ -9,19 +9,25 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 /**
- * Streaming 4-frame Tripod Multi-Frame Super-Resolution merger ({@code ~36 MP} or {@code ~48 MP}) in
- * linear Bayer sensor space.
+ * Streaming multi-frame Tripod Multi-Frame Super-Resolution merger ({@code ~36 MP}, {@code ~48 MP}
+ * or {@code ~112 MP}) in linear Bayer sensor space.
  *
  * <p>Each incoming {@link RawFrame} is aligned across a {@code 4 x 4} grid of quadrant tiles to
  * sub-pixel precision ({@code ~0.02 px} via parabolic 2D refinement against Frame 1's anchor
  * pyramid), directional-demosaiced on the fly with its per-frame lens-shading map applied, and
- * accumulated onto a CFA-aligned {@code char[]} grid with ghost rejection so no two full RAW
- * frames need to stay in memory simultaneously.
+ * folded into a CFA-aligned grid with ghost rejection so no two full RAW frames need to stay in
+ * memory simultaneously.
  *
- * <p>The output size is set by the target pixel count ({@link #TARGET_PIXELS} or
- * {@link #TARGET_PIXELS_48}) rather than by the source: the four frames are registered to
- * sub-pixel precision, so the merge resolves more detail than any single frame holds. The
- * linear scale is capped at 2x, which is the most four tripod frames can resolve.
+ * <p>The output size is set by the target pixel count rather than by the source: the frames are
+ * registered to sub-pixel precision, so the merge resolves more detail than any single frame
+ * holds. How much is set by how many frames there are: N frames give N distinct sample positions
+ * inside each source pixel, and reconstructing at s x linear needs s^2 of them, so the usable gain
+ * is sqrt(N) - 2x for the four-frame modes, 3x for the nine-frame mode.
+ *
+ * <p>Everything lives in one {@code short[]}: the grid holds the running mean of the frames folded
+ * in so far, and the optical-PSF deconvolution is applied to it in place. A 112 MP merge therefore
+ * needs about 225 MB rather than the 450 MB two arrays would cost, and the mean never overflows
+ * the way a summed accumulator would (nine frames of a 13-bit value exceed what a char can hold).
  */
 public final class HiResMerger {
   /** Target pixel count for the 36 MP mode (~36 MP: e.g. 6928 x 5196 = 35,997,888 px for a 4:3 sensor). */
@@ -30,11 +36,17 @@ public final class HiResMerger {
   /** Target pixel count for the 48 MP mode (e.g. 8000 x 6000 = 48,000,000 px for a 4:3 sensor). */
   public static final long TARGET_PIXELS_48 = 48_000_000L;
 
+  /** Target pixel count for the nine-frame 112 MP mode (e.g. 12216 x 9164 = 111,963,424 px). */
+  public static final long TARGET_PIXELS_112 = 112_000_000L;
+
   /**
    * The most four tripod frames can resolve through sub-pixel registration: 2x linear. A target that
    * would need more than that is quietly rounded down to it rather than upscaling past the data.
    */
   private static final double MAX_SCALE = 2.0;
+
+  /** The most nine tripod frames can resolve: 3x linear. */
+  public static final double MAX_SCALE_9 = 3.0;
 
   /** 13-bit linear unit so 4 accumulated frames (4 * 8191 = 32,764) fit inside unsigned 16-bit char[]. */
   private static final int ONE_LINEAR = 8191;
@@ -56,6 +68,14 @@ public final class HiResMerger {
    * target that would need more is rounded down to it rather than upscaling past the data.
    */
   public static int[] targetDimensions(int srcW, int srcH, long targetPixels) {
+    return targetDimensions(srcW, srcH, targetPixels, MAX_SCALE);
+  }
+
+  /**
+   * Computes even, 4-pixel-aligned output dimensions for a given target pixel count, capped at the
+   * linear gain the frame count can actually resolve.
+   */
+  public static int[] targetDimensions(int srcW, int srcH, long targetPixels, double maxScale) {
     long srcPixels = (long) srcW * (long) srcH;
     if (srcPixels <= 0) throw new IllegalArgumentException("Invalid source size");
     if (targetPixels <= 0) throw new IllegalArgumentException("Invalid target pixel count");
@@ -63,7 +83,7 @@ public final class HiResMerger {
       return new int[] {srcW & ~3, srcH & ~3};
     }
     double scale = Math.sqrt((double) targetPixels / (double) srcPixels);
-    scale = Math.min(MAX_SCALE, Math.max(1.0, scale));
+    scale = Math.min(Math.max(1.0, maxScale), Math.max(1.0, scale));
     int outW = Math.max(8, ((int) Math.round(srcW * scale) + 2) & ~3);
     int outH = Math.max(8, ((int) Math.round(srcH * scale) + 2) & ~3);
     return new int[] {outW, outH};
@@ -85,10 +105,14 @@ public final class HiResMerger {
 
     private final int gridW, gridH;
     private float[] refGrid;
-    private char[] accSum;
-    private char[] frame0Fallback;
+    /** The running mean of every output pixel, and then the merged frame itself. */
+    private short[] accMean;
     private int framesAdded;
     private final List<String> shiftReports = new ArrayList<>();
+    /** The 3x3 grid of sub-pixel phase cells, one entry per frame: -1 means "not a real phase". */
+    private final int[] phaseCells = new int[9];
+    /** The mean shift of the most recently added frame, in source pixels. */
+    private double lastShiftDx, lastShiftDy;
 
     public Accumulator(RawFrame anchor) {
       this(anchor, TARGET_PIXELS);
@@ -96,9 +120,17 @@ public final class HiResMerger {
 
     /** @param targetPixels nominal output size for this mode (36 MP or 48 MP). */
     public Accumulator(RawFrame anchor, long targetPixels) {
+      this(anchor, targetPixels, MAX_SCALE);
+    }
+
+    /**
+     * @param targetPixels nominal output size for this mode.
+     * @param maxScale the linear gain this many frames can resolve: sqrt(frames).
+     */
+    public Accumulator(RawFrame anchor, long targetPixels, double maxScale) {
       this.srcW = anchor.width;
       this.srcH = anchor.height;
-      int[] dims = targetDimensions(srcW, srcH, targetPixels);
+      int[] dims = targetDimensions(srcW, srcH, targetPixels, maxScale);
       this.outW = dims[0];
       this.outH = dims[1];
       this.cfa = anchor.cfa;
@@ -129,11 +161,11 @@ public final class HiResMerger {
         this.gridH = ALIGN_LONG;
         this.gridW = Math.max(32, Math.round((float) ALIGN_LONG * srcW / srcH));
       }
-      this.accSum = new char[outW * outH];
+      this.accMean = new short[outW * outH];
     }
 
     public synchronized void addFrame(RawFrame frame) {
-      if (accSum == null) throw new IllegalStateException("Accumulator already finished");
+      if (accMean == null) throw new IllegalStateException("Accumulator already finished");
       if (frame.width != srcW || frame.height != srcH) {
         throw new IllegalArgumentException("Frame dimensions changed mid-burst");
       }
@@ -146,7 +178,9 @@ public final class HiResMerger {
       if (framesAdded == 0) {
         this.refGrid = curGrid;
         for (int i = 0; i < tileGhostBlend.length; i++) tileGhostBlend[i] = 1.0f;
-        shiftReports.add("f1:(0.00,0.00)px");
+        shiftReports.add("f1:(0.00,0.00)px[0,0]");
+        // The anchor is itself one of the nine sub-pixel samples.
+        phaseCells[0] = 0;
       } else {
         double meanDx = 0, meanDy = 0;
         float scaleToFullX = (float) srcW / gridW;
@@ -167,15 +201,24 @@ public final class HiResMerger {
         }
         meanDx /= (TILES_X * TILES_Y);
         meanDy /= (TILES_X * TILES_Y);
+        lastShiftDx = meanDx;
+        lastShiftDy = meanDy;
+        int cell = phaseCell(meanDy) * 3 + phaseCell(meanDx);
+        if (framesAdded < phaseCells.length) phaseCells[framesAdded] = cell;
         shiftReports.add(
-            String.format(Locale.US, "f%d:(%+.2f,%+.2f)px", framesAdded + 1, meanDx, meanDy));
+            String.format(
+                Locale.US,
+                "f%d:(%+.2f,%+.2f)px[%d,%d]",
+                framesAdded + 1,
+                meanDx,
+                meanDy,
+                phaseCell(meanDx),
+                phaseCell(meanDy)));
       }
 
       final int fIdx = framesAdded;
       final boolean isAnchor = (fIdx == 0);
-      if (isAnchor) {
-        this.frame0Fallback = new char[outW * outH];
-      }
+      final int framesSoFar = fIdx;
 
       int threads = Math.max(1, Math.min(8, Runtime.getRuntime().availableProcessors()));
       ExecutorService pool = Executors.newFixedThreadPool(threads);
@@ -187,7 +230,7 @@ public final class HiResMerger {
           final int ye = Math.min(outH, y0 + stripH);
           tasks.add(
               () -> {
-                splatStrip(frame, ys, ye, isAnchor, tileDx, tileDy, tileGhostBlend);
+                splatStrip(frame, ys, ye, isAnchor, framesSoFar, tileDx, tileDy, tileGhostBlend);
                 return null;
               });
         }
@@ -208,28 +251,47 @@ public final class HiResMerger {
       return String.join(" ", shiftReports);
     }
 
+    /** The sub-pixel phase cell (0..8) each frame landed on; -1 where there is none. */
+    public int[] phaseCells() {
+      return phaseCells.clone();
+    }
+
+    /** The size of the mean shift of the last frame from the anchor, in source pixels. */
+    public double lastShiftPx() {
+      return Math.sqrt(lastShiftDx * lastShiftDx + lastShiftDy * lastShiftDy);
+    }
+
+    /** How many of the nine sub-pixel phase cells the frames have covered between them. */
+    public int phasesFilled() {
+      boolean[] seen = new boolean[9];
+      for (int cell : phaseCells) if (cell >= 0) seen[cell] = true;
+      int n = 0;
+      for (boolean b : seen) if (b) n++;
+      return n;
+    }
+
+    /** Which third of a pixel a shift lands in: -1.5 px is 0.5, 0.2 px is 0.2, so the cell is 1. */
+    private static int phaseCell(double shift) {
+      double frac = shift - Math.floor(shift);
+      int cell = (int) Math.round(frac * 3);
+      if (cell < 0) cell = 0;
+      if (cell > 2) cell = 2;
+      return cell;
+    }
+
     /** Finalizes accumulation, applies edge-protected optical PSF deconvolution, and returns the merged RawFrame. */
     public synchronized RawFrame finish() {
-      if (accSum == null || framesAdded <= 0) {
+      if (accMean == null || framesAdded <= 0) {
         throw new IllegalStateException("No frames accumulated");
       }
-      this.frame0Fallback = null;
       this.refGrid = null;
 
       final int count = framesAdded;
-      final char[] avg = this.accSum;
-      if (count > 1) {
-        int total = outW * outH;
-        int half = count / 2;
-        for (int i = 0; i < total; i++) {
-          avg[i] = (char) Math.min(ONE_LINEAR, (avg[i] + half) / count);
-        }
-      }
-
-      // Allocate the final Bayer RawFrame and apply 1-pass CFA-aware optical PSF micro-deconvolution
-      short[] outPixels = new short[outW * outH];
-      deconvolveSameColorPsa(avg, outPixels, outW, outH, count);
-      this.accSum = null;
+      // The grid already holds the mean of the frames, so the only thing left is the optical PSF
+      // micro-deconvolution - and it is applied in place, so the merge costs one array, not two.
+      short[] outPixels = this.accMean;
+      deconvolveInPlace(outPixels, outW, outH, count);
+      this.accMean = null;
 
       RawFrame merged = new RawFrame(outPixels, outW, outH, outW);
       merged.cfa = this.cfa;
@@ -273,6 +335,7 @@ public final class HiResMerger {
         int ys,
         int ye,
         boolean isAnchor,
+        int framesSoFar,
         float[] tileDx,
         float[] tileDy,
         float[] tileGhostBlend) {
@@ -314,19 +377,22 @@ public final class HiResMerger {
           int iv = Math.max(0, Math.min(ONE_LINEAR, Math.round(val)));
 
           int outIdx = rowOff + ox;
+          float old = accMean[outIdx];
+          float blended;
           if (isAnchor) {
-            frame0Fallback[outIdx] = (char) iv;
-            accSum[outIdx] = (char) iv;
+            blended = iv;
           } else {
-            int anchorVal = frame0Fallback[outIdx];
-            // Per-pixel anti-ghost check: if pixel differs wildly from anchor (>14% full scale), blend toward anchor
-            int diff = Math.abs(iv - anchorVal);
-            float pixTrust =
-                diff <= 650 ? 1.0f : diff >= 1500 ? 0.0f : (1500f - diff) / 850f;
+            // Per-pixel anti-ghost check: if the pixel differs wildly from what has been
+            // accumulated so far (>8% full scale), it belongs to something that moved, so this
+            // frame's value is pulled back towards the mean instead of being folded in.
+            int diff = Math.abs(iv - Math.round(old));
+            float pixTrust = diff <= 650 ? 1.0f : diff >= 1500 ? 0.0f : (1500f - diff) / 850f;
             float w = trust * pixTrust;
-            int blended = Math.round(w * iv + (1.0f - w) * anchorVal);
-            accSum[outIdx] = (char) (accSum[outIdx] + blended);
+            blended = w * iv + (1.0f - w) * old;
           }
+          // The running mean, so the grid never has to hold a sum that could overflow.
+          float mean = (old * framesSoFar + blended) / (framesSoFar + 1f);
+          accMean[outIdx] = (short) Math.max(0, Math.min(ONE_LINEAR, Math.round(mean)));
         }
       }
     }
@@ -455,19 +521,29 @@ public final class HiResMerger {
   }
 
   /** Same-CFA-parity (step 2) edge-protected optical PSF micro-contrast deconvolution. */
-  private static void deconvolveSameColorPsa(
-      char[] src, short[] dst, int w, int h, int frameCount) {
+  /**
+   * The CFA-aware optical PSF micro-deconvolution, applied in place. The filter reads the centre
+   * and four neighbours at radius 2, so the two rows above are kept in a small rolling buffer and
+   * the row below is still untouched in the array. Writing in place is what lets a 112 MP merge
+   * live in a single 225 MB array instead of needing a second one beside it.
+   */
+  private static void deconvolveInPlace(short[] a, int w, int h, int frameCount) {
     final float amount = frameCount >= 4 ? 0.34f : (frameCount >= 2 ? 0.22f : 0.12f);
+    short[] rowUp2 = new short[w]; // original row y-2
+    short[] rowUp1 = new short[w]; // original row y-1
+    short[] rowNow = new short[w]; // original row y
+    short[] outRow = new short[w];
     for (int y = 0; y < h; y++) {
-      int yM2 = y >= 2 ? y - 2 : y;
-      int yP2 = y + 2 < h ? y + 2 : y;
-      int row = y * w, rM2 = yM2 * w, rP2 = yP2 * w;
+      final int row = y * w;
+      System.arraycopy(a, row, rowNow, 0, w);
+      final int rP2 = (y + 2 < h ? y + 2 : y) * w;
       for (int x = 0; x < w; x++) {
-        int c = src[row + x];
+        int c = rowNow[x];
         int xM2 = x >= 2 ? x - 2 : x;
         int xP2 = x + 2 < w ? x + 2 : x;
-        int nL = src[row + xM2], nR = src[row + xP2];
-        int nU = src[rM2 + x], nD = src[rP2 + x];
+        int nL = rowNow[xM2], nR = rowNow[xP2];
+        int nU = y >= 2 ? rowUp2[x] : c;
+        int nD = (y + 2 < h) ? a[rP2 + x] : c;
         float blur = 0.25f * (nL + nR + nU + nD);
         float detail = c - blur;
         // Soft coring & highlight rolloff so sensor noise floor and clipped speculars never ring
@@ -475,8 +551,13 @@ public final class HiResMerger {
         float gate = absD <= 14f ? 0f : Math.min(1f, (absD - 14f) / 48f);
         float hiRoll = c >= (ONE_LINEAR * 0.90f) ? Math.max(0f, (ONE_LINEAR - c) / (ONE_LINEAR * 0.10f)) : 1f;
         int out = Math.round(c + detail * amount * gate * hiRoll);
-        dst[row + x] = (short) Math.max(0, Math.min(ONE_LINEAR, out));
+        outRow[x] = (short) Math.max(0, Math.min(ONE_LINEAR, out));
       }
+      System.arraycopy(outRow, 0, a, row, w);
+      short[] swap = rowUp2;
+      rowUp2 = rowUp1;
+      rowUp1 = rowNow;
+      rowNow = swap;
     }
   }
 
