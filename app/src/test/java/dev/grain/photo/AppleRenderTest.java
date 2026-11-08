@@ -674,6 +674,145 @@ public class AppleRenderTest {
     assertTrue("Fine edge acutance stays razor-sharp (" + edgeGradV092 + ")", edgeGradV092 > 22.0);
   }
 
+  @Test
+  public void darkHairStrandsSurviveNrWithoutSpecklesOrBlockyQuilt() throws Exception {
+    // ISO 1600 scene with three torture zones (dark tones at L=0.030, ~sRGB 50-70 out):
+    //  x < 32:      dark flat with a known sparse speck grid (every 24 px hot +48% / dead -48%)
+    //  40..110:     dark low-contrast hair-like vertical strands (2 px on / 9 px period)
+    //  130..190:    dark flat with noise only (quilt-smudge + dirtiness check)
+    //  200..236:    bright flat wall (L=0.30)
+    int w = 240, h = 160;
+    double[] n = {0.5, 1.0, 0.625};
+    short[] data = new short[w * h];
+    RawFrame frame = new RawFrame(data, w, h, w);
+    long rng = 24681357L;
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        int c = frame.color(x, y);
+        double base;
+        if (x < 32) {
+          base = 0.030;
+          if (x % 24 == 4 && y % 24 == 4) base *= 1.48; // known hot speck
+          else if (x % 24 == 16 && y % 24 == 16) base *= 0.52; // known dead speck
+        } else if (x < 120) {
+          base = (x % 9) < 2 ? 0.058 : 0.030; // hair strands
+        } else if (x < 200) {
+          base = 0.030; // dark flat, noise only
+        } else {
+          base = 0.30; // bright wall
+        }
+        rng = rng * 6364136223846793005L + 1442695040888963407L;
+        double u1 = (((rng >>> 32) & 0xFFFF) + 0.5) / 65536.0;
+        rng = rng * 6364136223846793005L + 1442695040888963407L;
+        double u2 = (((rng >>> 32) & 0xFFFF) + 0.5) / 65536.0;
+        double gauss = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+        double sigma = Math.sqrt(0.00018 * base + 0.000012); // ISO 1600
+        double v = Math.max(0.002, Math.min(1.0, (base + gauss * sigma) * n[c]));
+        data[y * w + x] = (short) Math.round(64 + v * (1023 - 64));
+      }
+    }
+    frame.neutral = n;
+    frame.colorMatrix1 = PHONE_CM1;
+    frame.colorMatrix2 = PHONE_CM2;
+    frame.forwardMatrix1 = PHONE_FM1;
+    frame.forwardMatrix2 = PHONE_FM2;
+    frame.illuminant1 = 21;
+    frame.illuminant2 = 17;
+    frame.iso = 1600;
+
+    int[] pxFixed = new int[w * h];
+    RawDeveloper.Options opt = new RawDeveloper.Options();
+    opt.grain = false;
+    RawDeveloper.develop(
+        frame,
+        FujiRecipe.IPHONE_XS_MAX,
+        null,
+        opt,
+        (y, rows, argb, width) -> System.arraycopy(argb, 0, pxFixed, y * width, rows * width));
+
+    int[] pxRaw = new int[w * h];
+    RawDeveloper.Options optRaw = new RawDeveloper.Options();
+    optRaw.grain = false;
+    optRaw.lumaNr = 0.02;
+    RawDeveloper.develop(
+        frame,
+        FujiRecipe.IPHONE_XS_MAX,
+        null,
+        optRaw,
+        (y, rows, argb, width) -> System.arraycopy(argb, 0, pxRaw, y * width, rows * width));
+
+    int y0 = 16, y1 = h - 16;
+    double wallD1 = diff1Mean(pxFixed, w, 206, 232, y0, y1);
+    double darkD1 = diff1Mean(pxFixed, w, 134, 186, y0, y1);
+    double strandD1 = diff1Mean(pxFixed, w, 46, 106, y0, y1);
+    double strandD1Raw = diff1Mean(pxRaw, w, 46, 106, y0, y1);
+    double speckFixed = speckGridDev(pxFixed, w);
+    double speckRaw = speckGridDev(pxRaw, w);
+    double quilt = blockJump4(pxFixed, w, 134, 186, y0, y1);
+    double quiltRaw = blockJump4(pxRaw, w, 134, 186, y0, y1);
+    System.out.println(
+        "DBG wallD1=" + wallD1 + " darkD1=" + darkD1 + " strandD1=" + strandD1
+            + " strandRaw=" + strandD1Raw + " speckF=" + speckFixed + " speckR=" + speckRaw
+            + " quiltF=" + quilt + " quiltR=" + quiltRaw);
+
+    assertTrue("bright wall stays silk-clean (" + wallD1 + ")", wallD1 < 1.8);
+    assertTrue("dark flat not noisier than the noise gate allows (" + darkD1 + ")", darkD1 < 4.5);
+    assertTrue(
+        "specks crushed (" + speckFixed + " vs raw " + speckRaw + ")",
+        speckFixed <= 0.35 * speckRaw);
+    assertTrue(
+        "hair strands retain texture (" + strandD1 + " vs raw " + strandD1Raw + ")",
+        strandD1 >= 0.42 * strandD1Raw && strandD1 > 1.2);
+    assertTrue(
+        "no 4x4 quilt smudge on dark flat (blockJump=" + quilt + " vs pixel d1 " + darkD1 + ")",
+        quilt < Math.max(1.6, 0.6 * darkD1));
+  }
+
+  /** Mean absolute deviation of the known speck-grid pixels from their 8 neighbours' mean. */
+  private static double speckGridDev(int[] argb, int w) {
+    double sum = 0;
+    int cnt = 0;
+    for (int y = 20; y < 160 - 20; y++)
+      for (int x = 4; x < 32; x++) {
+        boolean hit = (x % 24 == 4 && y % 24 == 4) || (x % 24 == 16 && y % 24 == 16);
+        if (!hit) continue;
+        double c = lumaAt(argb, w, x, y), s = 0;
+        for (int dy = -1; dy <= 1; dy++)
+          for (int dx = -1; dx <= 1; dx++)
+            if (dx != 0 || dy != 0) s += lumaAt(argb, w, x + dx, y + dy);
+        sum += Math.abs(c - s / 8);
+        cnt++;
+      }
+    return sum / Math.max(1, cnt);
+  }
+
+  private static double lumaAt(int[] argb, int w, int x, int y) {
+    int p = argb[y * w + x];
+    return 0.299 * ((p >> 16) & 255) + 0.587 * ((p >> 8) & 255) + 0.114 * (p & 255);
+  }
+
+  private static double blockJump4(int[] argb, int w, int x0, int x1, int y0, int y1) {
+    double sum = 0;
+    long cnt = 0;
+    for (int by = y0 / 4 * 4; by + 4 <= y1; by += 4)
+      for (int bx = x0 / 4 * 4; bx + 8 <= x1; bx += 4) {
+        double m0 = blockMean(argb, w, bx, by), m1 = blockMean(argb, w, bx + 4, by);
+        sum += Math.abs(m1 - m0);
+        cnt++;
+      }
+    return sum / Math.max(1, cnt);
+  }
+
+  private static double blockMean(int[] argb, int w, int x0, int y0) {
+    double sum = 0;
+    for (int y = y0; y < y0 + 4; y++)
+      for (int x = x0; x < x0 + 4; x++) {
+        int p = argb[y * w + x];
+        sum += 0.299 * ((p >> 16) & 255) + 0.587 * ((p >> 8) & 255) + 0.114 * (p & 255);
+      }
+    return sum / 16.0;
+  }
+
   private static double lumaMean(int[] argb, int w, int x0, int x1, int y0, int y1) {
     double sum = 0;
     long n = 0;

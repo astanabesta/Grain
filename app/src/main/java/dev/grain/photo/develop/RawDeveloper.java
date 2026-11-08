@@ -1424,6 +1424,7 @@ public final class RawDeveloper {
         if (colSum == null) colSum = new float[qW];
         env = new float[n];
         float[] m1 = new float[n], m2 = new float[n], box = new float[n], det = new float[n];
+        float[] texAdd = new float[n];
         for (int i = 0; i < n; i++) {
           float norm =
               AppleRender.sceneNormDisplayP3(qLin[3 * i], qLin[3 * i + 1], qLin[3 * i + 2]);
@@ -1467,10 +1468,16 @@ public final class RawDeveloper {
           float detVal = det[i];
           float det2 = detVal * detVal;
           float snrDet = det2 / (det2 + 6f * blockEvVar + 0.0008f);
-          env[i] =
-              AppleRender.localToneDeltaEv(macro, appleStyle, recipeHighlight, recipeShadow)
-                  + 0.24f * floorGuard * snrDet * detVal;
+          env[i] = AppleRender.localToneDeltaEv(macro, appleStyle, recipeHighlight, recipeShadow);
+          texAdd[i] = 0.24f * floorGuard * snrDet * detVal;
         }
+        // The texture re-add is evaluated per quarter-resolution cell (4x4 px) and its SNR gate
+        // can flip cell-to-cell in noisy texture (dark hair), quilting the tone delta into
+        // visible smudge patches; a 3x3-cell box pre-blur keeps the local energy while the
+        // downstream bilinear upsample stays seamless.
+        float[] texSm = new float[n];
+        boxMean(texAdd, texSm, 1, box);
+        for (int i = 0; i < n; i++) env[i] += texSm[i];
       } else {
         env = null;
       }
@@ -2408,13 +2415,35 @@ public final class RawDeveloper {
           if (appleSnr) {
             float conf = bb[o + x];
             float gate = conf <= 0.06f ? 0f : conf >= 0.42f ? 1f : sstep(0.06f, 0.42f, conf);
-            float keepEff = keep + Math.max(0f, 0.46f - keep) * gate;
+            // Dark-tone texture floor: fine low-contrast strands (hair, brows, shaded fur) sit
+            // below the shot-noise SNR gate even though they are real texture. Restore a share
+            // of kept detail + sharpening only where the tone is dark (code <= 0.10, ~sRGB 95)
+            // AND the denoised 3x3 high-pass shows multi-pixel texture clearly above the
+            // measured noise sigma, so dark flats stay noise-free while dark strands return.
+            float tiD = q * NR_TABLE;
+            int td = tiD <= 0 ? 0 : tiD >= NR_TABLE ? NR_TABLE : (int) tiD;
+            float sh2 = sg[o + x];
+            float sig2 = epsF * (nA[td] * sh2 + nB[td] * sh2 * sh2) + 1e-7f;
+            float sig = (float) Math.sqrt(sig2);
             float hp = q - blur;
+            float dark = q >= 0.10f ? 0f : q <= 0.03f ? 1f : 1f - sstep(0.03f, 0.10f, q);
+            float tex = sstep(1.6f * sig, 3.2f * sig, Math.abs(hp));
+            float gate2 = gate + (1f - gate) * (0.42f * dark * tex);
+            float keepEff = keep + Math.max(0f, 0.46f - keep) * gate2;
             float hpCored = hp / (1f + 5.5f * Math.abs(hp));
+            // Impulse suppression: isolated single-pixel specks (hot pixels, residual shot
+            // outliers) carry a large raw residual but no local high-pass energy, so crush them
+            // against the measured noise sigma only where the 3x3 high-pass really is flat
+            // (strands 2+ px wide and hard edges keep their honest amplitude).
+            float res = y - q;
+            float imp =
+                sstep(3f * sig, 5f * sig, Math.abs(res))
+                    * (1f - sstep(0.5f * sig, 1.5f * sig, Math.abs(hp)));
+            float rUse = res * (1f - 0.85f * imp);
             yo =
                 q
-                    + lambda * (0.06f + 0.94f * gate) * hpCored
-                    + keepEff * (y - q)
+                    + lambda * (0.06f + 0.94f * gate2) * hpCored
+                    + keepEff * rUse
                     + t0
                     + fy * (t1 - t0);
           } else {
