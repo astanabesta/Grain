@@ -39,6 +39,15 @@ final class RawDevelopment {
 
   private RawDevelopment() {}
 
+  /** Portrait-mode request: apertureF = 0 disables it; otherwise the f-number to simulate. */
+  static final class Portrait {
+    final float apertureF;
+
+    Portrait(float apertureF) {
+      this.apertureF = apertureF;
+    }
+  }
+
   static Output develop(
       Context context,
       GrainCamera.RawCapture capture,
@@ -48,7 +57,8 @@ final class RawDevelopment {
       float ev,
       long seed,
       boolean faceExposure,
-      boolean releaseFrameAfterDevelop)
+      boolean releaseFrameAfterDevelop,
+      Portrait portrait)
       throws Exception {
     String faceSearch = null;
     RawFrame frame = capture.frame;
@@ -67,6 +77,7 @@ final class RawDevelopment {
     final int outW = frame.width, outH = frame.height;
     final int frameIso = frame.iso;
     final long frameExposureNs = frame.exposureNs;
+    final int[] frameFaces = frame.faces;
     final Bitmap bitmap = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888);
     Bitmap gainmapBmp = null;
     File tmp = null;
@@ -105,6 +116,62 @@ final class RawDevelopment {
                 options.outGainmapH,
                 AppleRender.GAINMAP_RATIO_MAX);
         options.outGainmap = null;
+      }
+
+      // Portrait mode (people + held subjects sharp, natural lens-style background bokeh).
+      if (portrait != null && portrait.apertureF > 0.1f) {
+        long tp = System.nanoTime();
+        if ((long) outW * outH > 34_000_000L) {
+          stats.put("portrait", "skipped (hi-res frame)");
+        } else {
+          int qw = (outW + 3) / 4, qh = (outH + 3) / 4;
+          float[] maskQ = null;
+          String maskSrc = null;
+          try {
+            float[] maskU =
+                PortraitSegmenter.maskUpright(context, bitmap, capture.orientationDegrees);
+            if (maskU != null) {
+              int uqW = ((outW + 3) / 4), uqH = ((outH + 3) / 4);
+              if (capture.orientationDegrees == 90 || capture.orientationDegrees == 270) {
+                uqW = (outH + 3) / 4;
+                uqH = (outW + 3) / 4;
+              }
+              maskQ =
+                  dev.grain.photo.develop.PortraitBokeh.sampleUprightMaskToSensor(
+                      maskU, uqW, uqH, outW, outH, capture.orientationDegrees);
+              maskSrc = "person segmentation";
+            }
+          } catch (Throwable t2) {
+            stats.put("portraitSegmenter", "failed: " + t2.getMessage());
+          }
+          if (maskQ == null) {
+            int bestFace = Faces.pick(frameFaces, null, outW, outH);
+            if (bestFace >= 0) {
+              int[] rect = {
+                frameFaces[bestFace * 4],
+                frameFaces[bestFace * 4 + 1],
+                frameFaces[bestFace * 4 + 2],
+                frameFaces[bestFace * 4 + 3]
+              };
+              maskQ = dev.grain.photo.develop.PortraitBokeh.faceEllipseMask(rect, outW, outH);
+              maskSrc = "face silhouette";
+            }
+          }
+          if (maskQ != null) {
+            int[] px = new int[outW * outH];
+            bitmap.getPixels(px, 0, outW, 0, 0, outW, outH);
+            float rUsed =
+                dev.grain.photo.develop.PortraitBokeh.apply(
+                    px, outW, outH, maskQ, qw, qh, portrait.apertureF, px);
+            bitmap.setPixels(px, 0, outW, 0, 0, outW, outH);
+            stats.put(
+                "portrait",
+                "f/" + portrait.apertureF + " · " + maskSrc + " · disc " + Math.round(rUsed) + "px");
+          } else {
+            stats.put("portrait", "no subject found");
+          }
+        }
+        stats.put("portraitMs", (System.nanoTime() - tp) / 1_000_000);
       }
 
       long t = System.nanoTime();
