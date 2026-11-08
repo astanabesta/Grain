@@ -264,6 +264,8 @@ public final class UltraHdrJpeg {
   }
 
   /** Isolated API 34+ class so Android 10-13 Dalvik/ART verifiers never resolve {@link Gainmap}. */
+  @android.annotation.TargetApi(34)
+  @android.annotation.SuppressLint("NewApi")
   private static final class Api34 {
     static Bitmap attach(
         Bitmap sdrBitmap, byte[] gainmapBytes, int qW, int qH, float maxHdrRatio) {
