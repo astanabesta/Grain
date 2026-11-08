@@ -51,4 +51,26 @@ public class FramingTest {
     assertEquals(1, Framing.zoom(Double.NaN), 0);
     assertEquals(5, Framing.zoom(100), 0);
   }
+
+  @Test
+  public void sensorCropRectMapsUprightCropAcrossAllRotations() {
+    // 112 MP sensor frame (12220 x 9164). Portrait (orientation 6 / 8) makes upright 9164 x 12220.
+    int rawW = 12220, rawH = 9164;
+    int[] sqPortrait = Framing.crop(rawH, rawW, "1:1", 1.0); // [0, 1528, 9164, 9164]
+    assertArrayEquals(new int[] {0, 1528, 9164, 9164}, sqPortrait);
+
+    int[] r6 = Framing.sensorCropRect(rawW, rawH, 6, sqPortrait);
+    assertArrayEquals(new int[] {1528, 0, 9164, 9164}, r6);
+
+    int[] r8 = Framing.sensorCropRect(rawW, rawH, 8, sqPortrait);
+    assertArrayEquals(new int[] {1528, 0, 9164, 9164}, r8);
+
+    // Asymmetric zoomed crop to verify non-symmetric corner mapping on 1, 3, 6, 8.
+    int[] asymUp = new int[] {10, 20, 30, 40}; // inside upright 60 x 100 (raw 100 x 60 for 6/8)
+    assertArrayEquals(new int[] {10, 20, 30, 40}, Framing.sensorCropRect(60, 100, 1, asymUp));
+    assertArrayEquals(new int[] {20, 40, 30, 40}, Framing.sensorCropRect(60, 100, 3, asymUp));
+    assertArrayEquals(new int[] {20, 20, 40, 30}, Framing.sensorCropRect(100, 60, 6, asymUp));
+    assertArrayEquals(new int[] {40, 10, 40, 30}, Framing.sensorCropRect(100, 60, 8, asymUp));
+    assertNull(Framing.sensorCropRect(100, 60, 2, asymUp)); // mirrored -> fallback path
+  }
 }

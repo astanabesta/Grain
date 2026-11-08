@@ -2085,6 +2085,7 @@ public final class MainActivity extends ComponentActivity
               hiResAnchorDng = null;
               hiResAnchorPhoneJpeg = null;
 
+              long mergedSeed = mergedFrame.exposureNs ^ System.nanoTime();
               GrainCamera.RawCapture mergedCapture =
                   new GrainCamera.RawCapture(
                       mergedFrame,
@@ -2092,6 +2093,8 @@ public final class MainActivity extends ComponentActivity
                       keptDng,
                       capture.orientationDegrees,
                       capture.uprightDegrees);
+              // Drop the outer reference so RawDevelopment can free the 225 MB merge frame before JPEG encode.
+              mergedFrame = null;
 
               CubeLut lut = luts.load(film.filmSimulation);
               long devStart = System.nanoTime();
@@ -2103,8 +2106,9 @@ public final class MainActivity extends ComponentActivity
                       tuned,
                       lut,
                       developEv,
-                      mergedFrame.exposureNs ^ System.nanoTime(),
-                      meterFaces);
+                      mergedSeed,
+                      meterFaces,
+                      true);
               long devMs = (System.nanoTime() - devStart) / 1_000_000;
 
               receipt.put(
@@ -2124,15 +2128,20 @@ public final class MainActivity extends ComponentActivity
               if (manual != null) receipt.put("developEv", developEv);
               receipt.put("development", out.stats.put("totalMs", devMs));
 
-              PhotoStore.Photo saved =
-                  store.save(
-                      out.jpeg,
-                      settings.ratio,
-                      settings.zoom,
-                      settings.keepFull,
-                      receipt,
-                      keptDng,
-                      keptPhone);
+              PhotoStore.Photo saved;
+              try {
+                saved =
+                    store.saveFile(
+                        out.jpegFile,
+                        settings.ratio,
+                        settings.zoom,
+                        settings.keepFull,
+                        receipt,
+                        keptDng,
+                        keptPhone);
+              } finally {
+                if (out.jpegFile.exists()) out.jpegFile.delete();
+              }
               if (keptDng != null && keptDng.exists() && !keptDng.delete()) {
                 android.util.Log.w("Grain", "Temp anchor DNG kept");
               }
@@ -2157,21 +2166,24 @@ public final class MainActivity extends ComponentActivity
                     status.setText(
                         String.format(
                             Locale.US,
-                            "%d × %d (%.1f MP) · %s · 4-RAW Hi-Res (%.1f s)",
+                            "%d × %d (%.1f MP) · %s · %d-RAW Hi-Res (%.1f s)",
                             w,
                             h,
                             mp,
                             filmName,
+                            hFrames,
                             totalSecMs / 1000.0));
                     updateThumb();
                     syncMagnifier();
-                    message(
+                    showSnackbar(
                         String.format(
                             Locale.US,
-                            "%.1f MP Hi-Res merged from %d RAW frames · %s",
+                            "%.1f MP Hi-Res saved in PLAY (%d RAWs · %s)",
                             mp,
                             hFrames,
-                            filmName));
+                            filmName),
+                        "SAVE",
+                        () -> export(saved, false, false));
                   });
             } catch (Throwable e) {
               if (capture.dng != null && capture.dng.exists() && !capture.dng.delete()) {
@@ -2224,18 +2236,24 @@ public final class MainActivity extends ComponentActivity
                       lut,
                       developEv,
                       capture.frame.exposureNs ^ System.nanoTime(),
-                      meterFaces);
+                      meterFaces,
+                      i == bracket.length - 1);
               frameReceipt.put(
                   "development", out.stats.put("totalMs", (System.nanoTime() - start) / 1_000_000));
-              PhotoStore.Photo saved =
-                  store.save(
-                      out.jpeg,
-                      settings.ratio,
-                      settings.zoom,
-                      settings.keepFull,
-                      frameReceipt,
-                      i == 0 ? capture.dng : null,
-                      i == 0 && keepRawFiles ? capture.phoneJpeg : null);
+              PhotoStore.Photo saved;
+              try {
+                saved =
+                    store.saveFile(
+                        out.jpegFile,
+                        settings.ratio,
+                        settings.zoom,
+                        settings.keepFull,
+                        frameReceipt,
+                        i == 0 ? capture.dng : null,
+                        i == 0 && keepRawFiles ? capture.phoneJpeg : null);
+              } finally {
+                if (out.jpegFile.exists()) out.jpegFile.delete();
+              }
               if (i == 0) photo = saved;
               int done = i + 1;
               if (bracket.length > 1 && done < bracket.length)
@@ -5108,13 +5126,15 @@ public final class MainActivity extends ComponentActivity
    */
   private long hiResAffordablePixels() {
     Runtime rt = Runtime.getRuntime();
-    double heapRoom = rt.maxMemory() * 0.42 / 2.0;
+    // Banded RAW development keeps quarter-res planes under ~85 MB regardless of output size, so
+    // the Java heap only holds the 2N-byte Bayer frame plus ~125 MB of band/strip headroom.
+    double heapRoom = Math.max(0.0, rt.maxMemory() - 125_000_000.0) / 2.0;
     double ramRoom = Double.MAX_VALUE / 8;
     try {
       ActivityManager am = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
       ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
       am.getMemoryInfo(mi);
-      ramRoom = mi.availMem * 0.45 / 4.0;
+      ramRoom = mi.availMem * 0.55 / 4.0;
     } catch (Throwable ignored) {
       // No memory info: trust the heap alone.
     }

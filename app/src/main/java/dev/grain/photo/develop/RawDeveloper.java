@@ -379,6 +379,13 @@ public final class RawDeveloper {
     /** Desktop harness only: W x H planes receiving pre-NR luma codes and the modelled noise variance. */
     public float[] debugLuma, debugNoise, debugQuarter;
     public int threads = Math.max(1, Math.min(8, Runtime.getRuntime().availableProcessors()));
+    /**
+     * Maximum pixels processed in a single quarter-resolution pass. Frames larger than this (such
+     * as 48 MP and 112 MP super-resolution merges) are developed in horizontal bands with exact
+     * filter-support overlap so peak Java heap stays well within mobile limits without visible or
+     * numerical seams.
+     */
+    public long maxBandPixels = 32_000_000L;
   }
 
   public static Map<String, Object> develop(
@@ -387,34 +394,110 @@ public final class RawDeveloper {
     Map<String, Object> stats = new LinkedHashMap<>();
     stats.put("engine", VERSION);
     final Job job = new Job(f, recipe, lut, o, stats);
-    final List<Worker> workers = new ArrayList<>();
     long t1 = System.nanoTime();
     int threads = Math.max(1, o.threads);
+    final int stripThreads = f.width >= 8000 ? Math.min(threads, 4) : threads;
+    final int stripH = f.width >= 8000 ? 16 : STRIP;
+    boolean canBand =
+        o.debugLuma == null
+            && o.debugNoise == null
+            && o.debugQuarter == null
+            && o.maxBandPixels > 0
+            && (long) f.width * f.height > o.maxBandPixels;
+    long[] ns = new long[4];
     ExecutorService pool = Executors.newFixedThreadPool(threads);
     try {
-      long tq = System.nanoTime();
-      job.quarter(pool, threads);
-      stats.put("quarterMs", Math.round((System.nanoTime() - tq) / 1e6));
-      stats.put("quarterDenoiseMs", job.quarterDenoiseMs);
+      long totalQuarterNs = 0, totalQuarterDenoiseMs = 0;
+      if (!canBand) {
+        long tq = System.nanoTime();
+        job.prepareBand(0, f.height);
+        job.quarter(pool, threads);
+        totalQuarterNs = System.nanoTime() - tq;
+        totalQuarterDenoiseMs = job.quarterDenoiseMs;
+        AtomicInteger next = new AtomicInteger();
+        int strips = (f.height + stripH - 1) / stripH;
+        List<Worker> bandWorkers = new ArrayList<>(stripThreads);
+        for (int t = 0; t < stripThreads; t++) bandWorkers.add(new Worker(job, stripH));
+        List<Callable<Void>> tasks = new ArrayList<>();
+        for (int t = 0; t < stripThreads; t++) {
+          final Worker w = bandWorkers.get(t);
+          tasks.add(
+              () -> {
+                for (int i = next.getAndIncrement(); i < strips; i = next.getAndIncrement())
+                  w.strip(i * stripH, Math.min(f.height, i * stripH + stripH), sink);
+                return null;
+              });
+        }
+        for (Future<Void> fu : pool.invokeAll(tasks)) fu.get();
+        for (Worker w : bandWorkers) {
+          ns[0] += w.nsCfa;
+          ns[1] += w.nsDemosaic;
+          ns[2] += w.nsNoise;
+          ns[3] += w.nsFinish;
+        }
+        bandWorkers.clear();
+        job.releaseBand();
+      } else {
+        if (!job.firstVersion) job.lockGlobalChromaNoise();
+        int glowRad =
+            job.glow
+                ? 3 * Math.max(job.haloA[0] > 0 || job.haloA[1] > 0 ? job.haloR : 0, job.bloomA > 0 ? job.bloomR : 0)
+                : 0;
+        int postRad = Math.max(2 * QRC + QR, job.clarityK != 0 ? 3 * job.clarityR : 0);
+        int padRows = Math.max(64, (glowRad + 2 * QR + postRad + 4) * 4); // exact cascaded support
+        long maxRows = Math.max(128L, o.maxBandPixels / Math.max(1, f.width));
+        int bandOutRows =
+            (int) Math.max(128L, ((maxRows - 2L * padRows) / stripH) * stripH);
+        int bandCount = 0;
+        for (int outY0 = 0; outY0 < f.height; outY0 += bandOutRows) {
+          int outY1 = Math.min(f.height, outY0 + bandOutRows);
+          int srcY0 = Math.max(0, (outY0 - padRows) & ~3);
+          int srcY1 = outY1 >= f.height ? f.height : Math.min(f.height, (outY1 + padRows + 3) & ~3);
+          long tq = System.nanoTime();
+          job.prepareBand(srcY0, srcY1 - srcY0);
+          job.quarter(pool, threads);
+          totalQuarterNs += System.nanoTime() - tq;
+          totalQuarterDenoiseMs += job.quarterDenoiseMs;
+          // Allocate strip workers only AFTER quarterDenoise has freed its temporary planes, and
+          // release them before the next band's quarter pass begins.
+          final int localOut0 = outY0 - srcY0, localOut1 = outY1 - srcY0;
+          final int strips = (localOut1 - localOut0 + stripH - 1) / stripH;
+          AtomicInteger next = new AtomicInteger();
+          List<Worker> bandWorkers = new ArrayList<>(stripThreads);
+          for (int t = 0; t < stripThreads; t++) bandWorkers.add(new Worker(job, stripH));
+          List<Callable<Void>> tasks = new ArrayList<>();
+          for (int t = 0; t < stripThreads; t++) {
+            final Worker w = bandWorkers.get(t);
+            tasks.add(
+                () -> {
+                  for (int i = next.getAndIncrement(); i < strips; i = next.getAndIncrement()) {
+                    int s0 = localOut0 + i * stripH;
+                    w.strip(s0, Math.min(localOut1, s0 + stripH), sink);
+                  }
+                  return null;
+                });
+          }
+          for (Future<Void> fu : pool.invokeAll(tasks)) fu.get();
+          for (Worker w : bandWorkers) {
+            ns[0] += w.nsCfa;
+            ns[1] += w.nsDemosaic;
+            ns[2] += w.nsNoise;
+            ns[3] += w.nsFinish;
+          }
+          bandWorkers.clear();
+          job.releaseBand();
+          bandCount++;
+        }
+        stats.put("bands", bandCount);
+      }
+      stats.put("quarterMs", Math.round(totalQuarterNs / 1e6));
+      stats.put("quarterDenoiseMs", totalQuarterDenoiseMs);
       if (!job.firstVersion)
         stats.put(
             "chromaNoise",
-            new double[] {round(job.chromaNoiseU, 2), round(job.chromaNoiseV, 2), job.chromaNoiseBlocks});
-      AtomicInteger next = new AtomicInteger();
-      int strips = (f.height + STRIP - 1) / STRIP;
-      List<Callable<Void>> tasks = new ArrayList<>();
-      for (int t = 0; t < threads; t++)
-        tasks.add(
-            () -> {
-              Worker w = new Worker(job);
-              synchronized (workers) {
-                workers.add(w);
-              }
-              for (int i = next.getAndIncrement(); i < strips; i = next.getAndIncrement())
-                w.strip(i * STRIP, Math.min(f.height, i * STRIP + STRIP), sink);
-              return null;
+            new double[] {
+              round(job.chromaNoiseU, 2), round(job.chromaNoiseV, 2), job.chromaNoiseBlocks
             });
-      for (Future<Void> fu : pool.invokeAll(tasks)) fu.get();
     } finally {
       pool.shutdownNow();
     }
@@ -422,13 +505,6 @@ public final class RawDeveloper {
     stats.put("setupMs", Math.round((t1 - t0) / 1e6));
     stats.put("developMs", Math.round((t2 - t1) / 1e6));
     stats.put("threads", threads);
-    long[] ns = new long[4];
-    for (Worker w : workers) {
-      ns[0] += w.nsCfa;
-      ns[1] += w.nsDemosaic;
-      ns[2] += w.nsNoise;
-      ns[3] += w.nsFinish;
-    }
     stats.put("stageCpuMs", new long[] {ns[0] / 1000000, ns[1] / 1000000, ns[2] / 1000000, ns[3] / 1000000});
     stats.put("stages", "cfa, demosaic+tone, noise+sharpen, lut+colour+grain");
     return stats;
@@ -448,9 +524,12 @@ public final class RawDeveloper {
     final int[] sc0;
     final float[] sfx;
     final boolean post;
-    final int qW, qH;
+    final int qW;
+    int bandY0, bandH, qH;
     final int[] qx0;
-    final float[] qfx, dY, pU, pV, kq;
+    final float[] qfx;
+    float[] dY, pU, pV, kq;
+    double[] lockedChromaNoise;
     /** Quarter-resolution codes and shading; released once the low-frequency pass is done. */
     float[] qY, qU, qV, qS;
     final float lowKeep, cKeep, epsLow, epsChroma;
@@ -766,24 +845,10 @@ public final class RawDeveloper {
       lowKeep = (float) Math.max(0.05, Math.min(0.3, 0.1 - 0.02 * nrStep));
       cKeep = (float) Math.max(0, Math.min(0.5, 0.2 - 0.025 * nrStep));
       qW = (W + 3) / 4;
+      bandY0 = 0;
+      bandH = H;
       qH = (H + 3) / 4;
-      int qn = qW * qH;
-      qY = new float[qn];
-      qU = new float[qn];
-      qV = new float[qn];
-      qS = new float[qn];
-      dY = new float[qn];
-      pU = new float[qn];
-      pV = new float[qn];
-      kq = new float[qn];
       qx0 = new int[W];
-      if (r.halation > 0
-          || r.bloom > 0
-          || ((sensorProfile == PROFILE_KODAK_800_V3 || sensorProfile == PROFILE_CINESTILL_800T)
-              && o.stillsTone)) {
-        qLin = new float[3 * qn];
-        qClip = new float[qn];
-      }
       qfx = new float[W];
       for (int x = 0; x < W; x++) {
         float u = (x - 1.5f) * 0.25f;
@@ -940,6 +1005,125 @@ public final class RawDeveloper {
       stats.put("lutInput", lut.input.label);
     }
 
+    void prepareBand(int srcY0, int srcH) {
+      this.bandY0 = srcY0;
+      this.bandH = srcH;
+      this.qH = (srcH + 3) / 4;
+      int qn = qW * qH;
+      qS = new float[qn];
+      if (glow) {
+        qLin = new float[3 * qn];
+        qClip = new float[qn];
+      } else {
+        qY = new float[qn];
+        qU = new float[qn];
+        qV = new float[qn];
+      }
+    }
+
+    void releaseBand() {
+      qY = qU = qV = qS = null;
+      dY = pU = pV = kq = null;
+      qLin = qClip = band = colSum = null;
+      glowQ = null;
+    }
+
+    /** Pre-measures global chroma noise across the whole frame using one 5-block row strip (~1 MB). */
+    void lockGlobalChromaNoise() {
+      int fullQH = (H + 3) / 4;
+      int bw = qW / 5, bh = fullQH / 5, cnt = 0;
+      if (bw <= 0 || bh <= 0) return;
+      float[] ru = new float[bw * bh], rv = new float[bw * bh];
+      float[] acc = new float[3 * qW], cntCh = new float[3];
+      float[][] sh = new float[4][qW];
+      float[] tmpRow = new float[Math.max(2, shading ? f.shadingColumns : 2)];
+      float[] stripY = new float[5 * qW], stripU = new float[5 * qW];
+      float[] stripV = new float[5 * qW], stripS = new float[5 * qW];
+      final short[] data = f.data;
+      for (int by = 0; by < bh; by++) {
+        for (int r = 0; r < 5; r++) {
+          int qy = by * 5 + r;
+          int y0 = qy * 4, y1 = Math.min(H, y0 + 4), cy = Math.min(H - 1, y0 + 2);
+          for (int ch = 0; ch < 4; ch++) shadingBlocks(ch, cy, tmpRow, sh[ch]);
+          java.util.Arrays.fill(acc, 0);
+          cntCh[0] = cntCh[1] = cntCh[2] = 0;
+          for (int y = y0; y < y1; y++) {
+            int row = y * f.rowStride, kr = (y & 1) << 1;
+            int c0 = colorK[kr], c1 = colorK[kr | 1];
+            float b0 = black[kr], b1 = black[kr | 1];
+            float s0 = scale[kr] * gainK[kr], s1 = scale[kr | 1] * gainK[kr | 1];
+            for (int bx = 0, x = 0; bx < qW; bx++) {
+              int xe = Math.min(W, x + 4);
+              float e = 0, od = 0;
+              for (; x + 1 < xe; x += 2) {
+                e += (data[row + x] & 0xffff) - b0;
+                od += (data[row + x + 1] & 0xffff) - b1;
+              }
+              acc[3 * bx + c0] += e * s0;
+              acc[3 * bx + c1] += od * s1;
+            }
+            cntCh[c0] += 2;
+            cntCh[c1] += 2;
+          }
+          float iR = 1f / Math.max(1, cntCh[0]);
+          float iG = 1f / Math.max(1, cntCh[1]);
+          float iB = 1f / Math.max(1, cntCh[2]);
+          int ro = r * qW;
+          for (int bx = 0; bx < qW; bx++) {
+            float shG = 0.5f * (sh[1][bx] + sh[2][bx]);
+            float R = acc[3 * bx] * iR * sh[0][bx];
+            float G = acc[3 * bx + 1] * iG * shG;
+            float B = acc[3 * bx + 2] * iB * sh[3][bx];
+            float t = shG * clipFactor;
+            if (G > 0.9f * t) {
+              float w = (G - 0.9f * t) / (0.08f * t);
+              if (w > 1) w = 1;
+              if (R > G) R += w * (G - R);
+              if (B > G) B += w * (G - B);
+            }
+            float c0 = tone.apply(m[0] * R + m[1] * G + m[2] * B);
+            float c1 = tone.apply(m[3] * R + m[4] * G + m[5] * B);
+            float c2 = tone.apply(m[6] * R + m[7] * G + m[8] * B);
+            float yq = 0.25f * (c0 + 2 * c1 + c2);
+            stripY[ro + bx] = yq;
+            stripU[ro + bx] = c0 - yq;
+            stripV[ro + bx] = c2 - yq;
+            stripS[ro + bx] = shG;
+          }
+        }
+        for (int bx = 0; bx < bw; bx++) {
+          double sy = 0, syy = 0, su = 0, suu = 0, sv = 0, svv = 0, sm = 0;
+          for (int r = 0; r < 5; r++)
+            for (int x = bx * 5, i = r * qW + x; x < bx * 5 + 5; x++, i++) {
+              sy += stripY[i];
+              syy += stripY[i] * stripY[i];
+              su += stripU[i];
+              suu += stripU[i] * stripU[i];
+              sv += stripV[i];
+              svv += stripV[i] * stripV[i];
+              sm += noiseVar(stripY[i], stripS[i]);
+            }
+          double mean = sy / 25, model = sm / 25 / 16;
+          if (model <= 1e-14 || mean < 0.05 || mean > 0.85) continue;
+          double vy = syy / 25 - mean * mean;
+          if (vy > 2.5 * Q_NOISE * model) continue;
+          ru[cnt] = (float) ((suu / 25 - su * su / 625) / model);
+          rv[cnt] = (float) ((svv / 25 - sv * sv / 625) / model);
+          cnt++;
+        }
+      }
+      if (cnt < 400) {
+        lockedChromaNoise = new double[] {CHROMA_U_DEFAULT, CHROMA_V_DEFAULT, cnt};
+        return;
+      }
+      float[] u = java.util.Arrays.copyOf(ru, cnt), v = java.util.Arrays.copyOf(rv, cnt);
+      java.util.Arrays.sort(u);
+      java.util.Arrays.sort(v);
+      double mu = Math.max(0.5, Math.min(40, u[cnt / 2]));
+      double mv = Math.max(0.5, Math.min(60, v[cnt / 2]));
+      lockedChromaNoise = new double[] {mu, mv, cnt};
+    }
+
     /** Quarter-resolution pre-pass in parallel, then its global noise reduction. */
     void quarter(ExecutorService pool, int threads) throws Exception {
       List<Callable<Void>> tasks = new ArrayList<>();
@@ -972,6 +1156,10 @@ public final class RawDeveloper {
      */
     void quarterFirstVersion() {
       int n = qW * qH;
+      dY = new float[n];
+      pU = new float[n];
+      pV = new float[n];
+      kq = new float[n];
       java.util.Arrays.fill(kq, 1f);
       if (clarityK != 0) {
         if (colSum == null) colSum = new float[qW];
@@ -1008,12 +1196,12 @@ public final class RawDeveloper {
       float[][] sh = new float[4][qW];
       float[] tmpRow = new float[Math.max(2, shading ? f.shadingColumns : 2)];
       for (int by = by0; by < by1; by++) {
-        int y0 = by * 4, y1 = Math.min(H, y0 + 4), cy = Math.min(H - 1, y0 + 2);
-        for (int ch = 0; ch < 4; ch++) shadingBlocks(ch, cy, tmpRow, sh[ch]);
+        int y0 = by * 4, y1 = Math.min(bandH, y0 + 4), cy = Math.min(bandH - 1, y0 + 2);
+        for (int ch = 0; ch < 4; ch++) shadingBlocks(ch, bandY0 + cy, tmpRow, sh[ch]);
         java.util.Arrays.fill(acc, 0);
         cnt[0] = cnt[1] = cnt[2] = 0;
         for (int y = y0; y < y1; y++) {
-          int row = y * f.rowStride, kr = (y & 1) << 1;
+          int row = (bandY0 + y) * f.rowStride, kr = (y & 1) << 1;
           int c0 = colorK[kr], c1 = colorK[kr | 1];
           float b0 = black[kr], b1 = black[kr | 1];
           float s0 = scale[kr] * gainK[kr], s1 = scale[kr | 1] * gainK[kr | 1];
@@ -1035,7 +1223,7 @@ public final class RawDeveloper {
           java.util.Arrays.fill(clipCount, 0);
           // green sites only: a light source saturates green too, a saturated red object does not
           for (int y = y0; y < y1; y++) {
-            int row = y * f.rowStride, kr = (y & 1) << 1;
+            int row = (bandY0 + y) * f.rowStride, kr = (y & 1) << 1;
             int t0 = colorK[kr] == 1 ? clipRaw[kr] : Integer.MAX_VALUE;
             int t1 = colorK[kr | 1] == 1 ? clipRaw[kr | 1] : Integer.MAX_VALUE;
             for (int x = 0; x + 1 < W; x += 2) {
@@ -1107,6 +1295,7 @@ public final class RawDeveloper {
         gauss(x, xb, bloomR, box);
         for (int i = 0; i < n; i++) xb[i] = Math.max(0, xb[i] - x[i]);
       }
+      x = null;
       // inside clipped sources the light given away is put back (weight keepIn = min(1, 2 x clipped
       // share)): the film stays saturated there
       float[] remHalo = null;
@@ -1158,6 +1347,9 @@ public final class RawDeveloper {
     /** Quarter-resolution codes once the glow is known (same steps as quarterRows). */
     void quarterCodes() {
       int n = qW * qH;
+      qY = new float[n];
+      qU = new float[n];
+      qV = new float[n];
       float kR = glowKeep[0], kG = glowKeep[1], kB = glowKeep[2];
       float[] gR = glowQ[0], gG = glowQ[1], gB = glowQ[2];
       for (int i = 0; i < n; i++) {
@@ -1218,8 +1410,7 @@ public final class RawDeveloper {
     void quarterDenoise() {
       int n = qW * qH;
       colSum = new float[qW];
-      float[] m1 = new float[n], m2 = new float[n], t1 = new float[n], a = new float[n], b = new float[n];
-      float[] box = new float[n];
+      float[] m1 = new float[n], m2 = new float[n], t1 = new float[n], box = new float[n];
       for (int i = 0; i < n; i++) t1[i] = qY[i] * qY[i];
       boxMean(qY, m1, QR, box);
       boxMean(t1, m2, QR, box);
@@ -1227,11 +1418,12 @@ public final class RawDeveloper {
         float mean = m1[i], var = Math.max(0, m2[i] - mean * mean);
         float eps = epsLow * noiseVar(mean, qS[i]);
         float ai = var / (var + eps + 1e-12f);
-        a[i] = ai;
-        b[i] = (1 - ai) * mean;
+        m1[i] = ai;
+        m2[i] = (1 - ai) * mean;
       }
-      boxMean(a, m1, QR, box);
-      boxMean(b, m2, QR, box);
+      boxMean(m1, m1, QR, box);
+      boxMean(m2, m2, QR, box);
+      dY = new float[n];
       float[] yd = t1;
       for (int i = 0; i < n; i++) {
         float q = m1[i] * qY[i] + m2[i];
@@ -1250,33 +1442,38 @@ public final class RawDeveloper {
           debugQuarter[2 * n + i] = qU[i];
           debugQuarter[3 * n + i] = qV[i];
         }
-      double[] cn = chromaNoise();
+      double[] cn = lockedChromaNoise != null ? lockedChromaNoise : chromaNoise();
       chromaNoiseU = cn[0];
       chromaNoiseV = cn[1];
       chromaNoiseBlocks = (int) cn[2];
-      float[] mY = new float[n], mYY = new float[n], mP = new float[n], tmp = new float[n];
+      qY = null;
+      pU = new float[n];
+      pV = new float[n];
+      float[] mY = new float[n], mYY = new float[n], tmp = new float[n];
       boxMean(yd, mY, QRC, box);
       for (int i = 0; i < n; i++) tmp[i] = yd[i] * yd[i];
       boxMean(tmp, mYY, QRC, box);
       for (int ch = 0; ch < 2; ch++) {
         float[] p = ch == 0 ? qU : qV, out = ch == 0 ? pU : pV;
-        boxMean(p, mP, QRC, box);
+        boxMean(p, m1, QRC, box);
         for (int i = 0; i < n; i++) tmp[i] = yd[i] * p[i];
         boxMean(tmp, m2, QRC, box);
         for (int i = 0; i < n; i++) {
-          float varI = Math.max(0, mYY[i] - mY[i] * mY[i]), cov = m2[i] - mY[i] * mP[i];
+          float mPi = m1[i];
+          float varI = Math.max(0, mYY[i] - mY[i] * mY[i]), cov = m2[i] - mY[i] * mPi;
           float eps = epsChroma * noiseVar(mY[i], qS[i]);
           float ai = cov / (varI + eps + 1e-12f);
-          a[i] = ai;
-          b[i] = mP[i] - ai * mY[i];
+          m1[i] = ai;
+          m2[i] = mPi - ai * mY[i];
         }
-        boxMean(a, m1, QRC, box);
-        boxMean(b, m2, QRC, box);
+        boxMean(m1, m1, QRC, box);
+        boxMean(m2, m2, QRC, box);
         for (int i = 0; i < n; i++) out[i] = m1[i] * yd[i] + m2[i]; // luma-guided chroma
       }
+      yd = t1 = mYY = null;
       // Local Wiener step: chroma structure the luma cannot explain is kept where its energy is
       // well above the frame's chroma noise (colour detail), and dropped where it is not (blotches).
-      float[] eU = a, eV = b;
+      float[] eU = m1, eV = m2;
       for (int i = 0; i < n; i++) {
         float r = qU[i] - pU[i];
         tmp[i] = r * r;
@@ -1287,18 +1484,20 @@ public final class RawDeveloper {
         tmp[i] = r * r;
       }
       boxMean(tmp, eV, QR, box);
+      tmp = box = null;
       float cu = (float) chromaNoiseU, cv = (float) chromaNoiseV, t2 = (float) (2 * WIENER_T);
       for (int i = 0; i < n; i++) {
         float mv = noiseVar(mY[i], qS[i]) * (1f / 16f) + 1e-12f;
         float z = eU[i] / (cu * mv) + eV[i] / (cv * mv);
         float w = z > t2 ? 1 - t2 / z : 0;
         float k = cKeep + (1 - cKeep) * w;
-        kq[i] = k;
+        mY[i] = k;
         float u = pU[i] + w * (qU[i] - pU[i]), v = pV[i] + w * (qV[i] - pV[i]);
         pU[i] = u - k * qU[i];
         pV[i] = v - k * qV[i];
       }
-      qY = qU = qV = qS = null;
+      kq = mY;
+      qU = qV = qS = null;
     }
 
     double chromaNoiseU = CHROMA_U_DEFAULT, chromaNoiseV = CHROMA_V_DEFAULT;
@@ -1594,11 +1793,11 @@ public final class RawDeveloper {
     final float[] lutOut = new float[3];
     long nsCfa, nsDemosaic, nsNoise, nsFinish;
 
-    Worker(Job j) {
+    Worker(Job j, int maxStripRows) {
       this.j = j;
       W = j.W;
       Wp = W + 4;
-      int rowsIn = STRIP + 2 * HALO + 4, rowsMid = STRIP + 2 * HALO;
+      int rowsIn = maxStripRows + 2 * HALO + 4, rowsMid = maxStripRows + 2 * HALO;
       cfa = new float[rowsIn * Wp];
       cr = new float[rowsMid * W];
       cg = new float[rowsMid * W];
@@ -1613,7 +1812,7 @@ public final class RawDeveloper {
       aRow = new float[W];
       bRow = new float[W];
       tmp = new float[Math.max(2, j.shading ? j.f.shadingColumns : 2)];
-      argb = new int[STRIP * W];
+      argb = new int[maxStripRows * W];
     }
 
     int reflect(int y, int n) {
@@ -1626,34 +1825,35 @@ public final class RawDeveloper {
       final int n = y1 - y0, rowsIn = n + 2 * HALO + 4, rowsMid = n + 2 * HALO;
       stripY0 = y0;
       long t0 = System.nanoTime();
-      for (int r = 0; r < rowsIn; r++) cfaRow(r, reflect(y0 - HALO - 2 + r, j.H));
+      for (int r = 0; r < rowsIn; r++) cfaRow(r, reflect(y0 - HALO - 2 + r, j.bandH));
       long t1 = System.nanoTime();
-      for (int r = 0; r < rowsMid; r++) demosaicRow(r, reflect(y0 - HALO + r, j.H));
+      for (int r = 0; r < rowsMid; r++) demosaicRow(r, reflect(y0 - HALO + r, j.bandH));
       long t2 = System.nanoTime();
       if (j.firstVersion) {
         if (j.nrRadius > 0) chromaBlur(rowsMid, j.nrRadius);
         if (j.fvNoise) noise(rowsMid);
       } else noise(rowsMid);
       long t3 = System.nanoTime();
-      for (int r = 0; r < n; r++) finishRow(r, y0 + r);
+      for (int r = 0; r < n; r++) finishRow(r, j.bandY0 + y0 + r);
       long t4 = System.nanoTime();
       nsCfa += t1 - t0;
       nsDemosaic += t2 - t1;
       nsNoise += t3 - t2;
       nsFinish += t4 - t3;
-      sink.rows(y0, n, argb, W);
+      sink.rows(j.bandY0 + y0, n, argb, W);
     }
 
     /** 1) one CFA row: black, scale, shading, white balance. */
     void cfaRow(int r, int y) {
       final RawFrame f = j.f;
+      int gy = j.bandY0 + y;
       int chEven = j.shadeK[(y & 1) << 1], chOdd = j.shadeK[((y & 1) << 1) | 1];
-      j.shadingRow(chEven, y, tmp, aRow);
-      j.shadingRow(chOdd, y, tmp, bRow);
+      j.shadingRow(chEven, gy, tmp, aRow);
+      j.shadingRow(chOdd, gy, tmp, bRow);
       int k0 = (y & 1) << 1;
       float b0 = j.black[k0], b1 = j.black[k0 + 1];
       float s0 = j.scale[k0] * j.gainK[k0], s1 = j.scale[k0 + 1] * j.gainK[k0 + 1];
-      int src = y * f.rowStride, dst = r * Wp + 2;
+      int src = gy * f.rowStride, dst = r * Wp + 2;
       short[] data = f.data;
       float[] c = cfa, ar = aRow, br = bRow;
       for (int x = 0; x < W; x += 2) {
@@ -1675,7 +1875,7 @@ public final class RawDeveloper {
       int cRow = (r + 2) * Wp + 2;
       int gch = j.shadeK[((yy & 1) << 1)] == 1 || j.shadeK[((yy & 1) << 1)] == 2
           ? j.shadeK[(yy & 1) << 1] : j.shadeK[((yy & 1) << 1) | 1];
-      j.shadingRow(gch, yy, tmp, gRow);
+      j.shadingRow(gch, j.bandY0 + yy, tmp, gRow);
       int out = r * W;
       int k0 = (yy & 1) << 1;
       int cEven = j.colorK[k0], cOdd = j.colorK[k0 | 1];

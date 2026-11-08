@@ -45,4 +45,20 @@ public final class Framing {
       (c[1] + Math.max(0, Math.min(1, y)) * c[3]) / height
     };
   }
+
+  /**
+   * Maps an upright crop rectangle {@code [cx, cy, cw, ch]} back to unrotated JPEG sensor pixel
+   * coordinates {@code [sx, sy, sw, sh]} for EXIF orientations 1 (0 deg), 3 (180 deg), 6 (90 deg
+   * CW) and 8 (270 deg CW), or {@code null} for mirrored orientations.
+   */
+  public static int[] sensorCropRect(int rawW, int rawH, int orientation, int[] uprightCrop) {
+    int cx = uprightCrop[0], cy = uprightCrop[1], cw = uprightCrop[2], ch = uprightCrop[3];
+    return switch (orientation) {
+      case 0, 1 -> new int[] {cx, cy, cw, ch};
+      case 3 -> new int[] {rawW - cx - cw, rawH - cy - ch, cw, ch};
+      case 6 -> new int[] {cy, rawH - cx - cw, ch, cw};
+      case 8 -> new int[] {rawW - cy - ch, cx, ch, cw};
+      default -> null;
+    };
+  }
 }

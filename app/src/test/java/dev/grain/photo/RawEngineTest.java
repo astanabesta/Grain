@@ -1975,6 +1975,78 @@ public class RawEngineTest {
         haloRedLift > 12.0 && haloRedLift > haloBlueLift + 8.0);
   }
 
+  @Test
+  public void bandedHighResDevelopmentMatchesFullFrameWithoutSeams() throws Exception {
+    int w = 192, h = 512;
+    short[] data = new short[w * h];
+    RawFrame frame = new RawFrame(data, w, h, w);
+    frame.cfa = RawFrame.RGGB;
+    double[] n = {0.58, 1.0, 0.62};
+    frame.neutral = n;
+    frame.colorMatrix1 = PHONE_CM1;
+    frame.colorMatrix2 = PHONE_CM2;
+    frame.forwardMatrix1 = PHONE_FM1;
+    frame.forwardMatrix2 = PHONE_FM2;
+    frame.illuminant1 = 21;
+    frame.illuminant2 = 17;
+    frame.iso = 400;
+    // Include lens-shading gains that vary smoothly vertically so any band row-offset bug shows up.
+    frame.shadingColumns = 4;
+    frame.shadingRows = 4;
+    frame.shadingWidth = w;
+    frame.shadingHeight = h;
+    frame.shading = new float[4 * 4 * 4];
+    for (int ry = 0; ry < 4; ry++)
+      for (int rx = 0; rx < 4; rx++)
+        for (int c = 0; c < 4; c++)
+          frame.shading[(ry * 4 + rx) * 4 + c] = 1.0f + 0.18f * (ry - 1.5f) * (ry - 1.5f);
+
+    for (int y = 0; y < h; y++)
+      for (int x = 0; x < w; x++) {
+        int c = frame.color(x, y);
+        boolean lamp = Math.hypot(x - 96, y - 256) <= 7.0;
+        double grad = 0.08 + 0.45 * (y / (double) h) + 0.12 * Math.sin(x * 0.09);
+        double level = lamp ? 1.0 : grad;
+        data[y * w + x] = (short) Math.round(64 + Math.min(1.0, level * n[c]) * (1023 - 64));
+      }
+
+    FujiRecipe recipe = extras(FujiRecipe.CINESTILL_800T, 4, 3, 3);
+    int[] full = new int[w * h];
+    RawDeveloper.Options optFull = new RawDeveloper.Options();
+    optFull.grain = true;
+    optFull.grainSeed = 424242L;
+    optFull.maxBandPixels = Long.MAX_VALUE;
+    RawDeveloper.develop(
+        frame,
+        recipe,
+        goldenLut(),
+        optFull,
+        (y, rows, argb, width) -> System.arraycopy(argb, 0, full, y * width, rows * width));
+
+    int[] banded = new int[w * h];
+    RawDeveloper.Options optBand = new RawDeveloper.Options();
+    optBand.grain = true;
+    optBand.grainSeed = 424242L;
+    optBand.maxBandPixels = 36_000L; // forces multiple overlapping horizontal bands
+    Map<String, Object> statsBand =
+        RawDeveloper.develop(
+            frame,
+            recipe,
+            goldenLut(),
+            optBand,
+            (y, rows, argb, width) -> System.arraycopy(argb, 0, banded, y * width, rows * width));
+
+    assertTrue("Expected >= 3 bands, got " + statsBand.get("bands"), ((Number) statsBand.get("bands")).intValue() >= 3);
+    int maxDiff = 0;
+    for (int i = 0; i < w * h; i++) {
+      int a = full[i], b = banded[i];
+      maxDiff = Math.max(maxDiff, Math.abs(((a >> 16) & 255) - ((b >> 16) & 255)));
+      maxDiff = Math.max(maxDiff, Math.abs(((a >> 8) & 255) - ((b >> 8) & 255)));
+      maxDiff = Math.max(maxDiff, Math.abs((a & 255) - (b & 255)));
+    }
+    assertTrue("Banded development differed from full-frame by " + maxDiff + " codes", maxDiff <= 1);
+  }
+
   private static double meanSaturation(int[] argb) {
     double sum = 0;
     int cnt = 0;

@@ -4,7 +4,9 @@ import android.content.ContentValues;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.BitmapRegionDecoder;
 import android.graphics.Matrix;
+import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Environment;
 import android.provider.MediaStore;
@@ -63,6 +65,33 @@ public final class PhotoStore {
       File dng,
       byte[] phoneJpeg)
       throws Exception {
+    return saveInternal(jpeg, null, ratio, zoom, keepFull, metadata, dng, phoneJpeg);
+  }
+
+  /** Saves a developed JPEG file without loading its compressed bytes onto the Java heap. */
+  public Photo saveFile(
+      File jpegFile,
+      String ratio,
+      double zoom,
+      boolean keepFull,
+      JSONObject metadata,
+      File dng,
+      byte[] phoneJpeg)
+      throws Exception {
+    return saveInternal(null, jpegFile, ratio, zoom, keepFull, metadata, dng, phoneJpeg);
+  }
+
+  @SuppressWarnings("deprecation")
+  private Photo saveInternal(
+      byte[] jpeg,
+      File jpegFile,
+      String ratio,
+      double zoom,
+      boolean keepFull,
+      JSONObject metadata,
+      File dng,
+      byte[] phoneJpeg)
+      throws Exception {
     String id = System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 8);
     File staging = new File(root, "." + id);
     if (!staging.mkdir()) throw new IOException("Cannot start photo save");
@@ -85,9 +114,18 @@ public final class PhotoStore {
     boolean rawPhoto = metadata.optBoolean("raw", false);
     try {
       File source = new File(staging, "capture.jpg");
-      try (FileOutputStream out = new FileOutputStream(source)) {
-        out.write(jpeg);
-        out.getFD().sync();
+      if (jpegFile != null) {
+        if (!jpegFile.renameTo(source)) {
+          copy(jpegFile, source);
+          if (!jpegFile.delete() && jpegFile.exists()) {
+            android.util.Log.w("Grain", "Temp developed JPEG kept");
+          }
+        }
+      } else {
+        try (FileOutputStream out = new FileOutputStream(source)) {
+          out.write(jpeg);
+          out.getFD().sync();
+        }
       }
       BitmapFactory.Options bounds = new BitmapFactory.Options();
       bounds.inJustDecodeBounds = true;
@@ -118,23 +156,47 @@ public final class PhotoStore {
           }
         }
       } else {
-        Bitmap decoded = BitmapFactory.decodeFile(source.getPath());
-        if (decoded == null) throw new IOException("Cannot decode JPEG");
-        Bitmap upright = null, cropped = null;
+        int[] sensorCrop = Framing.sensorCropRect(bounds.outWidth, bounds.outHeight, orientation, crop);
+        boolean regionCrop =
+            sensorCrop != null && (long) bounds.outWidth * bounds.outHeight > 20_000_000L;
+        Bitmap decoded = null, upright = null, cropped = null;
+        String savedOrientation = "1";
         try {
-          Matrix m = orientationMatrix(orientation);
-          upright =
-              Bitmap.createBitmap(decoded, 0, 0, decoded.getWidth(), decoded.getHeight(), m, true);
-          if (upright != decoded) {
-            decoded.recycle();
-            decoded = null;
+          if (regionCrop) {
+            BitmapRegionDecoder rd = BitmapRegionDecoder.newInstance(source.getPath(), false);
+            try {
+              Rect r =
+                  new Rect(
+                      sensorCrop[0],
+                      sensorCrop[1],
+                      sensorCrop[0] + sensorCrop[2],
+                      sensorCrop[1] + sensorCrop[3]);
+              BitmapFactory.Options ro = new BitmapFactory.Options();
+              ro.inPreferredConfig = Bitmap.Config.ARGB_8888;
+              cropped = rd.decodeRegion(r, ro);
+            } finally {
+              rd.recycle();
+            }
+            if (cropped == null) throw new IOException("Cannot region-decode JPEG");
+            savedOrientation = String.valueOf(orientation == 0 ? 1 : orientation);
+          } else {
+            decoded = BitmapFactory.decodeFile(source.getPath());
+            if (decoded == null) throw new IOException("Cannot decode JPEG");
+            Matrix m = orientationMatrix(orientation);
+            upright =
+                Bitmap.createBitmap(decoded, 0, 0, decoded.getWidth(), decoded.getHeight(), m, true);
+            if (upright != decoded) {
+              decoded.recycle();
+              decoded = null;
+            }
+            cropped = Bitmap.createBitmap(upright, crop[0], crop[1], crop[2], crop[3]);
           }
-          cropped = Bitmap.createBitmap(upright, crop[0], crop[1], crop[2], crop[3]);
-          try (FileOutputStream out = new FileOutputStream(finalImage)) {
+          try (OutputStream out = new BufferedOutputStream(new FileOutputStream(finalImage), 65536)) {
             if (!cropped.compress(Bitmap.CompressFormat.JPEG, 97, out))
               throw new IOException("JPEG export failed");
-            out.getFD().sync();
           }
+          cropped.recycle();
+          cropped = null;
           ExifInterface output = new ExifInterface(finalImage);
           String[] tags = {
             ExifInterface.TAG_MAKE,
@@ -160,7 +222,7 @@ public final class PhotoStore {
             }
             output.setAttribute(ExifInterface.TAG_USER_COMMENT, "Grain Photo · " + recTitle);
           }
-          output.setAttribute(ExifInterface.TAG_ORIENTATION, "1");
+          output.setAttribute(ExifInterface.TAG_ORIENTATION, savedOrientation);
           output.setAttribute(ExifInterface.TAG_SOFTWARE, RawDevelopment.SOFTWARE);
           output.saveAttributes();
         } finally {

@@ -172,7 +172,7 @@ public final class GrainCamera {
   }
 
   public static final class RawCapture {
-    public final RawFrame frame;
+    public RawFrame frame;
     public final byte[] phoneJpeg;
     public final File dng;
     /** The JPEG orientation requested for the capture (the phone JPEG is tagged or turned by it). */
@@ -186,6 +186,11 @@ public final class GrainCamera {
       this.dng = dng;
       this.orientationDegrees = orientationDegrees;
       this.uprightDegrees = uprightDegrees;
+    }
+
+    /** Releases the raw pixel buffer so JPEG encoding does not compete with a 225 MB merge frame. */
+    void releaseFrame() {
+      this.frame = null;
     }
   }
 

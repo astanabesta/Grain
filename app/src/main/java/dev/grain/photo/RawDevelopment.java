@@ -12,25 +12,25 @@ import dev.grain.photo.develop.Faces;
 import dev.grain.photo.develop.FujiRecipe;
 import dev.grain.photo.develop.RawDeveloper;
 import dev.grain.photo.develop.RawFrame;
+import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.Map;
 import org.json.JSONObject;
 
-/** Runs the RAW engine for one capture and encodes the result as an EXIF-tagged JPEG. */
+/** Runs the RAW engine for one capture and encodes the result as an EXIF-tagged JPEG file. */
 final class RawDevelopment {
   static final String SOFTWARE = "Grain Photo " + BuildConfig.VERSION_NAME;
 
   static final class Output {
-    final byte[] jpeg;
+    final File jpegFile;
     final JSONObject stats;
 
-    Output(byte[] jpeg, JSONObject stats) {
-      this.jpeg = jpeg;
+    Output(File jpegFile, JSONObject stats) {
+      this.jpegFile = jpegFile;
       this.stats = stats;
     }
   }
@@ -45,7 +45,8 @@ final class RawDevelopment {
       CubeLut lut,
       float ev,
       long seed,
-      boolean faceExposure)
+      boolean faceExposure,
+      boolean releaseFrameAfterDevelop)
       throws Exception {
     String faceSearch = null;
     RawFrame frame = capture.frame;
@@ -61,8 +62,10 @@ final class RawDevelopment {
       }
       faceSearch += ", " + (System.nanoTime() - t) / 1_000_000 + " ms";
     }
-    final Bitmap bitmap =
-        Bitmap.createBitmap(capture.frame.width, capture.frame.height, Bitmap.Config.ARGB_8888);
+    final int outW = frame.width, outH = frame.height;
+    final Bitmap bitmap = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888);
+    File tmp = null;
+    boolean success = false;
     try {
       RawDeveloper.Options options = new RawDeveloper.Options();
       options.faceExposure = faceExposure;
@@ -71,7 +74,7 @@ final class RawDevelopment {
       options.threads = Math.max(1, Math.min(8, Runtime.getRuntime().availableProcessors()));
       Map<String, Object> stats =
           RawDeveloper.develop(
-              capture.frame,
+              frame,
               recipe,
               lut,
               options,
@@ -80,64 +83,63 @@ final class RawDevelopment {
                   bitmap.setPixels(argb, 0, width, 0, y, width, rows);
                 }
               });
+      // Release the 16-bit Bayer array before starting JPEG compression (saves ~225 MB at 112 MP).
+      frame = null;
+      if (releaseFrameAfterDevelop) capture.releaseFrame();
+
       long t = System.nanoTime();
-      ByteArrayOutputStream encoded = new ByteArrayOutputStream(8 << 20);
-      if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 95, encoded))
-        throw new IllegalStateException("JPEG encoding failed");
-      bitmap.recycle();
-      File tmp = File.createTempFile("develop", ".jpg", context.getCacheDir());
-      try {
-        try (FileOutputStream out = new FileOutputStream(tmp)) {
-          encoded.writeTo(out);
-        }
-        encoded = null;
-        ExifInterface exif = new ExifInterface(tmp);
-        if (capture.phoneJpeg != null)
-          try (InputStream in = new ByteArrayInputStream(capture.phoneJpeg)) {
-            ExifInterface phone = new ExifInterface(in);
-            String[] tags = {
-              ExifInterface.TAG_MAKE,
-              ExifInterface.TAG_MODEL,
-              ExifInterface.TAG_DATETIME,
-              ExifInterface.TAG_DATETIME_ORIGINAL,
-              ExifInterface.TAG_DATETIME_DIGITIZED,
-              ExifInterface.TAG_OFFSET_TIME_ORIGINAL,
-              ExifInterface.TAG_SUBSEC_TIME_ORIGINAL,
-              ExifInterface.TAG_EXPOSURE_TIME,
-              ExifInterface.TAG_F_NUMBER,
-              ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY,
-              ExifInterface.TAG_FOCAL_LENGTH,
-              ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM
-            };
-            for (String tag : tags) {
-              String value = phone.getAttribute(tag);
-              if (value != null) exif.setAttribute(tag, value);
-            }
-          } catch (Exception ignored) {
-          }
-        exif.setAttribute(
-            ExifInterface.TAG_ORIENTATION,
-            String.valueOf(RawSupport.exifOrientation(capture.orientationDegrees)));
-        exif.setAttribute(ExifInterface.TAG_SOFTWARE, SOFTWARE);
-        exif.setAttribute(
-            ExifInterface.TAG_IMAGE_DESCRIPTION,
-            recipe.name + " (" + recipe.filmLabel + " LUT" + (tuned ? ", tuned" : "") + ")");
-        exif.saveAttributes();
-        byte[] jpeg = new byte[(int) tmp.length()];
-        try (InputStream in = new FileInputStream(tmp)) {
-          int n = 0, r;
-          while (n < jpeg.length && (r = in.read(jpeg, n, jpeg.length - n)) > 0) n += r;
-        }
-        JSONObject json = new JSONObject(stats);
-        if (faceSearch != null) json.put("faceSearch", faceSearch);
-        json.put("encodeMs", (System.nanoTime() - t) / 1_000_000);
-        json.put("jpegQuality", 95);
-        return new Output(jpeg, json);
-      } finally {
-        if (!tmp.delete() && tmp.exists()) android.util.Log.w("Grain", "Temp JPEG kept");
+      tmp = File.createTempFile("develop-", ".jpg", context.getCacheDir());
+      try (OutputStream out = new BufferedOutputStream(new FileOutputStream(tmp), 65536)) {
+        if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out))
+          throw new IllegalStateException("JPEG encoding failed");
       }
+      // Free the native ARGB_8888 pixel buffer (~448 MB at 112 MP) before EXIF rewrite and save.
+      bitmap.recycle();
+
+      ExifInterface exif = new ExifInterface(tmp);
+      if (capture.phoneJpeg != null)
+        try (InputStream in = new ByteArrayInputStream(capture.phoneJpeg)) {
+          ExifInterface phone = new ExifInterface(in);
+          String[] tags = {
+            ExifInterface.TAG_MAKE,
+            ExifInterface.TAG_MODEL,
+            ExifInterface.TAG_DATETIME,
+            ExifInterface.TAG_DATETIME_ORIGINAL,
+            ExifInterface.TAG_DATETIME_DIGITIZED,
+            ExifInterface.TAG_OFFSET_TIME_ORIGINAL,
+            ExifInterface.TAG_SUBSEC_TIME_ORIGINAL,
+            ExifInterface.TAG_EXPOSURE_TIME,
+            ExifInterface.TAG_F_NUMBER,
+            ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY,
+            ExifInterface.TAG_FOCAL_LENGTH,
+            ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM
+          };
+          for (String tag : tags) {
+            String value = phone.getAttribute(tag);
+            if (value != null) exif.setAttribute(tag, value);
+          }
+        } catch (Exception ignored) {
+        }
+      exif.setAttribute(
+          ExifInterface.TAG_ORIENTATION,
+          String.valueOf(RawSupport.exifOrientation(capture.orientationDegrees)));
+      exif.setAttribute(ExifInterface.TAG_SOFTWARE, SOFTWARE);
+      exif.setAttribute(
+          ExifInterface.TAG_IMAGE_DESCRIPTION,
+          recipe.name + " (" + recipe.filmLabel + " LUT" + (tuned ? ", tuned" : "") + ")");
+      exif.saveAttributes();
+
+      JSONObject json = new JSONObject(stats);
+      if (faceSearch != null) json.put("faceSearch", faceSearch);
+      json.put("encodeMs", (System.nanoTime() - t) / 1_000_000);
+      json.put("jpegQuality", 95);
+      success = true;
+      return new Output(tmp, json);
     } finally {
       if (!bitmap.isRecycled()) bitmap.recycle();
+      if (!success && tmp != null && tmp.exists() && !tmp.delete()) {
+        android.util.Log.w("Grain", "Temp JPEG kept");
+      }
     }
   }
 
