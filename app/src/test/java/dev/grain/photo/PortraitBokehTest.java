@@ -80,6 +80,59 @@ public class PortraitBokehTest {
     assertTrue("no hard 1px seam at the silhouette (" + seamStep + ")", seamStep < 88.0);
   }
 
+  /**
+   * Depth-aware defocus: a side object at the SAME depth as the subject must stay sharp (real
+   * optics) even though it is not part of the person mask, while the far background melts. The
+   * boundary-distance ramp could not do this — the monocular depth map can.
+   */
+  @Test
+  public void depthKeepsSamePlaneSharpFarPlaneMeltsSmoothly() {
+    int w = 192, h = 144;
+    int[] img = new int[w * h];
+    long rng = 123456789L;
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        rng = rng * 6364136223846793005L + 1442695040888963407L;
+        double nz = (((rng >>> 33) & 1023) / 1023.0 - 0.5) * 44;
+        boolean person = personEllipse(x, y);
+        boolean bed = x >= 116 && x < 176 && y >= 96 && y < 140; // same-plane object beside subject
+        double l = bed ? 80 + nz * 0.4 : person ? 60 + ((x % 8) < 2 ? 16 : -6) : 150 + nz;
+        int v = (int) Math.round(Math.max(0, Math.min(255, l)));
+        img[y * w + x] = 0xff000000 | (v << 16) | (v << 8) | v;
+      }
+    }
+    int qw = (w + 3) / 4, qh = (h + 3) / 4;
+    float[] mask = new float[qw * qh];
+    float[] depth = new float[qw * qh];
+    for (int y = 0; y < qh; y++)
+      for (int x = 0; x < qw; x++) {
+        boolean person = personEllipse(x * 4 + 2, y * 4 + 2);
+        mask[y * qw + x] = person ? 1f : 0f;
+        depth[y * qw + x] = person ? 0.85f : 0.25f;
+      }
+    // Bed at subject depth (not in the person mask).
+    for (int y = 24; y < 35; y++)
+      for (int x = 29; x < 44; x++) depth[y * qw + x] = 0.83f;
+
+    int[] out = new int[w * h];
+    PortraitBokeh.apply(img, w, h, mask, qw, qh, 1.4f, out, depth);
+
+    double bedBefore = d1(img, w, 120, 172, 100, 136), bedAfter = d1(out, w, 120, 172, 100, 136);
+    double bgBefore = d1(img, w, 60, 92, 4, 30), bgAfter = d1(out, w, 60, 92, 4, 30);
+    System.out.println("DBG depth: bg " + bgBefore + "->" + bgAfter + " bed " + bedBefore + "->" + bedAfter);
+    assertTrue("far background melts (" + bgAfter + " vs " + bgBefore + ")", bgAfter <= 0.45 * bgBefore);
+    assertTrue("same-plane object stays sharp (" + bedAfter + " vs " + bedBefore + ")", bedAfter >= 0.80 * bedBefore);
+    double fgBefore = d1(img, w, 60, 92, 46, 100), fgAfter = d1(out, w, 60, 92, 46, 100);
+    assertTrue("subject stays pixel-sharp (" + fgAfter + " vs " + fgBefore + ")", fgAfter >= 0.92 * fgBefore);
+
+    // Depth absent -> identical results to the legacy boundary ramp (regression safety).
+    int[] outB = new int[w * h];
+    PortraitBokeh.apply(img, w, h, mask, qw, qh, 1.4f, outB, null);
+    double bedChamfer = d1(outB, w, 120, 172, 100, 136);
+    assertTrue("chamfer fallback blurs same-plane object (" + bedChamfer + " vs " + bedBefore + ")",
+        bedChamfer < bedAfter * 0.95f);
+  }
+
   @Test
   public void apertureControlsDiscRadius() {
     assertTrue(PortraitBokeh.maxRadiusPx(3060, 0.95f) > PortraitBokeh.maxRadiusPx(3060, 2.8f));

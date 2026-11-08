@@ -40,40 +40,77 @@ public final class PortraitBokeh {
   /**
    * Applies portrait bokeh. {@code argb}/{@code out} are full-resolution {@code w x h} pixels;
    * {@code maskQ} is the person weight (0 background .. 1 person) on the quarter-resolution grid
-   * {@code qw x qh} where {@code qw = (w + 3) / 4} and {@code qh = (h + 3) / 4}. Returns the disc
-   * radius used (full-res px).
+   * {@code qw x qh} where {@code qw = (w + 3) / 4} and {@code qh = (h + 3) / 4}. {@code depthQ} is
+   * the optional monocular relative closeness (0 far .. 1 near) on the same grid; when present,
+   * the disc radius is true optical defocus {@code r = rMax * f(|d - d_focus|)} with the focus
+   * plane = the subject's robust median depth — so objects beside the subject at its focal plane
+   * stay sharp no matter their class, and defocus grows continuously with real depth instead of
+   * a 2.5D distance-from-edge ramp. Returns the disc radius used (full-res px).
    */
   public static float apply(
+      int[] argb, int w, int h, float[] maskQ, int qw, int qh, float fNumber, int[] out, float[] depthQ) {
+    return applyRadius(argb, w, h, maskQ, qw, qh, maxRadiusPx(h, fNumber), out, depthQ);
+  }
+
+  /** Back-compat wrapper (no depth): falls back to the chamfer distance ramp. */
+  public static float apply(
       int[] argb, int w, int h, float[] maskQ, int qw, int qh, float fNumber, int[] out) {
-    return applyRadius(argb, w, h, maskQ, qw, qh, maxRadiusPx(h, fNumber), out);
+    return applyRadius(argb, w, h, maskQ, qw, qh, maxRadiusPx(h, fNumber), out, null);
   }
 
   /** Same, with an explicit max disc radius in full-resolution pixels (tests use this). */
   public static float applyRadius(
       int[] argb, int w, int h, float[] maskQ, int qw, int qh, float rMaxFull, int[] out) {
+    return applyRadius(argb, w, h, maskQ, qw, qh, rMaxFull, out, null);
+  }
+
+  /** Same, with an explicit max disc radius and optional relative closeness map. */
+  public static float applyRadius(
+      int[] argb, int w, int h, float[] maskQ, int qw, int qh, float rMaxFull, int[] out,
+      float[] depthQ) {
     final int n = qw * qh;
     // Quarter-resolution linear-light downsample of the frame.
     float[] lr = new float[n], lg = new float[n], lb = new float[n];
     downsampleLinear(argb, w, h, lr, lg, lb, qw, qh);
 
     float[] ms = new float[n];
-    boxBlur(maskQ, ms, qw, qh, 1); // smooth the segmentation stair-steps (~6 full-res px)
+    boxBlur(maskQ, ms, qw, qh, 1); // smooth the matte stair-steps (~6 full-res px)
     float[] bgw = new float[n];
     for (int i = 0; i < n; i++) bgw[i] = 1f - ms[i];
 
-    // Depth ramp: chamfer distance into the background measured from the subject edge.
+    // Radius field: optical defocus from depth when a depth map is present, else the classic
+    // boundary-distance ramp.
     float[] rf = new float[n];
-    chamferRadii(bgw, rf, qw, qh, Math.max(1.25f, rMaxFull / 4f));
-
-    // Exclusion-weighted disc stack (foreground excluded from the background's bokeh).
     float rMaxQ = Math.max(1.25f, rMaxFull / 4f);
+    if (depthQ == null || depthQ.length != n || !depthRadii(ms, depthQ, rf, qw, qh, rMaxQ)) {
+      chamferRadii(bgw, rf, qw, qh, rMaxQ);
+    }
+
+    // Per-pixel blend weight into the bokeh layer: the foreground mask gates it, and so does the
+    // radius itself — a zero-defocus pixel (subject, or same-plane object) stays pixel-sharp even
+    // though it is not part of the person mask.
+    float[] endw = new float[n];
+    for (int i = 0; i < n; i++) endw[i] = bgw[i] * Math.min(1f, rf[i] * 1.5f);
+
+    // Highlight boost for the defocused content only: real lenses render point highlights as
+    // crisp-mean discs, not dimmed blobs. A mild linear-domain push (clamped) keeps light-points
+    // visible through the discs without touching the sharp foreground.
+    float[] br0 = new float[n], bg0 = new float[n], bb0 = new float[n];
+    for (int i = 0; i < n; i++) {
+      br0[i] = boostDisc(lr[i]);
+      bg0[i] = boostDisc(lg[i]);
+      bb0[i] = boostDisc(lb[i]);
+    }
+
+    // Exclusion-weighted disc stack (foreground excluded from the background's bokeh); the disc
+    // content is the highlight-boosted copy, the sharp downsample stays pristine.
     float[] radii = {rMaxQ * 0.30f, rMaxQ * 0.62f, rMaxQ};
     float[][] lvlR = new float[3][], lvlG = new float[3][], lvlB = new float[3][];
     float[] pr = new float[n], pg = new float[n], pb = new float[n], pw = new float[n];
     for (int i = 0; i < n; i++) {
-      pr[i] = lr[i] * bgw[i];
-      pg[i] = lg[i] * bgw[i];
-      pb[i] = lb[i] * bgw[i];
+      pr[i] = br0[i] * bgw[i];
+      pg[i] = bg0[i] * bgw[i];
+      pb[i] = bb0[i] * bgw[i];
       pw[i] = bgw[i];
     }
     float prevSig = 0f;
@@ -156,7 +193,7 @@ public final class PortraitBokeh {
         int xc1 = xc0 >= qw - 1 ? xc0 : xc0 + 1;
         float w00 = wTop * (1f - fx), w01 = wTop * fx, w10 = fy * (1f - fx), w11 = fy * fx;
         float bw =
-            bgw[r0 + xc0] * w00 + bgw[r0 + xc1] * w01 + bgw[r1 + xc0] * w10 + bgw[r1 + xc1] * w11;
+            endw[r0 + xc0] * w00 + endw[r0 + xc1] * w01 + endw[r1 + xc0] * w10 + endw[r1 + xc1] * w11;
         int px = argb[o + x];
         float fr = SRGB_LIN[(px >>> 16) & 255], fg = SRGB_LIN[(px >>> 8) & 255], fb = SRGB_LIN[px & 255];
         float rr, gg, bbc;
@@ -313,6 +350,58 @@ public final class PortraitBokeh {
         m[y * qw + x] = d <= 1.0 ? 1f : 0f;
       }
     return m;
+  }
+
+  /**
+   * Mild highlight boost for defocused content: keeps point lights bright enough to read as
+   * bokeh discs. Linear-domain push proportional to how close a value already is to white.
+   */
+  private static float boostDisc(float v) {
+    if (v <= 0.60f) return v;
+    float t = Math.min(1f, (v - 0.60f) / 0.35f);
+    t = t * t * (3f - 2f * t);
+    return Math.min(1f, v * (1f + 0.45f * t));
+  }
+
+  /**
+   * Optical defocus radius from a relative closeness map. The focus plane is the subject-median
+   * depth; pixels farther than the subject blur with {@code r = rMax * smoothstep(delta)}, pixels
+   * at the subject's depth stay sharp whatever their class (bed beside the person, held objects).
+   * Returns false when the matte carries no usable subject core (caller falls back to the ramp).
+   */
+  public static boolean depthRadii(float[] ms, float[] depth, float[] rf, int qw, int qh, float rMaxQ) {
+    int[] hist = new int[256];
+    int cnt = 0;
+    int n = qw * qh;
+    for (int i = 0; i < n; i++)
+      if (ms[i] > 0.65f) {
+        hist[Math.max(0, Math.min(255, (int) (depth[i] * 255.99f)))]++;
+        cnt++;
+      }
+    if (cnt < 24) return false;
+    int acc = 0, med = 0;
+    for (int i = 0; i < 256; i++) {
+      acc += hist[i];
+      if (acc > cnt / 2) {
+        med = i;
+        break;
+      }
+    }
+    float dFocus = med / 255f;
+    float minD = 1f;
+    for (int i = 0; i < n; i++) if (depth[i] < minD) minD = depth[i];
+    // Defocus grows with the distance DROP behind the subject; anything at-or-closer than the
+    // focus plane (same-depth objects, held items, arms) stays sharp like real optics.
+    float scale = Math.max(0.08f, dFocus - minD);
+    for (int i = 0; i < n; i++) {
+      float c = ms[i];
+      float gate = c <= 0.25f ? 1f : c >= 0.65f ? 0f : (0.65f - c) / 0.4f;
+      float dd = depth[i];
+      float delta = dd >= dFocus ? 0f : Math.min(1f, (dFocus - dd) / scale);
+      float s = delta * delta * (3f - 2f * delta);
+      rf[i] = rMaxQ * s * gate;
+    }
+    return true;
   }
 
   /** Separable O(1)-per-pixel box blur, edge-replicated. */

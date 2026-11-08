@@ -48,6 +48,21 @@ final class RawDevelopment {
     }
   }
 
+  /** Downscaled (<=640 px long edge), gravity-upright copy of the developed frame for the NN models. */
+  private static android.graphics.Bitmap uprightSmall(android.graphics.Bitmap src, int degCw) {
+    float sc = Math.min(1f, 640f / Math.max(src.getWidth(), src.getHeight()));
+    android.graphics.Matrix m = new android.graphics.Matrix();
+    m.postScale(sc, sc);
+    m.postRotate(degCw);
+    try {
+      android.graphics.Bitmap out =
+          android.graphics.Bitmap.createBitmap(src, 0, 0, src.getWidth(), src.getHeight(), m, true);
+      return out != src ? out : out.copy(android.graphics.Bitmap.Config.ARGB_8888, false);
+    } catch (OutOfMemoryError | RuntimeException e) {
+      return null;
+    }
+  }
+
   static Output develop(
       Context context,
       GrainCamera.RawCapture capture,
@@ -125,25 +140,53 @@ final class RawDevelopment {
           stats.put("portrait", "skipped (hi-res frame)");
         } else {
           int qw = (outW + 3) / 4, qh = (outH + 3) / 4;
-          float[] maskQ = null;
+          int deg = capture.orientationDegrees;
+          int uw = (deg % 180 == 0) ? outW : outH, uh = (deg % 180 == 0) ? outH : outW;
+          int quW = (uw + 3) / 4, quH = (uh + 3) / 4;
+          android.graphics.Bitmap up = uprightSmall(bitmap, deg);
+          float[] maskQ = null, depthQ = null;
           String maskSrc = null;
+          boolean depthOn = false;
           try {
-            float[] maskU =
-                PortraitSegmenter.maskUpright(context, bitmap, capture.orientationDegrees);
-            if (maskU != null) {
-              int uqW = ((outW + 3) / 4), uqH = ((outH + 3) / 4);
-              if (capture.orientationDegrees == 90 || capture.orientationDegrees == 270) {
-                uqW = (outH + 3) / 4;
-                uqH = (outW + 3) / 4;
-              }
+            long tm = System.nanoTime();
+            float[] alphaU = PortraitMatting.matteUprightQuarter(context, up, quW, quH);
+            if (alphaU != null) {
               maskQ =
                   dev.grain.photo.develop.PortraitBokeh.sampleUprightMaskToSensor(
-                      maskU, uqW, uqH, outW, outH, capture.orientationDegrees);
-              maskSrc = "person segmentation";
+                      alphaU, quW, quH, outW, outH, deg);
+              maskSrc = "alpha matte";
             }
+            stats.put("portraitMattingMs", (System.nanoTime() - tm) / 1_000_000);
           } catch (Throwable t2) {
-            stats.put("portraitSegmenter", "failed: " + t2.getMessage());
+            stats.put("portraitMatting", "failed: " + t2.getMessage());
           }
+          if (maskQ == null) {
+            try {
+              float[] maskU = PortraitSegmenter.maskUpright(context, up, 0);
+              if (maskU != null) {
+                maskQ =
+                    dev.grain.photo.develop.PortraitBokeh.sampleUprightMaskToSensor(
+                        maskU, quW, quH, outW, outH, deg);
+                maskSrc = "person segmentation";
+              }
+            } catch (Throwable t2) {
+              stats.put("portraitSegmenter", "failed: " + t2.getMessage());
+            }
+          }
+          try {
+            long td = System.nanoTime();
+            float[] depthU = PortraitDepth.depthUprightQuarter(context, up, quW, quH);
+            if (depthU != null) {
+              depthQ =
+                  dev.grain.photo.develop.PortraitBokeh.sampleUprightMaskToSensor(
+                      depthU, quW, quH, outW, outH, deg);
+              depthOn = true;
+            }
+            stats.put("portraitDepthMs", (System.nanoTime() - td) / 1_000_000);
+          } catch (Throwable t2) {
+            stats.put("portraitDepth", "failed: " + t2.getMessage());
+          }
+          if (up != null) up.recycle();
           if (maskQ == null) {
             int bestFace = Faces.pick(frameFaces, null, outW, outH);
             if (bestFace >= 0) {
@@ -162,11 +205,12 @@ final class RawDevelopment {
             bitmap.getPixels(px, 0, outW, 0, 0, outW, outH);
             float rUsed =
                 dev.grain.photo.develop.PortraitBokeh.apply(
-                    px, outW, outH, maskQ, qw, qh, portrait.apertureF, px);
+                    px, outW, outH, maskQ, qw, qh, portrait.apertureF, px, depthQ);
             bitmap.setPixels(px, 0, outW, 0, 0, outW, outH);
             stats.put(
                 "portrait",
-                "f/" + portrait.apertureF + " · " + maskSrc + " · disc " + Math.round(rUsed) + "px");
+                "f/" + portrait.apertureF + " · " + maskSrc + (depthOn ? " + depth" : "")
+                    + " · disc " + Math.round(rUsed) + "px");
           } else {
             stats.put("portrait", "no subject found");
           }

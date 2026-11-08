@@ -1,20 +1,20 @@
-## Grain Photo vVERSION — Portrait Mode: Natural Lens Bokeh + 50/85mm Portrait Focal
+## Grain Photo vVERSION — Hair-Level Matting + Real Depth Bokeh (Portrait Mode v2)
 
-- **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, and photos). v0.9.4+ targets **arm64 phones** (all modern devices incl. the Redmi Note 13 Pro+) — the on-device person-segmentation engine no longer ships x86 builds.
-- **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** Download **`Grain-iOS-vVERSION.ipa`** below and install onto any iPhone (iOS 16+, including **iPhone XR / XS** and newer) using **[Sideloadly](https://sideloadly.io/)**, **[AltStore](https://altstore.io/)**, or **[SideStore](https://sidestore.io/)**. *(Portrait mode ships on Android first; the iOS port follows.)*
+- **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, and photos). Arm64 phones only. The APK grows to ~53 MB because the portrait brain is now **three bundled neural networks** — everything still runs **fully offline on your phone**; no shot ever leaves the device.
+- **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (portrait mode is still Android-first; sideload instructions as before).
 
-### What's new in v0.9.4 — Portrait Mode (Android)
+### What's new in v0.9.5 — Portrait Mode v2 (fixes from your test shot)
 
-#### 1. The P Key
-- **Portrait orientation:** new **`P`** key right beside the `Q` key (the zoom command dial is slightly narrower to make room). **Landscape:** under the `▶` playback key.
-- **Tap `P`** to cycle the simulated aperture: **`f/0.95 → f/1.4 → f/2 → f/2.8 → f/4 → f/8 → off`** — the key lights up warm gold (`P 1.4`) while active.
-- **Hold `P`** to cycle the portrait focal length: **23 mm → 50 mm → 85 mm** (a RAW-quality crop of the 200 MP sensor; because blur is applied before the crop, defocus grows with focal length exactly like real optics). The current state survives restarts.
+#### 1. Hair-Level Edges (Alpha Matting)
+- Replaced the coarse 256² segmentation with a bundled **Robust Video Matting** model (7.6 MB): the matte follows flyaway hairs, ear/shoulder silhouettes stay continuous, and the "ghost column" artifacts of v0.9.4 are gone. Falls back to the old segmenter → face silhouette if the model is missing.
 
-#### 2. Natural Lens Bokeh (Vivo-Style Rendering, Real-Optics Math)
-- **On-device person segmentation** (bundled 256² model — fully offline, nothing ever uploaded) separates the subject, then blurs the background **in linear light** with a disc radius that **grows with distance from your subject** (chamfer depth ramp), like a real fast lens.
-- **Foreground-exclusion blur** — person pixels never leak into the background, so halos around the silhouette are suppressed and the subject stays pixel-sharp.
-- **Soft optical transition** — the focus falloff at the silhouette is continuous (no cut-out look); hair edges keep full RAW acutance.
-- Falls back to the camera's face silhouette when the ML model is unavailable; records `portrait: f/… · disc Npx` in the photo receipt. Skipped on HI-RES bursts (memory safety).
+#### 2. Real Depth = Real Optics Defocus
+- A bundled int8 **MiDaS depth model** (18 MB) maps how far away everything is. The focus plane locks to the subject, and blur grows **optically with distance** — so a bed/table/clothes beside you at your focal plane **stays sharp** (v0.9.4 blurred it), far walls melt completely, and the falloff is continuous, not a cut-out ramp.
+- **Highlight discs:** defocused points of light now keep their punch — visible cream circles at f/0.95–f/1.4 like a fast lens, instead of washed-out smudges.
 
-#### 3. Kept from v0.9.3
-- Dark-hair smudge repair (tone-gated texture floor), speckle elimination, 4×4 quilt removal, 3D portrait faces, silk-clean walls, `-1/3 EV` bias, Universal Vibrant sRGB + Ultra HDR Gainmap.
+#### 3. Controls (same as v0.9.4)
+- **`P` key** beside `Q` (portrait) / under `▶` (landscape); tap cycles **f/0.95→f/8**, hold cycles **23/50/85 mm** portrait focal.
+- Costs: portrait shot processing is ~1-3 s longer (matting + depth + bokeh on CPU); HI-RES bursts still skip it. Receipt shows `alpha matte + depth · disc Npx` plus per-model timings.
+
+#### 4. Kept from v0.9.3/0.9.4
+- Dark-hair smudge repair, speckle elimination, 3D portrait faces, silk-clean walls, `-1/3 EV` bias, Universal Vibrant sRGB + Ultra HDR Gainmap, and the full v0.9.4 portrait plumbing (P key, focal dial, face fallback, hi-res skip).

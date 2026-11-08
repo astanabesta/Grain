@@ -6,8 +6,8 @@ android {
         applicationId 'dev.grain.photo'
         minSdk 29
         targetSdk 36
-        versionCode 46
-        versionName '0.9.4'
+        versionCode 47
+        versionName '0.9.5'
         // ARM phones only — drops x86/x86_64 copies of the segmentation native libs (~28 MB).
         ndk { abiFilters 'arm64-v8a' }
     }
@@ -57,6 +57,7 @@ dependencies {
     implementation 'androidx.activity:activity:1.11.0'
     // On-device person segmentation for portrait mode (offline, bundled selfie_segmenter model).
     implementation 'com.google.mediapipe:tasks-vision:0.10.14'
+    implementation 'org.tensorflow:tensorflow-lite:2.16.1'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.robolectric:robolectric:4.17'
 }
