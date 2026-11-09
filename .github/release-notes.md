@@ -1,4 +1,23 @@
-## Grain Photo vVERSION — Lift-Aware Noise Reduction for iPhone Looks
+## Grain Photo vVERSION — Lift-Aware NR, Tuned Down to Keep Shadow Texture
+
+- **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
+- **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
+
+### What's new in v0.9.16
+
+#### Lift-aware NR follows √gain instead of raw gain
+v0.9.15's first pass was visibly cleaning shadows but smoothing too hard in the deepest zones. The extra denoise now scales with the **square root of the tonal gain** (the visible noise sigma, not the variance) and the caps drop: luma up to **2.5×** (was 3.5×), chroma up to **3.5×** (was 5×). On XS Max Warm that means the bottom octave gets ~1.6× luma / ~2.4× chroma cleanup instead of 2.7×/4× — shadow blotches are still fought, but skin texture, fabric weave and hair strands in shaded areas keep their honest detail back.
+
+The tuner-coupling behaviour is unchanged: deepen with Shadows − and the cleanup digs in, lift Shadows + and it relaxes. Mid-tones/highlights remain pinned at exactly the v0.9.14 behaviour.
+
+### Previously in v0.9.15 — lift-aware noise reduction for iPhone looks
+Per-code luminance-gain tables of the actual tone transfer (recipe + style grade + tuner) drive the guided-filter denoise: lifted shadow zones get proportionally more cleanup, zones the tone map compresses keep old behaviour. Receipt prints the ratio as `liftNr`.
+
+### Previously in v0.9.14 — the Q menu joins the iPhone editor
+Q on iPhone looks now shows the editor tiles (EXP · HI · SHDW · SAT · SHARP · NR · CLAR · VIBR · WARM · CNTR + GRAIN, steps of 5), same per-look store as the SETTINGS editor.
+
+### Previously in v0.9.13 — the iPhone editor tuner
+Gallery-style sliders for the five iPhone looks: Light (Exposure…Fade + tone curve), Color (Saturation, Vibrance, Warmth, Tint), Detail (Sharpness, NR, Clarity) — OKLab domain, vibrance skin-protected and truly different from saturation, all −100…+100 with 0 = published look, saved per look.
 
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).

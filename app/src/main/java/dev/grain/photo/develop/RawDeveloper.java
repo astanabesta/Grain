@@ -302,9 +302,9 @@ public final class RawDeveloper {
   static final int FV_MAX_RADIUS = 4;
   static final int STRIP = 64, HALO = 5, GF_R = 2, NR_TABLE = 256;
   /** Lift-aware NR caps: the deepest lifted shadows get at most this much more luma / chroma NR. */
-  static final float LIFT_NR_LUMA_MAX = 3.5f, LIFT_NR_CHROMA_MAX = 5f;
+  static final float LIFT_NR_LUMA_MAX = 2.5f, LIFT_NR_CHROMA_MAX = 3.5f;
   /** Chroma blotches read worse than grain, so the chroma weight follows the lift more eagerly. */
-  static final float LIFT_NR_CHROMA_SLOPE = 1.8f;
+  static final float LIFT_NR_CHROMA_SLOPE = 1.6f;
   /** Quarter-resolution guided-filter radii (in 4 x 4 blocks) for luma and for chroma. */
   static final int QR = 2, QRC = 3;
   /**
@@ -2789,7 +2789,9 @@ public final class RawDeveloper {
     float ref = Math.max(1e-6f, (d[rt - 1] + d[rt] + d[rt + 1]) / 3f);
     float[] luma = new float[n + 1], chroma = new float[n + 1];
     for (int t = 0; t <= n; t++) {
-      float g = Math.max(0f, d[t]) / ref;
+      // sqrt(gain): visible noise scales with the tonal gain (sigma), so eps follows the sigma not
+      // the variance — the deeply lifted toe gets real cleanup without eating shadow texture.
+      float g = (float) Math.sqrt(Math.max(0f, d[t]) / ref);
       luma[t] = Math.max(1f, Math.min(LIFT_NR_LUMA_MAX, g));
       chroma[t] = Math.max(1f, Math.min(LIFT_NR_CHROMA_MAX, 1f + LIFT_NR_CHROMA_SLOPE * (g - 1f)));
     }

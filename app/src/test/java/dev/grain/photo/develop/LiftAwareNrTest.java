@@ -74,8 +74,8 @@ public class LiftAwareNrTest {
   @Test
   public void tunerEditsMoveTheWeights() {
     // x = 0.01 (a true shadow, below the cap zone): Shadows+ lifts L additively which flattens the
-    // slope, so the NR weight follows it down; Shadows- does the opposite. Measured margins are
-    // ~0.5, asserts keep 0.2-0.3 of headroom.
+    // slope, so the NR weight follows it down; Shadows- does the opposite. With the sqrt mapping
+    // (gain 1.66/1.19/2.27 -> weight 1.29/1.09/1.51) the margins are ~0.2, asserts keep ~0.1.
     ToneModel.Curve curve = appleCurve();
     AppleTune up = new AppleTune();
     up.shadows = 40;
@@ -85,8 +85,8 @@ public class LiftAwareNrTest {
     float wNull = tables(null)[0][zone];
     float wUp = tables(up)[0][zone];
     float wDown = tables(down)[0][zone];
-    assertTrue("shad+40 " + wUp + " < null " + wNull, wUp + 0.2f <= wNull);
-    assertTrue("shad-40 " + wDown + " > null " + wNull, wDown >= wNull + 0.3f);
+    assertTrue("shad+40 " + wUp + " < null " + wNull, wUp + 0.08f <= wNull);
+    assertTrue("shad-40 " + wDown + " > null " + wNull, wDown >= wNull + 0.1f);
     assertTrue(wDown > wUp);
   }
 
