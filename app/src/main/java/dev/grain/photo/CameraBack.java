@@ -76,8 +76,7 @@ final class CameraBack extends ViewGroup {
 
   static final int K_Q = 1, K_OK = 2, K_DISP = 3, K_PLAY = 4, K_DRIVE = 5, K_AEL = 6, K_LEVER = 7,
       K_COMMAND = 8, K_EYE = 9, K_VIEW_MODE = 10, K_POWER = 11, K_MEMO = 12, K_FILM = 13, K_EV = 14,
-      K_SS = 15, K_ISO_TOGGLE = 16, K_SHUTTER = 17, K_EVF_BACK = 18, K_SWIPE = 19, K_FLASH = 20,
-      K_PORTRAIT = 21;
+      K_SS = 15, K_ISO_TOGGLE = 16, K_SHUTTER = 17, K_EVF_BACK = 18, K_SWIPE = 19, K_FLASH = 20;
   static final int LEVER_CENTER = 0, LEVER_UP = 1, LEVER_RIGHT = 2, LEVER_DOWN = 3, LEVER_LEFT = 4;
   static final int ORANGE = 0xffe2622f, GREEN = 0xff63d36e;
   static final String[] FINISHES = {"SILVER", "BLACK", "GRAPHITE"};
@@ -114,7 +113,7 @@ final class CameraBack extends ViewGroup {
   final OsdState state = new OsdState();
   final Body body;
   final Drum film, shutterDial, exposure;
-  final TextView isoChip, viewMode, flashBtn, ael, q, drive, play, ok, disp, evfBack, portBtn;
+  final TextView isoChip, viewMode, flashBtn, ael, q, drive, play, ok, disp, evfBack;
   final Eyepiece eyepiece;
   final Lamp lamp;
   final Power power;
@@ -204,16 +203,6 @@ final class CameraBack extends ViewGroup {
     play = key(c, "▶", false, K_PLAY);
     play.setContentDescription("Playback");
     addView(play);
-    portBtn = key(c, "P", false, K_PORTRAIT);
-    portBtn.setContentDescription(
-        "Portrait mode: tap to set lens blur strength, hold for portrait focal length");
-    portBtn.setOnLongClickListener(
-        v -> {
-          v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
-          host.key(K_PORTRAIT, 1);
-          return true;
-        });
-    addView(portBtn);
     lever = new Lever(c);
     addView(lever);
     ok = key(c, "MENU\nOK", true, K_OK);
@@ -267,13 +256,6 @@ final class CameraBack extends ViewGroup {
     flashMode = Math.max(ExposureMath.FLASH_OFF, Math.min(ExposureMath.FLASH_TORCH, value));
     flashBtn.setText(ExposureMath.FLASH_SHORT[flashMode]);
     styleFlashBtn();
-  }
-
-  /** Portrait key: dim when off, warm gold with the simulated f-stop / focal length when on. */
-  void setPortrait(String label, boolean active) {
-    if (!label.equals(portBtn.getText().toString())) portBtn.setText(label);
-    int color = active ? 0xffd9b86c : 0xffe9e5da;
-    if (portBtn.getCurrentTextColor() != color) portBtn.setTextColor(color);
   }
 
   void setOn(boolean value) {
@@ -530,14 +512,14 @@ final class CameraBack extends ViewGroup {
     else if (landscape) layoutLandscape(w, h, ratio);
     else layoutPortrait(w, h, ratio);
     boolean screenParts = !evf;
-    for (View v : new View[] {eyepiece, lamp, viewMode, flashBtn, power, film, shutterDial, exposure, isoChip, memo, ael, command, q, drive, play, portBtn, lever, ok, disp, shutter})
+    for (View v : new View[] {eyepiece, lamp, viewMode, flashBtn, power, film, shutterDial, exposure, isoChip, memo, ael, command, q, drive, play, lever, ok, disp, shutter})
       v.setVisibility(screenParts ? VISIBLE : GONE);
     evfBack.setVisibility(GONE);
     put(body, new RectF(0, 0, w, h));
     if (u != styledU) {
       // Only when the scale changes: restyling inside measure must not request another layout.
       styledU = u;
-      for (TextView k : new TextView[] {ael, drive, play, disp, portBtn}) styleKey(k, 6.6f);
+      for (TextView k : new TextView[] {ael, drive, play, disp}) styleKey(k, 6.6f);
       styleKey(q, 15);
       styleKey(ok, 6.8f);
       styleKey(viewMode, 6);
@@ -582,10 +564,9 @@ final class CameraBack extends ViewGroup {
     screen.set(bezel.left + 7 * u, bezel.top + 7 * u, bezel.right - 7 * u, bezel.bottom - 7 * u);
     float by = 638 + extra;
     put(ael, d(18, by + 16, 54, 22));
-    put(command, d(84, by + 12, 172, 30));
-    slot.set(d(81, by + 9, 178, 36));
-    engrave("COMMAND", 168, by + 55, 6.2f, Paint.Align.CENTER, false);
-    put(portBtn, d(264, by + 11, 56, 32));
+    put(command, d(84, by + 12, 222, 30));
+    slot.set(d(81, by + 9, 228, 36));
+    engrave("COMMAND", 195, by + 55, 6.2f, Paint.Align.CENTER, false);
     put(q, d(332, by + 7, 46, 46));
     put(memo, d(16, by + 62, 54, 134));
     engrave("DRIVE / ◷", 86, by + 64, 5.8f, Paint.Align.LEFT, false);
@@ -645,8 +626,6 @@ final class CameraBack extends ViewGroup {
     put(drive, d(532 + rx, 135, 54, 24));
     engrave("PLAY", 534 + rx, 171, 5.8f, Paint.Align.LEFT, false);
     put(play, d(532 + rx, 175, 54, 24));
-    engrave("PORT", 534 + rx, 207, 5.8f, Paint.Align.LEFT, false);
-    put(portBtn, d(532 + rx, 211, 54, 24));
     put(lever, d(601 + rx, 134, 72, 72));
     put(ok, d(611 + rx, 218, 52, 52));
     put(disp, d(604 + rx, 282, 66, 24));

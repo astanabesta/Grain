@@ -217,26 +217,51 @@ public final class AppUpdater {
     return asset.optString("browser_download_url", asset.optString("url", ""));
   }
 
-  /** Cleans markdown headings/install boilerplate into readable release notes for the dialog. */
+  /**
+   * Cleans markdown into tidy plain-text release notes for the update dialog: section headings
+   * become their own spaced lines, list markers become bullets, links/images reduce to their text
+   * label, and install/checksum boilerplate is dropped.
+   */
   public static String summarizeNotes(String markdown) {
     if (markdown == null || markdown.trim().isEmpty()) return "";
     StringBuilder out = new StringBuilder();
+    boolean skipSection = false;
     for (String rawLine : markdown.split("\r?\n")) {
       String line = rawLine.trim();
-      if (line.isEmpty()) {
-        if (out.length() > 0 && out.charAt(out.length() - 1) != '\n') out.append('\n');
-        continue;
-      }
+      if (line.isEmpty()) continue;
       if (line.startsWith("## Grain Photo ")) continue;
       if (line.startsWith("Install **Grain-") || line.startsWith("- **From v0.")) continue;
-      if (line.startsWith("### ")) {
-        if (out.length() > 0 && out.charAt(out.length() - 1) != '\n') out.append('\n');
-        out.append(line.substring(4).trim().toUpperCase(Locale.ROOT)).append('\n');
+      if (line.startsWith("#")) {
+        String head = line.replaceFirst("^#+\\s*", "").replace("**", "").trim();
+        skipSection =
+            head.toLowerCase(Locale.ROOT).startsWith("checksum")
+                || head.toLowerCase(Locale.ROOT).startsWith("sha")
+                || head.toLowerCase(Locale.ROOT).startsWith("install")
+                || head.toLowerCase(Locale.ROOT).startsWith("download");
+        if (skipSection || head.isEmpty()) continue;
+        if (out.length() > 0) out.append('\n');
+        out.append(head.toUpperCase(Locale.ROOT)).append('\n');
         continue;
       }
-      String clean = line.replace("**", "").replace("`", "");
+      if (skipSection) continue;
+      String clean =
+          line.replaceAll("!\\[([^]]*)\\]\\([^)]*\\)", "$1")
+              .replaceAll("\\[([^]]*)\\]\\([^)]*\\)", "$1")
+              .replace("**", "")
+              .replace("`", "")
+              .trim();
+      if (clean.isEmpty()) continue;
+      if (clean.matches("[0-9a-fA-F]{64}\\s+\\*?\\S*")) continue; // checksum rows
+      if (clean.startsWith("- ") || clean.startsWith("* ") || clean.startsWith("• ")) {
+        clean = "• " + clean.substring(2).trim();
+      } else if (clean.matches("^\\d+[.)]\\s+.*")) {
+        clean = "• " + clean.replaceFirst("^\\d+[.)]\\s+", "").trim();
+      }
       out.append(clean).append('\n');
-      if (out.length() > 1400) break;
+      if (out.length() > 1400) {
+        out.append("…\n");
+        break;
+      }
     }
     return out.toString().trim();
   }

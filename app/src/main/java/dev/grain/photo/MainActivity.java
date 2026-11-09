@@ -458,7 +458,6 @@ public final class MainActivity extends ComponentActivity
     back.setFinish(finish);
     back.setIsoMode(isoDial);
     back.setFlashMode(flashMode);
-    back.setPortrait(portraitLabel(), portraitF > 0.1f);
     back.setPhotoRatio(Framing.portraitRatio(ratio));
     root.addOnLayoutChangeListener(
         (v, l, t, r, b, ol, ot, or, ob) -> {
@@ -736,7 +735,6 @@ public final class MainActivity extends ComponentActivity
     back.shutterDial.setIndex(isoDial ? indexOf(isoValues, isoSetting) : indexOf(shutterValues, shutterNs));
     back.setIsoMode(isoDial);
     back.setFlashMode(flashMode);
-    back.setPortrait(portraitLabel(), portraitF > 0.1f);
     back.setPhotoRatio(Framing.portraitRatio(ratio));
     pushOsd();
     if ("q".equals(mode)) refreshQ();
@@ -2170,8 +2168,7 @@ public final class MainActivity extends ComponentActivity
                       developEv,
                       mergedSeed,
                       meterFaces,
-                      true,
-                      portraitSpec());
+                      true);
               long devMs = (System.nanoTime() - devStart) / 1_000_000;
 
               receipt.put(
@@ -2300,8 +2297,7 @@ public final class MainActivity extends ComponentActivity
                       developEv,
                       capture.frame.exposureNs ^ System.nanoTime(),
                       meterFaces,
-                      i == bracket.length - 1,
-                      portraitSpec());
+                      i == bracket.length - 1);
               frameReceipt.put(
                   "development", out.stats.put("totalMs", (System.nanoTime() - start) / 1_000_000));
               PhotoStore.Photo saved;
@@ -3953,8 +3949,6 @@ public final class MainActivity extends ComponentActivity
         Math.max(
             ExposureMath.FLASH_OFF,
             Math.min(ExposureMath.FLASH_TORCH, preferences.getInt("flashMode", 0)));
-    portraitF = portraitSnap(preferences.getFloat("portraitAperture", 0f));
-    portraitMm = portraitMmSnap(preferences.getInt("portraitMm", 23));
   }
 
   private void savePrefs() {
@@ -3993,9 +3987,7 @@ public final class MainActivity extends ComponentActivity
             .putBoolean("isoDial", isoDial)
             .putLong("shutterNs", shutterNs)
             .putInt("isoSetting", isoSetting)
-            .putInt("flashMode", flashMode)
-            .putFloat("portraitAperture", portraitF)
-            .putInt("portraitMm", portraitMm);
+            .putInt("flashMode", flashMode);
     for (int i = 0; i < strengths.length; i++) edit.putInt("strength" + i, strengths[i]);
     edit.apply();
   }
@@ -4892,60 +4884,6 @@ public final class MainActivity extends ComponentActivity
     camera.focus(sensorPt[0], sensorPt[1], hold);
   }
 
-  /** Portrait aperture presets: off, then f/0.95 (max blur) up to f/8. Tap cycles. */
-  private static final float[] PORTRAIT_F = {0f, 0.95f, 1.4f, 2f, 2.8f, 4f, 8f};
-  private static final String[] PORTRAIT_F_LABEL = {"P", "P 0.95", "P 1.4", "P 2", "P 2.8", "P 4", "P 8"};
-  private static final int[] PORTRAIT_MM = {23, 50, 85};
-  private float portraitF = 0f;
-  private int portraitMm = 23;
-
-  private static float portraitSnap(float f) {
-    float best = 0f;
-    for (float preset : PORTRAIT_F) if (Math.abs(preset - f) < Math.abs(best - f)) best = preset;
-    return best;
-  }
-
-  private static int portraitMmSnap(int mm) {
-    int best = 23;
-    for (int p : PORTRAIT_MM) if (Math.abs(p - mm) < Math.abs(best - mm)) best = p;
-    return best;
-  }
-
-  private String portraitLabel() {
-    int idx = 0;
-    for (int i = 0; i < PORTRAIT_F.length; i++) if (Math.abs(PORTRAIT_F[i] - portraitF) < 0.01f) idx = i;
-    boolean on = portraitF > 0.1f;
-    return on ? PORTRAIT_F_LABEL[idx] + (portraitMm != 23 ? "·" + portraitMm : "") : "P";
-  }
-
-  /** Tap = cycle lens-blur strength (aperture); long-press = portrait focal length 23/50/85 mm. */
-  private void portraitKey(int value) {
-    if (value == 1) {
-      int idx = portraitMm == 50 ? 1 : portraitMm == 85 ? 2 : 0;
-      portraitMm = PORTRAIT_MM[(idx + 1) % PORTRAIT_MM.length];
-      setZoom(portraitMm / 23.0);
-      savePrefs();
-      back.setPortrait(portraitLabel(), portraitF > 0.1f);
-      back.toast(
-          "PORTRAIT " + portraitMm + " MM",
-          portraitF > 0.1f ? "tele framing · lens blur on" : "tele framing · tap P for lens blur");
-      return;
-    }
-    int idx = 0;
-    for (int i = 0; i < PORTRAIT_F.length; i++) if (Math.abs(PORTRAIT_F[i] - portraitF) < 0.01f) idx = i;
-    portraitF = PORTRAIT_F[(idx + 1) % PORTRAIT_F.length];
-    savePrefs();
-    boolean on = portraitF > 0.1f;
-    back.setPortrait(portraitLabel(), on);
-    back.toast(
-        on ? "PORTRAIT f/" + portraitF : "PORTRAIT OFF",
-        on ? "subject & held things sharp · creamy background · hold P for 50/85 mm" : "");
-  }
-
-  private RawDevelopment.Portrait portraitSpec() {
-    return portraitF > 0.1f ? new RawDevelopment.Portrait(portraitF) : null;
-  }
-
   @Override
   public void key(int key, int value) {
     if (!powerOn && key != CameraBack.K_POWER) return;
@@ -4981,9 +4919,6 @@ public final class MainActivity extends ComponentActivity
       case CameraBack.K_PLAY:
         if ("play".equals(mode)) closeOverlays();
         else openPlayback();
-        break;
-      case CameraBack.K_PORTRAIT:
-        portraitKey(value);
         break;
       case CameraBack.K_DRIVE:
         driveKey();
@@ -6556,18 +6491,18 @@ public final class MainActivity extends ComponentActivity
   private void showUpdateDialog(AppUpdater.Release rel) {
     if (isDestroyed() || isFinishing()) return;
     StringBuilder body = new StringBuilder();
-    body.append("Installed: v")
+    body.append("Installed v")
         .append(BuildConfig.VERSION_NAME)
-        .append("  →  Latest: ")
+        .append("  →  ")
         .append(rel.tagName);
     if (rel.sizeBytes > 0) {
-      body.append(String.format(Locale.US, " (%.1f MB)", rel.sizeBytes / 1048576.0));
-    }
-    if (rel.expectedSha256 != null || rel.sha256Url != null) {
-      body.append("\nSHA-256 verified before install.");
+      body.append(String.format(Locale.US, "  ·  %.1f MB", rel.sizeBytes / 1048576.0));
     }
     if (rel.notes != null && !rel.notes.isEmpty()) {
-      body.append("\n\n").append(rel.notes);
+      body.append("\n\n── What's new ──\n").append(rel.notes);
+    }
+    if (rel.expectedSha256 != null || rel.sha256Url != null) {
+      body.append("\n\nSHA-256 verified before install.");
     }
     new AlertDialog.Builder(this)
         .setTitle("Update available · Grain " + rel.tagName)
