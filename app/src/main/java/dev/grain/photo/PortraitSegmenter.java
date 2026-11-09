@@ -54,28 +54,51 @@ final class PortraitSegmenter {
    * EXIF orientation).
    */
   static float[] maskUpright(Context context, Bitmap bitmap, int uprightDegCw) {
+    int ws = bitmap.getWidth(), hs = bitmap.getHeight();
+    int deg = ((uprightDegCw % 360) + 360) % 360;
+    int wu = (deg == 90 || deg == 270) ? hs : ws, hu = (deg == 90 || deg == 270) ? ws : hs;
+    return maskUpright(context, bitmap, uprightDegCw, wu, hu);
+  }
+
+  /**
+   * Same, but the caller supplies the FULL-resolution upright dimensions ({@code fullW x fullH}):
+   * required when {@code bitmap} is a pre-rotated small preview (the quarter grid indexes full-res
+   * upright pixels, not the bitmap's pixels). With {@code uprightDegCw == 0} the bitmap is used
+   * as-is and only the supplied full dims define the output grid.
+   */
+  static float[] maskUpright(
+      Context context, Bitmap bitmap, int uprightDegCw, int fullW, int fullH) {
     ImageSegmenter s = segmenter(context.getApplicationContext());
     if (s == null) return null;
     int ws = bitmap.getWidth(), hs = bitmap.getHeight();
     int deg = ((uprightDegCw % 360) + 360) % 360;
-    int wu = (deg == 90 || deg == 270) ? hs : ws, hu = (deg == 90 || deg == 270) ? ws : hs;
+    int wu, hu;
+    Bitmap upright;
+    Bitmap small = null;
+    if (deg == 0 && fullW > 0) {
+      small = bitmap;
+      upright = bitmap; // already upright; used only for letterboxing proportions
+      wu = fullW;
+      hu = fullH;
+    } else {
+      wu = (deg == 90 || deg == 270) ? hs : ws;
+      hu = (deg == 90 || deg == 270) ? ws : hs;
+      float sc = Math.min(1f, 512f / Math.max(ws, hs));
+      small = Bitmap.createScaledBitmap(bitmap, Math.round(ws * sc), Math.round(hs * sc), true);
+      Matrix m = new Matrix();
+      m.postRotate(deg);
+      upright = Bitmap.createBitmap(small, 0, 0, small.getWidth(), small.getHeight(), m, true);
+    }
 
-    // Downscale (<=512) then rotate to upright: two cheap small bitmaps, never a full-res copy.
-    float sc = Math.min(1f, 512f / Math.max(ws, hs));
-    Bitmap small = Bitmap.createScaledBitmap(bitmap, Math.round(ws * sc), Math.round(hs * sc), true);
-    Matrix m = new Matrix();
-    m.postRotate(deg);
-    Bitmap upright = Bitmap.createBitmap(small, 0, 0, small.getWidth(), small.getHeight(), m, true);
-    if (small != upright) small.recycle();
-
-    // Letterbox to the square model canvas.
+    // Letterbox against the FULL-resolution upright dimensions (quarter cells index full-res
+    // pixels); the possibly-smaller bitmap is stretched into the content box.
     int side = 256;
-    int uw = upright.getWidth(), uh = upright.getHeight();
-    float k = side / (float) Math.max(uw, uh);
-    int cw = Math.max(1, Math.round(uw * k)), ch = Math.max(1, Math.round(uh * k));
+    float k = side / (float) Math.max(wu, hu);
+    int cw = Math.max(1, Math.round(wu * k)), ch = Math.max(1, Math.round(hu * k));
     int ox = (side - cw) / 2, oy = (side - ch) / 2;
     Bitmap content = Bitmap.createScaledBitmap(upright, cw, ch, true);
-    upright.recycle();
+    if (upright != bitmap) upright.recycle();
+    if (small != null && small != bitmap && small != upright) small.recycle();
     Bitmap square = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888);
     Canvas cv = new Canvas(square);
     cv.drawARGB(255, 0, 0, 0);

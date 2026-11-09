@@ -128,6 +128,23 @@ public class PortraitBokehTest {
         bedChamfer < bedAfter * 0.95f);
   }
 
+  /** The letterbox transform must be stable in full-resolution upright coordinates. */
+  @Test
+  public void letterboxContentIsFullResStable() {
+    float[] p = PortraitBokeh.letterboxContent(3060, 4080, 480, 320); // portrait frame
+    assertTrue("portrait fit by height", Math.abs(p[0] - 320f / 4080f) < 1e-6f);
+    assertTrue("portrait content centered", Math.abs(p[1] - 120f) < 1f && Math.abs(p[2]) < 0.5f);
+    float cx = 1530f, cy = 1500f; // typical face position (center-ish)
+    float mx = cx * p[0] + p[1], my = cy * p[0] + p[2];
+    assertTrue("face lands inside model canvas", mx >= 0 && mx < 480 && my >= 0 && my < 320);
+    assertTrue("face horizontally centered in content", Math.abs(mx - (120f + 120f)) < 1f);
+
+    float[] l = PortraitBokeh.letterboxContent(4080, 3060, 480, 320); // landscape frame
+    assertTrue("landscape fit by height", Math.abs(l[0] - 320f / 3060f) < 1e-6f);
+    assertTrue("landscape margins positive", Math.abs(l[1] - 26.67f) < 1f && Math.abs(l[2]) < 0.5f);
+    assertTrue("content never leaves the canvas", l[1] >= -0.01f && l[2] >= -0.01f);
+  }
+
   @Test
   public void apertureControlsDiscRadius() {
     assertTrue(PortraitBokeh.maxRadiusPx(3060, 0.95f) > PortraitBokeh.maxRadiusPx(3060, 2.8f));

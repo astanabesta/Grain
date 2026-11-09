@@ -53,16 +53,21 @@ final class PortraitDepth {
    * ({@code quW x quH}). Null when the model is missing or the output is degenerate (variance too
    * small to be a real scene).
    */
-  static float[] depthUprightQuarter(Context ctx, Bitmap upright, int quW, int quH) {
+  static float[] depthUprightQuarter(
+      Context ctx, Bitmap upright, int uprightFullW, int uprightFullH, int quW, int quH) {
     if (upright == null) return null;
     try {
       Interpreter it = get(ctx);
       if (it == null) return null;
 
-      float fit = Math.min(DS / (float) upright.getWidth(), DS / (float) upright.getHeight());
-      int cw = Math.max(1, Math.round(upright.getWidth() * fit));
-      int ch = Math.max(1, Math.round(upright.getHeight() * fit));
-      int ox = (DS - cw) / 2, oy = (DS - ch) / 2;
+      // Content box in model pixels against the FULL-resolution upright frame (the quarter grid
+      // indexes full-res pixels, not this bitmap's).
+      float[] lb = dev.grain.photo.develop.PortraitBokeh.letterboxContent(uprightFullW, uprightFullH, DS, DS);
+      final float fit = lb[0];
+      final float lox = lb[1], loy = lb[2];
+      int cw = Math.max(1, Math.round(uprightFullW * fit));
+      int ch = Math.max(1, Math.round(uprightFullH * fit));
+      int ox = (int) lox, oy = (int) loy;
       Bitmap box = Bitmap.createBitmap(DS, DS, Bitmap.Config.ARGB_8888);
       Canvas cv = new Canvas(box);
       cv.drawColor(Color.BLACK);
@@ -107,13 +112,13 @@ final class PortraitDepth {
       // Unproject onto the upright quarter grid (cell centers at 4*qx+2).
       float[] m = new float[quW * quH];
       for (int qy = 0; qy < quH; qy++) {
-        float my = (qy * 4f + 2f) * fit + oy - 0.5f;
+        float my = (qy * 4f + 2f) * fit + loy - 0.5f;
         int y0 = (int) Math.floor(my);
         float fy = my - y0;
         int yc0 = Math.max(0, Math.min(DS - 1, y0));
         int yc1 = Math.max(0, Math.min(DS - 1, y0 + 1));
         for (int qx = 0; qx < quW; qx++) {
-          float mx = (qx * 4f + 2f) * fit + ox - 0.5f;
+          float mx = (qx * 4f + 2f) * fit + lox - 0.5f;
           int x0 = (int) Math.floor(mx);
           float fx = mx - x0;
           int xc0 = Math.max(0, Math.min(DS - 1, x0));

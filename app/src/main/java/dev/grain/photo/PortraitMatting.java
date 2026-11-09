@@ -55,17 +55,24 @@ final class PortraitMatting {
    * ({@code quW x quH}; the letterbox padding is background 0). Null when the model is missing or
    * the matte is implausible (person coverage outside 1..90%).
    */
-  static float[] matteUprightQuarter(Context ctx, Bitmap upright, int quW, int quH) {
+  static float[] matteUprightQuarter(
+      Context ctx, Bitmap upright, int uprightFullW, int uprightFullH, int quW, int quH) {
     if (upright == null) return null;
+    // CRITICAL: the letterbox must be computed against the full-resolution upright dimensions —
+    // the quarter grid indexes full-res upright pixels, not this downscaled bitmap's pixels.
+    float[] lb = dev.grain.photo.develop.PortraitBokeh.letterboxContent(uprightFullW, uprightFullH, MW, MH);
+    final float fit = lb[0];
+    final float lox = lb[1];
+    final float loy = lb[2];
     try {
       Interpreter it = get(ctx);
       if (it == null) return null;
 
       // Letterbox the upright picture into 480x320 (keeps proportions; black bars = background).
-      float fit = Math.min(MW / (float) upright.getWidth(), MH / (float) upright.getHeight());
-      int cw = Math.max(1, Math.round(upright.getWidth() * fit));
-      int ch = Math.max(1, Math.round(upright.getHeight() * fit));
-      int ox = (MW - cw) / 2, oy = (MH - ch) / 2;
+      // Content box is expressed in model pixels against the FULL-resolution upright frame.
+      int cw = Math.max(1, Math.round(uprightFullW * fit));
+      int ch = Math.max(1, Math.round(uprightFullH * fit));
+      int ox = (int) lox, oy = (int) loy;
       Bitmap box = Bitmap.createBitmap(MW, MH, Bitmap.Config.ARGB_8888);
       Canvas cv = new Canvas(box);
       cv.drawColor(Color.BLACK);
@@ -130,13 +137,13 @@ final class PortraitMatting {
       // Unproject onto the upright quarter grid (cell centers at upright 4*qx+2).
       float[] m = new float[quW * quH];
       for (int qy = 0; qy < quH; qy++) {
-        float my = (qy * 4f + 2f) * fit + oy - 0.5f;
+        float my = (qy * 4f + 2f) * fit + loy - 0.5f;
         int y0 = (int) Math.floor(my);
         float fy = my - y0;
         int yc0 = Math.max(0, Math.min(MH - 1, y0));
         int yc1 = Math.max(0, Math.min(MH - 1, y0 + 1));
         for (int qx = 0; qx < quW; qx++) {
-          float mx = (qx * 4f + 2f) * fit + ox - 0.5f;
+          float mx = (qx * 4f + 2f) * fit + lox - 0.5f;
           int x0 = (int) Math.floor(mx);
           float fx = mx - x0;
           int xc0 = Math.max(0, Math.min(MW - 1, x0));

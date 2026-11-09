@@ -149,7 +149,7 @@ final class RawDevelopment {
           boolean depthOn = false;
           try {
             long tm = System.nanoTime();
-            float[] alphaU = PortraitMatting.matteUprightQuarter(context, up, quW, quH);
+            float[] alphaU = PortraitMatting.matteUprightQuarter(context, up, uw, uh, quW, quH);
             if (alphaU != null) {
               maskQ =
                   dev.grain.photo.develop.PortraitBokeh.sampleUprightMaskToSensor(
@@ -162,7 +162,7 @@ final class RawDevelopment {
           }
           if (maskQ == null) {
             try {
-              float[] maskU = PortraitSegmenter.maskUpright(context, up, 0);
+              float[] maskU = PortraitSegmenter.maskUpright(context, up, 0, uw, uh);
               if (maskU != null) {
                 maskQ =
                     dev.grain.photo.develop.PortraitBokeh.sampleUprightMaskToSensor(
@@ -175,7 +175,7 @@ final class RawDevelopment {
           }
           try {
             long td = System.nanoTime();
-            float[] depthU = PortraitDepth.depthUprightQuarter(context, up, quW, quH);
+            float[] depthU = PortraitDepth.depthUprightQuarter(context, up, uw, uh, quW, quH);
             if (depthU != null) {
               depthQ =
                   dev.grain.photo.develop.PortraitBokeh.sampleUprightMaskToSensor(
@@ -198,6 +198,19 @@ final class RawDevelopment {
               };
               maskQ = dev.grain.photo.develop.PortraitBokeh.faceEllipseMask(rect, outW, outH);
               maskSrc = "face silhouette";
+            }
+          }
+          if (maskQ != null) {
+            // Hard guard: a broken model can never blur the frame wholesale. If the person-core
+            // coverage is implausible, skip the bokeh entirely (photo stays developed normally).
+            int core = 0;
+            for (float v : maskQ) if (v > 0.65f) core++;
+            float cover = core / (float) maskQ.length;
+            if (cover < 0.003f || cover > 0.85f) {
+              stats.put(
+                  "portraitGuard",
+                  String.format(java.util.Locale.US, "implausible mask coverage %.3f", cover));
+              maskQ = null;
             }
           }
           if (maskQ != null) {

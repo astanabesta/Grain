@@ -404,6 +404,19 @@ public final class PortraitBokeh {
     return true;
   }
 
+  /**
+   * Letterbox content transform of a {@code uw x uh} full-resolution upright image onto an
+   * {@code mw x mh} model canvas: returns {@code {fit, offsetX, offsetY}} so that the model pixel
+   * of upright point (ux, uy) is {@code (ux * fit + ox, uy * fit + oy)}. Shared by all portrait
+   * NN wrappers so every model sees the same mapping regardless of the bitmap's own resolution.
+   */
+  public static float[] letterboxContent(int uw, int uh, int mw, int mh) {
+    float fit = Math.min(mw / (float) uw, mh / (float) uh);
+    int cw = Math.max(1, Math.round(uw * fit));
+    int ch = Math.max(1, Math.round(uh * fit));
+    return new float[] {fit, (mw - cw) / 2f, (mh - ch) / 2f};
+  }
+
   /** Separable O(1)-per-pixel box blur, edge-replicated. */
   private static void boxBlur(float[] in, float[] out, int w, int h, int rad) {
     float[] tmp = new float[w];
