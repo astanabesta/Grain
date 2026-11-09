@@ -117,7 +117,7 @@ public final class MainActivity extends ComponentActivity
   private OrientationEventListener orientationListener;
   /** Film-sheet thumbnails through each imported LUT, built once per import. */
   private final java.util.Map<String, Bitmap> lutPreviews = new java.util.HashMap<>();
-  private PhotoStore store;
+  private volatile PhotoStore store;
   private SharedPreferences preferences;
   private JSONObject capabilities = new JSONObject();
   private int recipe, strengths[] = new int[Recipe.ALL.length], timerSeconds;
@@ -2575,10 +2575,11 @@ public final class MainActivity extends ComponentActivity
   }
 
   private void updateThumb() {
-    if (store == null) return;
+    final PhotoStore s = store;
+    if (s == null) return;
     files.execute(
         () -> {
-          int count = store.list().size();
+          int count = s.list().size();
           runOnUiThread(
               () -> {
                 if (isDestroyed()) return;
