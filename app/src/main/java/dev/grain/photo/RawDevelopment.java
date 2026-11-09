@@ -183,6 +183,7 @@ final class RawDevelopment {
               depthOn = true;
             }
             stats.put("portraitDepthMs", (System.nanoTime() - td) / 1_000_000);
+            if (!depthOn) stats.put("portraitDepthNull", String.valueOf(PortraitDepth.lastFailure));
           } catch (Throwable t2) {
             stats.put("portraitDepth", "failed: " + t2.getMessage());
           }
@@ -211,6 +212,17 @@ final class RawDevelopment {
                   "portraitGuard",
                   String.format(java.util.Locale.US, "implausible mask coverage %.3f", cover));
               maskQ = null;
+            }
+          }
+          if (maskQ != null && frameFaces != null) {
+            int bf = Faces.pick(frameFaces, null, outW, outH);
+            if (bf >= 0) {
+              int[] fr = {
+                frameFaces[bf * 4], frameFaces[bf * 4 + 1],
+                frameFaces[bf * 4 + 2], frameFaces[bf * 4 + 3]
+              };
+              dev.grain.photo.develop.PortraitBokeh.applyHairAnchor(maskQ, qw, qh, fr, outW, outH);
+              maskSrc += " + hair-anchor";
             }
           }
           if (maskQ != null) {

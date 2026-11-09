@@ -145,6 +145,30 @@ public class PortraitBokehTest {
     assertTrue("content never leaves the canvas", l[1] >= -0.01f && l[2] >= -0.01f);
   }
 
+  /** Hair-band anchor lifts weak matte alpha around the detected face; outside stays untouched. */
+  @Test
+  public void hairAnchorLiftsWeakAlphaAroundFaceOnly() {
+    int w = 192, h = 144; // full-res; quarter grid 48x36
+    int qw = (w + 3) / 4, qh = (h + 3) / 4;
+    float[] mask = new float[qw * qh]; // all "background"
+    // hair wisps above the forehead that RVM-like models score ~0.3:
+    int cxQ = 17, cyQ = 16; // quarter-res face center ≈ (68,64) full-res
+    for (int y = cyQ - 6; y < cyQ; y++)
+      for (int x = cxQ - 3; x <= cxQ + 3; x++) mask[y * qw + x] = 0.30f;
+    float before = PortraitBokehTest.err0(mask);
+    int[] face = {52, 44, 84, 84}; // full-res face rect (13x10 quarter cells)
+    PortraitBokeh.applyHairAnchor(mask, qw, qh, face, w, h);
+    // hair band now >= 0.8 (was 0.30)
+    assertTrue("hair floor lifted", mask[(cyQ - 4) * qw + cxQ] >= 0.8f);
+    // far corner stays background
+    assertTrue("outside untouched", mask[2 * qw + 2] == 0f);
+    // sanity: face ellipse center is lifted
+    assertTrue("face core high", mask[cyQ * qw + cxQ] >= 0.8f);
+    System.out.println("DBG anchor spread=" + before);
+  }
+
+  private static float err0(float[] m) { return m[0]; }
+
   @Test
   public void apertureControlsDiscRadius() {
     assertTrue(PortraitBokeh.maxRadiusPx(3060, 0.95f) > PortraitBokeh.maxRadiusPx(3060, 2.8f));

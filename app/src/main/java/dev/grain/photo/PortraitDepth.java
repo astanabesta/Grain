@@ -29,6 +29,8 @@ final class PortraitDepth {
 
   private static Interpreter interpreter;
   private static boolean tried;
+  /** Why the last call returned null (for photo receipts). Reset per call. */
+  static volatile String lastFailure = null;
 
   private static Interpreter get(Context ctx) {
     if (!tried) {
@@ -55,10 +57,11 @@ final class PortraitDepth {
    */
   static float[] depthUprightQuarter(
       Context ctx, Bitmap upright, int uprightFullW, int uprightFullH, int quW, int quH) {
-    if (upright == null) return null;
+    lastFailure = null;
+    if (upright == null) { lastFailure = "no-upright-bitmap"; return null; }
     try {
       Interpreter it = get(ctx);
-      if (it == null) return null;
+      if (it == null) { lastFailure = "model-load"; return null; }
 
       // Content box in model pixels against the FULL-resolution upright frame (the quarter grid
       // indexes full-res pixels, not this bitmap's).
@@ -98,12 +101,15 @@ final class PortraitDepth {
         if (v < lo) lo = v;
         if (v > hi) hi = v;
       }
-      if (!(hi - lo > 1e-5f)) return null;
+      if (!(hi - lo > 1e-5f)) { lastFailure = "flat-range " + lo; return null; }
       float span = hi - lo;
       for (float v : d) hist[(int) Math.min(511, ((v - lo) / span) * 511.99f)]++;
       int p2 = histIdx(hist, d.length / 50), p98 = histIdx(hist, d.length * 49 / 50);
       float slo = lo + span * p2 / 511f, shi = lo + span * p98 / 511f;
-      if (!(shi - slo > 0.02f * span)) return null; // flat depth = useless scene
+      if (!(shi - slo > 8f / 1000f * span)) { // was 2%: real portraits are depth-tight, keep them
+        lastFailure = String.format(java.util.Locale.US, "tight-spread %.5f/%.5f", shi - slo, span);
+        return null;
+      }
       float[] n8 = new float[d.length];
       float inv = 1f / (shi - slo);
       for (int i = 0; i < d.length; i++)
@@ -132,6 +138,7 @@ final class PortraitDepth {
       }
       return m;
     } catch (RuntimeException | Error e) {
+      lastFailure = "exception:" + e.getClass().getSimpleName();
       Log.w(TAG, "depth run failed: " + e);
       return null;
     }

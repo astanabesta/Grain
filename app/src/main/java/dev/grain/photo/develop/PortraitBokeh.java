@@ -331,6 +331,39 @@ public final class PortraitBokeh {
   }
 
   /**
+   * Hair-band anchor: lifts the matte confidence inside the hair/outline region around the
+   * detected face so flyaway strands (whose matte alpha is typically 0.2-0.5 on a 480px model)
+   * are never blurred. The soft elliptical floor (max blend, soft rim) covers the face box
+   * expanded 1.9x tall / 1.5x wide, shifted toward the hairline. Everything outside stays the
+   * model's alpha untouched. {@code faceRect} is full-res sensor coords; {@code mask}/{@code qw x
+   * qh} is the sensor quarter grid.
+   */
+  public static void applyHairAnchor(float[] mask, int qw, int qh, int[] faceRect, int w, int h) {
+    if (faceRect == null || faceRect.length < 4) return;
+    float cx = (faceRect[0] + faceRect[2]) * 0.5f / 4f;
+    float cy = (faceRect[1] + faceRect[3]) * 0.5f / 4f;
+    float hw = Math.max(1f, (faceRect[2] - faceRect[0]) / 4f);
+    float hh = Math.max(1f, (faceRect[3] - faceRect[1]) / 4f);
+    // Anchor ellipse: face box + hair volume (shifted up toward the hairline).
+    float ex = cx, ey = cy - 0.45f * hh, rx = hw * 1.5f, ry = hh * 1.9f;
+    int x0 = Math.max(0, (int) Math.floor(ex - rx * 1.2f));
+    int x1 = Math.min(qw - 1, (int) Math.ceil(ex + rx * 1.2f));
+    int y0 = Math.max(0, (int) Math.floor(ey - ry * 1.2f));
+    int y1 = Math.min(qh - 1, (int) Math.ceil(ey + ry * 1.2f));
+    for (int y = y0; y <= y1; y++) {
+      for (int x = x0; x <= x1; x++) {
+        double dx = (x + 0.5 - ex) / rx, dy = (y + 0.5 - ey) / ry;
+        double d = dx * dx + dy * dy;
+        if (d >= 1.15) continue;
+        // soft rim: full strength inside d<=1, fades to nothing at d=1.15
+        float floor = d <= 1.0 ? 0.9f : (float) (0.9 * (1.15 - d) / 0.15);
+        int i = y * qw + x;
+        if (mask[i] < floor) mask[i] = floor;
+      }
+    }
+  }
+
+  /**
    * Fallback person mask when ML segmentation is unavailable: a soft-body ellipse expanded from
    * the best camera face box (face + hair + shoulders/torso silhouette), sensor oriented.
    */
