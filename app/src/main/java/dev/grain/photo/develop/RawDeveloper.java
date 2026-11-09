@@ -301,6 +301,10 @@ public final class RawDeveloper {
 
   static final int FV_MAX_RADIUS = 4;
   static final int STRIP = 64, HALO = 5, GF_R = 2, NR_TABLE = 256;
+  /** Lift-aware NR caps: the deepest lifted shadows get at most this much more luma / chroma NR. */
+  static final float LIFT_NR_LUMA_MAX = 3.5f, LIFT_NR_CHROMA_MAX = 5f;
+  /** Chroma blotches read worse than grain, so the chroma weight follows the lift more eagerly. */
+  static final float LIFT_NR_CHROMA_SLOPE = 1.8f;
   /** Quarter-resolution guided-filter radii (in 4 x 4 blocks) for luma and for chroma. */
   static final int QR = 2, QRC = 3;
   /**
@@ -556,6 +560,16 @@ public final class RawDeveloper {
     ToneTable linearCode;
     final float[] nrA, nrB;
     final float nrKeep, sharpen, epsFine;
+    /**
+     * Lift-aware NR weights per tone-code bin (iPhone looks only, null otherwise): the downstream
+     * iPhone tone map ({@link AppleRender.ToneTable} + style grade + tuner) amplifies scene noise
+     * in lifted zones, but the raw-stage noise model is built on the identity FLog2 code. These
+     * tables hold the relative sRGB-domain luminance gain vs mid-grey — luma (capped at
+     * LIFT_NR_LUMA_MAX) and chroma (stronger, LIFT_NR_CHROMA_MAX) — multipliers on the guided
+     * filter epsilons, so heavily lifted shadows get proportionally deeper denoising while zones
+     * the tone map compresses keep today's behaviour exactly.
+     */
+    final float[] liftL, liftC;
     /**
      * Development.FIRST_VERSION: colour noise box radius (v0.2.0 rule), and whether the luma stage
      * runs at all (High ISO NR above -4, Sharpness other than -2, or Clarity); sRGB tables for the
@@ -947,6 +961,24 @@ public final class RawDeveloper {
       nrA = new float[NR_TABLE + 1];
       nrB = new float[NR_TABLE + 1];
       noiseTables(curve, gain, nS, nO, NOISE_MIX * NOISE_MIX, nrA, nrB);
+      // Lift-aware NR (iPhone looks): the identity-code noise model above cannot see the shadow
+      // gain the iPhone tone map adds downstream, so build per-code relative gain tables and let
+      // the epsilons follow the actual display amplification of each zone.
+      if (apple && appleTone != null) {
+        float[][] lt =
+            liftTables(curve, appleTone, appleStyle, r.color, outputDisplayP3, appleTunePlan);
+        liftL = lt[0];
+        liftC = lt[1];
+        int ts = (int) (0.02f * NR_TABLE), tm = (int) (0.5f * NR_TABLE);
+        stats.put(
+            "liftNr",
+            new double[] {
+              round(liftL[ts] / Math.max(1e-6f, liftL[tm]), 2), round(liftC[ts] / Math.max(1e-6f, liftC[tm]), 2)
+            });
+      } else {
+        liftL = null;
+        liftC = null;
+      }
       double appleLowScale = apple ? 0.88 * isoBoost : 1.0;
       double kLow =
           Math.max(
@@ -1678,6 +1710,14 @@ public final class RawDeveloper {
       return nrA[t] * s + nrB[t] * s * s;
     }
 
+    /** Lift-aware NR weight at a luma code; 1 (today's behaviour) when no tables (non-iPhone). */
+    float lift(float[] w, float code) {
+      if (w == null) return 1f;
+      float ti = code * NR_TABLE;
+      int t = ti <= 0 ? 0 : ti >= NR_TABLE ? NR_TABLE : (int) ti;
+      return w[t];
+    }
+
     /**
      * Low-frequency noise reduction on the quarter-resolution planes: a self-guided filter on luma
      * (epsilon from the noise curve), then chroma filtered with the denoised luma as guide, so colour
@@ -1695,7 +1735,7 @@ public final class RawDeveloper {
       boxMean(t1, m2, QR, box);
       for (int i = 0; i < n; i++) {
         float mean = m1[i], var = Math.max(0, m2[i] - mean * mean);
-        float eps = epsLow * noiseVar(mean, qS[i]);
+        float eps = epsLow * lift(liftL, mean) * noiseVar(mean, qS[i]);
         float ai = var / (var + eps + 1e-12f);
         m1[i] = ai;
         m2[i] = (1 - ai) * mean;
@@ -1740,7 +1780,7 @@ public final class RawDeveloper {
         for (int i = 0; i < n; i++) {
           float mPi = m1[i];
           float varI = Math.max(0, mYY[i] - mY[i] * mY[i]), cov = m2[i] - mY[i] * mPi;
-          float eps = epsChroma * noiseVar(mY[i], qS[i]);
+          float eps = epsChroma * lift(liftC, mY[i]) * noiseVar(mY[i], qS[i]);
           float ai = cov / (varI + eps + 1e-12f);
           m1[i] = ai;
           m2[i] = mPi - ai * mY[i];
@@ -2360,6 +2400,7 @@ public final class RawDeveloper {
       final int R = GF_R, total = rowsMid * W;
       final float inv = 1f / ((2 * R + 1) * (2 * R + 1));
       final float[] Y = yb, h1 = tu, h2 = tv, nA = j.nrA, nB = j.nrB;
+      final float[] liftL = j.liftL;
       final float epsF = j.epsFine;
       for (int i = 0; i < total; i++) Y[i] = 0.25f * (cr[i] + 2 * cg[i] + cb[i]);
       boxRows(Y, null, true, 0, rowsMid, R, h1, h2);
@@ -2376,7 +2417,8 @@ public final class RawDeveloper {
           float sh = sg[o + x];
           float ti = mean * NR_TABLE;
           int t = ti <= 0 ? 0 : ti >= NR_TABLE ? NR_TABLE : (int) ti;
-          float eps = epsF * (nA[t] * sh + nB[t] * sh * sh);
+          float lw = liftL == null ? 1f : liftL[t];
+          float eps = epsF * lw * (nA[t] * sh + nB[t] * sh * sh);
           float a = var / (var + eps + 1e-12f);
           aa[o + x] = a;
           bb[o + x] = (1 - a) * mean;
@@ -2706,6 +2748,52 @@ public final class RawDeveloper {
   static double toneCode(ToneModel.Curve curve, double x) {
     double v = curve.apply(FLog2.encode(x));
     return v < 0 ? 0 : v > 1 ? 1 : v;
+  }
+
+  /**
+   * Lift-aware NR tables (iPhone looks): for every tone-code bin t, push a neutral ramp through the
+   * exactly runtime gradient path (code -> linear -> AppleRender.applyRgbTone -> gradeDisplayP3 with
+   * the recipe Colour step and the tuner plan), encode to sRGB, and take the tonal derivative
+   * dOut/dCode as that zone's noise amplification. Normalised to the mid-grey bin (code of 0.18),
+   * then clamped: luma weight in [1, LIFT_NR_LUMA_MAX], chroma in [1, LIFT_NR_CHROMA_MAX] following
+   * the lift at LIFT_NR_CHROMA_SLOPE strength. Zones the tone map compresses (gain < mid) stay at
+   * 1 — current behaviour is kept there on purpose.
+   */
+  static float[][] liftTables(
+      ToneModel.Curve curve,
+      AppleRender.ToneTable appleTone,
+      AppleRender.Style style,
+      int colorStep,
+      boolean outputP3,
+      AppleTune.Plan plan) {
+    final int n = NR_TABLE;
+    float[] enc = new float[n + 1];
+    float[] px = new float[3];
+    for (int t = 0; t <= n; t++) {
+      float c = t / (float) n;
+      float x = CubeLut.flog2Linear(c);
+      AppleRender.applyRgbTone(x, x, x, appleTone, px);
+      if (plan != null) AppleRender.gradeDisplayP3(px, style, colorStep, outputP3, plan);
+      else AppleRender.gradeDisplayP3(px, style, colorStep, outputP3);
+      float y = Math.max(0f, px[1]); // neutral: green stands in for luma
+      enc[t] = y <= 0.0031308f ? 12.92f * y : (float) (1.055 * Math.pow(y, 1.0 / 2.4) - 0.055);
+    }
+    float[] d = new float[n + 1];
+    d[0] = (enc[1] - enc[0]) * n;
+    d[n] = (enc[n] - enc[n - 1]) * n;
+    for (int t = 1; t < n; t++) d[t] = (enc[t + 1] - enc[t - 1]) * (n * 0.5f);
+    // one 3-tap smoothing pass keeps the derivative on the table's quantisation grid stable
+    for (int t = 1; t < n; t++) d[t] = 0.25f * d[t - 1] + 0.5f * d[t] + 0.25f * d[t + 1];
+    float refCode = (float) toneCode(curve, 0.18);
+    int rt = (int) Math.max(1, Math.min(n - 1, refCode * n));
+    float ref = Math.max(1e-6f, (d[rt - 1] + d[rt] + d[rt + 1]) / 3f);
+    float[] luma = new float[n + 1], chroma = new float[n + 1];
+    for (int t = 0; t <= n; t++) {
+      float g = Math.max(0f, d[t]) / ref;
+      luma[t] = Math.max(1f, Math.min(LIFT_NR_LUMA_MAX, g));
+      chroma[t] = Math.max(1f, Math.min(LIFT_NR_CHROMA_MAX, 1f + LIFT_NR_CHROMA_SLOPE * (g - 1f)));
+    }
+    return new float[][] {luma, chroma};
   }
 
   /**
