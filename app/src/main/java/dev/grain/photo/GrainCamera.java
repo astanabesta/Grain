@@ -12,6 +12,7 @@ import android.os.*;
 import android.util.*;
 import android.view.*;
 import dev.grain.photo.develop.FujiRecipe;
+import dev.grain.photo.develop.RawDeveloper;
 import dev.grain.photo.develop.RawFrame;
 import dev.grain.photo.develop.RawStack;
 import java.io.File;
@@ -1537,16 +1538,12 @@ public final class GrainCamera {
         tryFinish();
         return;
       }
-      double nS = 3e-5, nO = 1e-5;
-      if (refMeta.noiseS != null && refMeta.noiseO != null) {
-        double s0 = 0, o0 = 0;
-        for (int k = 0; k < refMeta.noiseS.length; k++) {
-          s0 += refMeta.noiseS[k];
-          o0 += refMeta.noiseO[k];
-        }
-        nS = s0 / refMeta.noiseS.length;
-        nO = o0 / refMeta.noiseO.length;
-      }
+      // Gate on the frame-measured noise model, not the raw HAL profile: some HALs under-report
+      // noise so badly that the 2.4-sigma motion gate fires on mostly-static pixels and silently
+      // discards the stacking gain (device evidence, v0.9.20: 43% gated on a still scene at ISO
+      // 5834; output at noise parity with the single-frame shot).
+      double[] gateNoise = RawDeveloper.stackGateNoise(refMeta);
+      double nS = gateNoise[0], nO = gateNoise[1];
       float black = (refMeta.black[0] + refMeta.black[1] + refMeta.black[2] + refMeta.black[3]) / 4f;
       RawStack.Out merged =
           RawStack.merge(planes, rawSize.getWidth(), rawSize.getHeight(), rawSize.getWidth(), black, refMeta.white, nS, nO);

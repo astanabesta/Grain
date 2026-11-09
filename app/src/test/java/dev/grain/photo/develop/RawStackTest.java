@@ -136,6 +136,83 @@ public class RawStackTest {
     assertTrue(vout < vin * 0.42);
   }
 
+  // --- v0.9.21 regression: the gate must run on MEASURED noise, not a lying HAL profile. ---
+
+  /** Wide-luminance-ramp static scene so {@link RawDeveloper#measureRawNoise} finds enough bins. */
+  private static int calScene(int x, int y) {
+    double xn = 0.05 + 0.6 * x / W + (((x * 29 + y * 53) % 17 < 8) ? 0.05 : -0.05);
+    return (int) Math.round(BLACK + xn * (WHITE - BLACK));
+  }
+
+  /** Real sensor noise {1.2e-3, 5e-6} — what frame-measurement reported on a MediaTek phone. */
+  private static short[] makeCalFrame(long seed) {
+    Random rnd = new Random(seed);
+    short[] f = new short[W * H];
+    for (int y = 0; y < H; y++)
+      for (int x = 0; x < W; x++) {
+        int base = calScene(x, y);
+        double xn = (base - BLACK) / (WHITE - BLACK);
+        double sigma = (WHITE - BLACK) * Math.sqrt(1.2e-3 * xn + 5e-6);
+        f[y * W + x] = (short) Math.max(0, Math.min(1023, Math.round(base + rnd.nextGaussian() * sigma)));
+      }
+    return f;
+  }
+
+  /** RawFrame metadata mirroring the MediaTek HAL: honest colour data, under-reporting profile. */
+  private static RawFrame calMeta(short[] data) {
+    RawFrame f = new RawFrame(data, W, H, W);
+    f.cfa = RawFrame.GRBG; // black defaults to {64,64,64,64}
+    f.white = (int) WHITE;
+    f.iso = 5834;
+    f.exposureNs = 30_000_000L;
+    f.neutral = new double[] {0.5, 1.0, 0.52};
+    f.noiseS = new double[] {2.9e-4, 1.5e-4, 1.4e-4, 2.5e-4}; // GRBG: greens at k=0 and k=3
+    f.noiseO = new double[] {5e-8, 2.6e-8, 0, 2.4e-8};
+    return f;
+  }
+
+  @Test
+  public void motionGateCalibratesToMeasuredNoiseNotLyingHalProfile() {
+    List<short[]> a = new ArrayList<>(), b = new ArrayList<>();
+    for (int k = 0; k < 3; k++) {
+      short[] f = makeCalFrame(900 + k);
+      a.add(f.clone());
+      b.add(f.clone());
+    }
+    RawStack.Out naive = RawStack.merge(a, W, H, W, BLACK, WHITE, 2.1e-4, 2.5e-8); // HAL's story
+    double[] trusted = RawDeveloper.stackGateNoise(calMeta(b.get(0)));
+    RawStack.Out fixed = RawStack.merge(b, W, H, W, BLACK, WHITE, trusted[0], trusted[1]);
+    // static scene: the lying profile gates like crazy (device evidence: 43%), the measured
+    // model keeps the gate quiet
+    assertTrue("gate on raw HAL profile: " + naive.gatedFraction, naive.gatedFraction > 0.20f);
+    assertTrue("gate on measured noise: " + fixed.gatedFraction, fixed.gatedFraction < 0.05f);
+    assertTrue(
+        "naive stacks noticeably worse: naive=" + naive.gatedFraction + " fixed=" + fixed.gatedFraction,
+        naive.gatedFraction > fixed.gatedFraction * 4);
+    // and with the gate quiet, the stack actually earns its MSE win vs the known signal
+    double vin = 0, vout = 0, vNaive = 0;
+    int nPix = 0;
+    for (int y = 0; y < H; y++)
+      for (int x = 0; x < W; x++) {
+        double truth = calScene(x, y);
+        if (truth > 1000) continue; // skip clipped highlights
+        double d0 = (b.get(0)[y * W + x] & 0xffff) - truth;
+        double d1 = (fixed.data[y * W + x] & 0xffff) - truth;
+        double d2 = (naive.data[y * W + x] & 0xffff) - truth;
+        vin += d0 * d0;
+        vout += d1 * d1;
+        vNaive += d2 * d2;
+        nPix++;
+      }
+    vin /= nPix;
+    vout /= nPix;
+    vNaive /= nPix;
+    assertTrue("fixed merge MSE ratio " + vout / vin, vout < vin * 0.45);
+    assertTrue(
+        "naive merge MSE ratio " + vNaive / vin + " vs fixed " + vout / vin,
+        vNaive > vout * 1.3);
+  }
+
   @Test
   public void singleFrameIsBitExact() {
     List<short[]> frames = new ArrayList<>();

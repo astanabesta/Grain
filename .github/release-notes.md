@@ -1,4 +1,16 @@
-## Grain Photo vVERSION — Stack Automatic Can No Longer Stall
+## Grain Photo vVERSION — Frame Stack Now Actually Earns Its Noise Win
+
+- **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
+- **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
+
+### What's new in v0.9.21 — measured-noise motion gate
+
+User evidence (thank you!): a successful 3-frame stack showed `stackGatedPct: 42.9` on a **still** scene and measured at noise parity with the single-frame shot. Root cause: the merge's motion gate was calibrated from the camera HAL's self-reported noise profile — and on MediaTek hardware that profile under-reports by ~6× (shot) to ~190× (read), so the "2.4-sigma motion tolerance" was really a 1-sigma hair-trigger: almost half of every frame's pixels were rejected as phantom "motion", and the stack merged a fraction of what it should.
+
+The gate now runs on the same trusted noise model the develop pipeline uses: HAL profile × calibration, clamped against a measurement taken on the reference frame itself at merge time. On a still scene, gating collapses from ~43% to a few %, and the √3 (≈1.7×) noise reduction actually reaches the photo — most visible in walls, skies, skin, and shadow. A regression test replicating this phone's lying profile pins the fix.
+
+### Previously in v0.9.20 — stack automatic can no longer stall
+Receipt rekeyed to the held burst result (tryFinish timestamp-equality deadlock), terminal desync failures with counted toasts, post-assemble backstop: worst case fails clearly inside ~6 s.
 
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).

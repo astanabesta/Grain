@@ -9,9 +9,10 @@ import java.util.List;
  * — it just sees a frame whose noise variance is divided by the number of contributing frames.
  *
  * <p>Motion safety by construction (Google HDR+ style): a pixel where a candidate frame deviates
- * from the reference by more than ~2.4 sigma of the frame's raw noise model is excluded from the
- * average at that pixel. A moving subject therefore costs the noise win locally but can never
- * ghost or blur: the merged output degrades gracefully to the reference frame exactly there.
+ * from the reference by more than ~2.4 sigma of the PAIR-DIFFERENCE noise (~3.4 sigma of one
+ * frame) is excluded from the average at that pixel. A moving subject therefore costs the noise
+ * win locally but can never ghost or blur: the merged output degrades gracefully to the reference
+ * frame exactly there.
  *
  * <p>Alignment is global integer translation estimated on quarter-resolution luminance thumbnails
  * (all four CFA samples per 2x2 block averaged). Shifts are multiples of THUMB_DIV, i.e. always
@@ -27,8 +28,20 @@ public final class RawStack {
   /** +/- search radius in thumb px (56 raw px): comfortably beyond OIS-stabilised hand jitter. */
   static final int MAX_SHIFT = 14;
 
-  /** Motion gate: tolerate up to GATE_K sigma of raw noise before calling a pixel "moved". */
+  /**
+   * Motion gate: tolerate up to GATE_K sigma of the PAIR-DIFFERENCE noise (i.e. GATE_K·sqrt(2)
+   * sigma of one frame) before calling a pixel "moved". The tolerance is set against the
+   * candidate-minus-reference difference because the gate "accepts v only when v ≈ r", and that
+   * conditioning silently halves the stack gain when set against single-frame sigma (Monte Carlo:
+   * 2.4σ single-frame tolerance ≈ 1.7σ on the difference = 91% acceptance, but 0.52 variance
+   * ratio instead of 0.33 on stills — v0.9.20 device evidence, a still scene showing essentially
+   * no stacking win). 2.4σ on the difference (~3.4σ single-frame) keeps ~98.4% of still pixels
+   * while a moved subject still sits many sigmas out.
+   */
   static final float GATE_K = 2.4f, GATE_FLAT = 1.5f;
+
+  /** sqrt(2): the gate tolerance is expressed in pair-difference sigma (GATE_K's units). */
+  private static final double GATE_SIGMA_PAIR = Math.sqrt(2.0);
 
   /** Coarse search stride in thumb px, then a +/-2 px refinement at single-px stride. */
   static final int COARSE_STEP = 2, REFINE_RADIUS = 2;
@@ -106,7 +119,9 @@ public final class RawStack {
           int v = cur[co + cx] & 0xffff;
           double xn = (r - black) / (double) blackToFull;
           if (xn < 0) xn = 0;
-          double tol = GATE_K * blackToFull * Math.sqrt(Math.max(0, nS * xn) + nO) + GATE_FLAT;
+          double tol =
+              GATE_K * GATE_SIGMA_PAIR * blackToFull * Math.sqrt(Math.max(0, nS * xn) + nO)
+                  + GATE_FLAT;
           if (Math.abs(v - r) <= tol) {
             sum[ro + x] += v;
             cnt[ro + x]++;

@@ -2914,6 +2914,42 @@ public final class RawDeveloper {
     return new double[] {sS, sO, used};
   }
 
+  /**
+   * The noise model trusted for the stack motion gate (var = S·x + O on black-subtracted,
+   * normalised green), reusing development's exact policy: HAL profile × {@link #HAL_NOISE_SCALE},
+   * clamped against a measurement on the frame itself. The raw HAL profile must NOT gate the
+   * merge directly — some HALs under-report noise so severely (v0.9.20 device evidence: MediaTek
+   * profile ≈ {2.1e-4, ~0} vs measured {1.24e-3, 4.8e-6} at ISO 5834) that the 2.4-σ gate fired
+   * on ~43% of a still scene and silently discarded the stacking gain.
+   */
+  public static double[] stackGateNoise(RawFrame f) {
+    int iso = Math.max(50, f.iso);
+    double halS = NOISE_S_PER_ISO * iso, halO = NOISE_O_PER_ISO2 * (double) iso * iso;
+    if (f.noiseS != null && f.noiseO != null && f.noiseS.length == 4) {
+      double s = 0, oo = 0;
+      int cnt = 0;
+      for (int k = 0; k < 4; k++)
+        if (f.color(k & 1, k >> 1) == 1) {
+          s += f.noiseS[k];
+          oo += f.noiseO[k];
+          cnt++;
+        }
+      if (cnt > 0 && s > 0) {
+        halS = s / cnt;
+        halO = Math.max(0, oo / cnt);
+      }
+    }
+    double baseS = HAL_NOISE_SCALE * halS, baseO = HAL_NOISE_SCALE * halO;
+    int gk = 0;
+    for (int k = 3; k >= 0; k--) if (f.color(k & 1, k >> 1) == 1) gk = k;
+    double[] measured = measureRawNoise(f, gk);
+    if (measured == null) return new double[] {baseS, baseO};
+    return new double[] {
+      Math.max(0.5 * baseS, Math.min(1.6 * baseS, measured[0])),
+      Math.max(0.5 * baseO, Math.min(12 * baseO, measured[1]))
+    };
+  }
+
   /** Predicted luma-code noise sigma at scene mid grey (X = 0.18) on the optical axis. */
   static double midGreyNoise(ToneModel.Curve curve, double gain, double nS, double nO) {
     double x = 0.18, d = 0.05;
