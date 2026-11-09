@@ -148,9 +148,9 @@ public final class PhotoStore {
           try {
             ExifInterface output = new ExifInterface(finalImage);
             if (output.getAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION) == null) {
-              output.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, recTitle + " · Grain Photo");
+              output.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, exifAscii(recTitle + " · Grain Photo"));
             }
-            output.setAttribute(ExifInterface.TAG_USER_COMMENT, "Grain Photo · " + recTitle);
+            output.setAttribute(ExifInterface.TAG_USER_COMMENT, exifAscii("Grain Photo · " + recTitle));
             output.saveAttributes();
             UltraHdrJpeg.repairMpfAfterExifSave(finalImage);
           } catch (Exception ignored) {
@@ -235,9 +235,9 @@ public final class PhotoStore {
           String recTitle = recObj == null ? "" : recObj.optString("name", "");
           if (!recTitle.isEmpty()) {
             if (output.getAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION) == null) {
-              output.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, recTitle + " · Grain Photo");
+              output.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, exifAscii(recTitle + " · Grain Photo"));
             }
-            output.setAttribute(ExifInterface.TAG_USER_COMMENT, "Grain Photo · " + recTitle);
+            output.setAttribute(ExifInterface.TAG_USER_COMMENT, exifAscii("Grain Photo · " + recTitle));
           }
           output.setAttribute(ExifInterface.TAG_ORIENTATION, savedOrientation);
           output.setAttribute(ExifInterface.TAG_SOFTWARE, RawDevelopment.SOFTWARE);
@@ -355,6 +355,24 @@ public final class PhotoStore {
     } catch (Exception e) {
       android.util.Log.w("Grain", "Could not set orientation on " + jpeg.getName(), e);
     }
+  }
+
+  /**
+   * EXIF ASCII-type fields (and ASCII-prefixed UserComment) mangle non-ASCII characters to '?';
+   * map common typography to clean ASCII equivalents so recipe names survive intact.
+   */
+  static String exifAscii(String s) {
+    if (s == null) return null;
+    StringBuilder b = new StringBuilder(s.length());
+    for (int i = 0; i < s.length(); i++) {
+      char c = s.charAt(i);
+      if (c == '·' || c == '–' || c == '—' || c == '―') b.append('-');
+      else if (c == '“' || c == '”' || c == '„') b.append('"');
+      else if (c == '‘' || c == '’' || c == '‚') b.append('\'');
+      else if (c >= 0x20 && c < 0x7F) b.append(c);
+      else b.append('?');
+    }
+    return b.toString();
   }
 
   /** EXIF orientations for 0, 90, 180 and 270 degrees clockwise. */

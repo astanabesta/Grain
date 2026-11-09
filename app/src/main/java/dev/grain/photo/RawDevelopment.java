@@ -146,9 +146,9 @@ final class RawDevelopment {
         } catch (Exception ignored) {
         }
       if (exif.getAttribute(ExifInterface.TAG_MAKE) == null && Build.MANUFACTURER != null)
-        exif.setAttribute(ExifInterface.TAG_MAKE, Build.MANUFACTURER);
+        exif.setAttribute(ExifInterface.TAG_MAKE, PhotoStore.exifAscii(Build.MANUFACTURER));
       if (exif.getAttribute(ExifInterface.TAG_MODEL) == null && Build.MODEL != null)
-        exif.setAttribute(ExifInterface.TAG_MODEL, Build.MODEL);
+        exif.setAttribute(ExifInterface.TAG_MODEL, PhotoStore.exifAscii(Build.MODEL));
       if (exif.getAttribute(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY) == null && frameIso > 0)
         exif.setAttribute(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY, String.valueOf(frameIso));
       if (exif.getAttribute(ExifInterface.TAG_EXPOSURE_TIME) == null && frameExposureNs > 0)
@@ -161,12 +161,13 @@ final class RawDevelopment {
       exif.setAttribute(ExifInterface.TAG_SOFTWARE, SOFTWARE);
       exif.setAttribute(
           ExifInterface.TAG_IMAGE_DESCRIPTION,
-          recipe.name
-              + " ("
-              + recipe.filmLabel
-              + (apple ? ", Vibrant sRGB + Ultra HDR" : " LUT")
-              + (tuned ? ", tuned" : "")
-              + ")");
+          PhotoStore.exifAscii(
+              recipe.name
+                  + " ("
+                  + recipe.filmLabel
+                  + (apple ? ", Vibrant sRGB + Ultra HDR" : " LUT")
+                  + (tuned ? ", tuned" : "")
+                  + ")"));
       exif.saveAttributes();
       if (wroteGainmap) {
         boolean repaired = UltraHdrJpeg.repairMpfAfterExifSave(tmp);
