@@ -44,6 +44,7 @@ final class RawDevelopment {
       GrainCamera.RawCapture capture,
       FujiRecipe recipe,
       boolean tuned,
+      dev.grain.photo.develop.AppleTune tune,
       CubeLut lut,
       float ev,
       long seed,
@@ -73,7 +74,9 @@ final class RawDevelopment {
     boolean success = false;
     try {
       boolean apple = recipe.apple();
+      boolean appleEditor = apple && tune != null && !tune.isDefault();
       RawDeveloper.Options options = new RawDeveloper.Options();
+      options.appleTune = appleEditor ? tune : null;
       options.faceExposure = faceExposure;
       options.exposureEv = ev;
       options.grainSeed = seed;
@@ -166,7 +169,7 @@ final class RawDevelopment {
                   + " ("
                   + recipe.filmLabel
                   + (apple ? ", Vibrant sRGB + Ultra HDR" : " LUT")
-                  + (tuned ? ", tuned" : "")
+                  + (tuned || appleEditor ? ", tuned" : "")
                   + ")"));
       exif.saveAttributes();
       if (wroteGainmap) {

@@ -1,6 +1,7 @@
 package dev.grain.photo;
 
 import android.content.SharedPreferences;
+import dev.grain.photo.develop.AppleTune;
 import dev.grain.photo.develop.FujiRecipe;
 import java.util.HashMap;
 import java.util.Map;
@@ -14,6 +15,7 @@ import org.json.JSONObject;
 final class RecipeTuning {
   private final SharedPreferences prefs;
   private final Map<String, FujiRecipe> cache = new HashMap<>();
+  private final Map<String, AppleTune> appleCache = new HashMap<>();
 
   RecipeTuning(SharedPreferences prefs) {
     this.prefs = prefs;
@@ -38,7 +40,46 @@ final class RecipeTuning {
 
   /** True when the film's settings differ from its default. */
   boolean tuned(Recipe r) {
-    return r.raw && !effective(r).sameSettings(r.fuji);
+    return r.raw && (!effective(r).sameSettings(r.fuji) || appleTuned(r.fuji));
+  }
+
+  /** iPhone editor tuning of a built-in Apple look (null for any other film); live-updatable. */
+  AppleTune appleEffective(FujiRecipe film) {
+    if (!film.apple()) return null;
+    AppleTune known = appleCache.get(film.key);
+    if (known != null) return known;
+    AppleTune t = new AppleTune();
+    String saved = prefs.getString(appleKey(film), null);
+    if (saved != null)
+      try {
+        t = AppleTune.read(new JSONObject(saved));
+      } catch (Exception e) {
+        android.util.Log.w("Grain", "Ignoring unreadable editor tuning for " + film.key, e);
+      }
+    appleCache.put(film.key, t);
+    return t;
+  }
+
+  boolean appleTuned(FujiRecipe film) {
+    AppleTune t = appleEffective(film);
+    return t != null && !t.isDefault();
+  }
+
+  void appleSave(FujiRecipe film, AppleTune t) {
+    SharedPreferences.Editor edit = prefs.edit();
+    if (t == null || t.isDefault()) edit.remove(appleKey(film));
+    else
+      try {
+        edit.putString(appleKey(film), t.write().toString());
+      } catch (Exception e) {
+        android.util.Log.w("Grain", "Editor tuning not saved for " + film.key, e);
+      }
+    edit.apply();
+    appleCache.put(film.key, t == null ? new AppleTune() : t);
+  }
+
+  static String appleKey(FujiRecipe film) {
+    return "itune." + film.key;
   }
 
   /** Stores new settings (clamped to the camera ranges) and returns the film as now tuned. */
@@ -60,8 +101,9 @@ final class RecipeTuning {
   /** Back to the film's default settings. */
   void reset(Recipe r) {
     if (!r.raw) return;
-    prefs.edit().remove(key(r)).apply();
+    prefs.edit().remove(key(r)).remove(appleKey(r.fuji)).apply();
     cache.remove(r.fuji.key);
+    appleCache.remove(r.fuji.key);
   }
 
   static String key(Recipe r) {

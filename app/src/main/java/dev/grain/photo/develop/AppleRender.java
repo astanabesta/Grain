@@ -410,7 +410,29 @@ public final class AppleRender {
    */
   public static void gradeDisplayP3(
       float[] linP3, Style style, int colorStep, boolean outputDisplayP3) {
-    float lr = uClamp(linP3[0]), lg = uClamp(linP3[1]), lb = uClamp(linP3[2]);
+    gradeDisplayP3(linP3, style, colorStep, outputDisplayP3, null);
+  }
+
+  /**
+   * Grades one pixel; when {@code tune} is non-null the user's iPhone editor tuning applies after
+   * the style's own grading: exposure (linear pre-gain), the tone/curve map on OKLab L, then
+   * saturation / vibrance / warmth / tint on OKLab a/b. Lightroom-style semantics — tonal edits
+   * preserve hue, colour edits preserve lightness.
+   */
+  public static void gradeDisplayP3(
+      float[] linP3, Style style, int colorStep, boolean outputDisplayP3, AppleTune.Plan tune) {
+    float lr, lg, lb;
+    if (tune == null) {
+      lr = uClamp(linP3[0]);
+      lg = uClamp(linP3[1]);
+      lb = uClamp(linP3[2]);
+    } else {
+      // Exposure first, in linear light (true EV); highlights may extend past 1, cbrtUnit copes.
+      float g = tune.expoGain;
+      lr = Math.max(0f, Math.min(4f, linP3[0] * g));
+      lg = Math.max(0f, Math.min(4f, linP3[1] * g));
+      lb = Math.max(0f, Math.min(4f, linP3[2] * g));
+    }
     float l = cbrtUnit(P3_TO_LMS[0] * lr + P3_TO_LMS[1] * lg + P3_TO_LMS[2] * lb);
     float m = cbrtUnit(P3_TO_LMS[3] * lr + P3_TO_LMS[4] * lg + P3_TO_LMS[5] * lb);
     float s = cbrtUnit(P3_TO_LMS[6] * lr + P3_TO_LMS[7] * lg + P3_TO_LMS[8] * lb);
@@ -419,6 +441,7 @@ public final class AppleRender {
     float A = 1.97799850f * l - 2.42859221f * m + 0.45059371f * s;
     float Bb = 0.02590404f * l + 0.78277177f * m - 0.80867580f * s;
     float C = (float) Math.sqrt(A * A + Bb * Bb);
+    float wSkinNow = 0f;
 
     if (C > 1e-5f) {
       float ua = A / C, ub = Bb / C;
@@ -430,6 +453,7 @@ public final class AppleRender {
           (cSkin2 * cSkin2 * cSkin2)
               * sstep(0.012f, 0.038f, C)
               * (1f - sstep(0.095f, 0.148f, C));
+      wSkinNow = wSkin;
 
       // Foliage yellow-green sector (~128 deg)
       float cLeaf = ua * (-0.6157f) + ub * 0.7880f;
@@ -573,6 +597,22 @@ public final class AppleRender {
               * (1f - sstep(0.08f, 0.14f, C));
       A += 0.0014f * wRose;
       Bb -= 0.0006f * wRose;
+    }
+
+    // iPhone editor tuning: tone/curve on OKLab L, then colour on OKLab a/b.
+    if (tune != null) {
+      L = tune.toneAt(L);
+      if (C > 1e-5f) {
+        float g = tune.satK; // saturation: uniform chroma multiplier, skin included
+        if (tune.vibK != 0f) g *= tune.vibranceGain(C, wSkinNow); // vibrance: muted first, skin safe
+        if (g != 1f) {
+          A *= g;
+          Bb *= g;
+        }
+      }
+      float whiteGuard = 1f - sstep(0.93f, 1.005f, L); // warmth/tint taper off pure white
+      Bb += tune.warmB * whiteGuard;
+      A += tune.tintA * whiteGuard;
     }
 
     L = uClamp(L);

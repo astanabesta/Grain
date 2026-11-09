@@ -390,6 +390,8 @@ public final class RawDeveloper {
     public boolean outputDisplayP3 = false;
     /** Populate {@link #outGainmap} (quarter-res ISO 21496-1 Ultra HDR gainmap) on Apple profiles. */
     public boolean computeGainmap = false;
+    /** iPhone editor tuning for built-in Apple profiles; null or default = the published look. */
+    public AppleTune appleTune;
     /** Quarter-resolution ({@link #outGainmapW} x {@link #outGainmapH}) single-channel gainmap. */
     public byte[] outGainmap;
     public int outGainmapW, outGainmapH;
@@ -575,6 +577,7 @@ public final class RawDeveloper {
     final int[] clipRaw = new int[4];
     final int haloR, bloomR, clarityR, ltmR;
     final AppleRender.Style appleStyle;
+    final AppleTune.Plan appleTunePlan;
     final AppleRender.ToneTable appleTone;
     final boolean outputDisplayP3, stillsTone;
     final double recipeHighlight, recipeShadow;
@@ -593,6 +596,10 @@ public final class RawDeveloper {
       this.recipeHighlight = r.highlight;
       this.recipeShadow = r.shadow;
       boolean apple = appleStyle != null;
+      appleTunePlan =
+          (apple && o.appleTune != null && !o.appleTune.isDefault())
+              ? new AppleTune.Plan(o.appleTune)
+              : null;
       // Sony's s709 film needs Sony's S-Log3 LUT; Fujifilm films need an F-Log2 table; Apple is built in
       boolean sony = r.sony();
       if (!apple) {
@@ -907,9 +914,14 @@ public final class RawDeveloper {
       // First version: no luma NR at -4 (as v0.2.0); each step up adds 1/8 of Clean's fine luma NR
       double lumaShare = firstVersion ? (nrStep + 4) / 8.0 : 1;
       double appleFineScale = apple ? 0.92 * isoBoost : 1.0;
+      // iPhone editor Noise reduction / Sharpness sliders scale the recipe amounts (1 = recipe).
+      double tuneNrMul = appleTunePlan == null ? 1.0 : appleTunePlan.nrMul;
+      double tuneSharpenMul = appleTunePlan == null ? 1.0 : appleTunePlan.sharpenMul;
       double kNr =
           Math.max(
-              0, LUMA_NR_K * appleFineScale * Math.pow(2, 0.125 * nrStep) * o.lumaNr * lumaShare);
+              0,
+              LUMA_NR_K * appleFineScale * Math.pow(2, 0.125 * nrStep) * o.lumaNr * lumaShare
+                  * tuneNrMul);
       nrKeep =
           apple
               ? (float) Math.max(0.03, Math.min(0.45, 0.07 - 0.05 * nrStep))
@@ -923,7 +935,8 @@ public final class RawDeveloper {
                       : apple
                           ? Math.max(0, Math.min(1.65, 0.78 + 0.16 * r.sharpness))
                           : Math.max(0, Math.min(1.2, SHARPEN_BASE + SHARPEN_STEP * r.sharpness)))
-                  * o.sharpen);
+                  * o.sharpen
+                  * tuneSharpenMul);
       int baseRadius = isoNr <= 200 ? 1 : isoNr <= 800 ? 2 : isoNr <= 3200 ? 3 : 4;
       nrRadius =
           !firstVersion
@@ -935,7 +948,9 @@ public final class RawDeveloper {
       nrB = new float[NR_TABLE + 1];
       noiseTables(curve, gain, nS, nO, NOISE_MIX * NOISE_MIX, nrA, nrB);
       double appleLowScale = apple ? 0.88 * isoBoost : 1.0;
-      double kLow = Math.max(0, LOW_NR_K * appleLowScale * Math.pow(2, 0.125 * nrStep) * o.lumaNr);
+      double kLow =
+          Math.max(
+              0, LOW_NR_K * appleLowScale * Math.pow(2, 0.125 * nrStep) * o.lumaNr * tuneNrMul);
       epsLow = (float) (kLow * kLow * Q_NOISE / 16);
       epsChroma =
           (float)
@@ -1072,7 +1087,9 @@ public final class RawDeveloper {
       }
       for (int k = 0; k < 4; k++) clipRaw[k] = (int) Math.ceil(black[k] + CLIP_LEVEL * (f.white - black[k]));
       int claritySteps = Math.max(-5, Math.min(5, r.clarity));
-      clarityK = (float) (CLARITY_PER_STEP * claritySteps);
+      // iPhone editor Clarity slider scales the recipe's clarity amount (1 = as published).
+      float tuneClarityMul = appleTunePlan == null ? 1f : appleTunePlan.clarityMul;
+      clarityK = (float) (CLARITY_PER_STEP * claritySteps * tuneClarityMul);
       stats.put("halation", halSteps);
       stats.put("bloom", bloomSteps);
       stats.put("clarity", claritySteps);
@@ -2549,7 +2566,9 @@ public final class RawDeveloper {
           float lg = CubeLut.flog2Linear(cg[src + x]);
           float lb = CubeLut.flog2Linear(cb[src + x]);
           AppleRender.applyRgbTone(lr, lg, lb, j.appleTone, lutOut);
-          AppleRender.gradeDisplayP3(lutOut, appleStyle, rColor, j.outputDisplayP3);
+          if (j.appleTunePlan != null)
+            AppleRender.gradeDisplayP3(lutOut, appleStyle, rColor, j.outputDisplayP3, j.appleTunePlan);
+          else AppleRender.gradeDisplayP3(lutOut, appleStyle, rColor, j.outputDisplayP3);
           vr = lutOut[0];
           vg = lutOut[1];
           vb = lutOut[2];

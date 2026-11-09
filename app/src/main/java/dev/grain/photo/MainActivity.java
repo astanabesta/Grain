@@ -20,6 +20,7 @@ import androidx.activity.ComponentActivity;
 import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
+import dev.grain.photo.develop.AppleTune;
 import dev.grain.photo.develop.CubeLut;
 import dev.grain.photo.develop.FujiRecipe;
 import dev.grain.photo.develop.HiResMerger;
@@ -32,6 +33,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.IntConsumer;
+import java.util.function.ObjIntConsumer;
+import java.util.function.ToIntFunction;
 import java.util.function.Supplier;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -1087,8 +1090,19 @@ public final class MainActivity extends ComponentActivity
         };
     if (sony) fixedSetting(panel, "Look", "Sony s709");
     else fixedSetting(panel, "Film simulation", r.fuji.filmLabel);
-    for (TuningControl setting : TuningControl.fujifilm(r.fuji))
-      rows.add(stepper(panel, setting, work, defaults, changed));
+    if (r.fuji.apple()) {
+      // iPhone looks: gallery-editor sliders replace the Fujifilm steppers. White balance and
+      // Kelvin stay as steppers because the viewfinder follows them; everything else is the editor.
+      for (TuningControl setting : TuningControl.fujifilm(r.fuji)) {
+        if (!setting.name.equals("White balance") && !setting.name.equals("Color temperature"))
+          continue;
+        rows.add(stepper(panel, setting, work, defaults, changed));
+      }
+      rows.addAll(buildAppleEditor(panel, r, changed));
+    } else {
+      for (TuningControl setting : TuningControl.fujifilm(r.fuji))
+        rows.add(stepper(panel, setting, work, defaults, changed));
+    }
     if (sony) {
       TextView sonyNote =
           paragraph(
@@ -1192,6 +1206,357 @@ public final class MainActivity extends ComponentActivity
     TextView shown = text(value, 10, INK);
     line.addView(shown, size(160, 28));
     panel.addView(line);
+  }
+
+  /**
+   * The iPhone editor: gallery-style sliders (−100..+100, neutral 0, orange when changed) grouped
+   * LIGHT / COLOR / DETAIL, plus the tone-curve editor. Returns the rows' refresh runnables.
+   */
+  private ArrayList<Runnable> buildAppleEditor(LinearLayout panel, Recipe r, Runnable fujiChanged) {
+    final ArrayList<Runnable> edits = new ArrayList<>();
+    final AppleTune aw = tuning.appleEffective(r.fuji);
+    final Runnable tuneChanged =
+        () -> {
+          tuning.appleSave(r.fuji, aw);
+          fujiChanged.run();
+        };
+    editorGroup(panel, "LIGHT");
+    edits.add(appleSlider(panel, "Exposure", aw, t -> t.exposure, (t, i) -> { t.exposure = i; }, tuneChanged));
+    edits.add(appleSlider(panel, "Brightness", aw, t -> t.brightness, (t, i) -> { t.brightness = i; }, tuneChanged));
+    edits.add(appleSlider(panel, "Lightness", aw, t -> t.lightness, (t, i) -> { t.lightness = i; }, tuneChanged));
+    edits.add(appleSlider(panel, "Contrast", aw, t -> t.contrast, (t, i) -> { t.contrast = i; }, tuneChanged));
+    edits.add(appleSlider(panel, "Highlights", aw, t -> t.highlights, (t, i) -> { t.highlights = i; }, tuneChanged));
+    edits.add(appleSlider(panel, "Shadows", aw, t -> t.shadows, (t, i) -> { t.shadows = i; }, tuneChanged));
+    edits.add(appleSlider(panel, "Light range", aw, t -> t.lightRange, (t, i) -> { t.lightRange = i; }, tuneChanged));
+    edits.add(appleSlider(panel, "Dark range", aw, t -> t.darkRange, (t, i) -> { t.darkRange = i; }, tuneChanged));
+    edits.add(appleSlider(panel, "Whites", aw, t -> t.whites, (t, i) -> { t.whites = i; }, tuneChanged));
+    edits.add(appleSlider(panel, "Blacks", aw, t -> t.blacks, (t, i) -> { t.blacks = i; }, tuneChanged));
+    edits.add(appleSlider(panel, "Fade", aw, t -> t.fade, (t, i) -> { t.fade = i; }, tuneChanged));
+    edits.add(appleCurveRow(panel, aw, tuneChanged));
+    editorGroup(panel, "COLOR");
+    edits.add(appleSlider(panel, "Saturation", aw, t -> t.saturation, (t, i) -> { t.saturation = i; }, tuneChanged));
+    edits.add(appleSlider(panel, "Vibrance", aw, t -> t.vibrance, (t, i) -> { t.vibrance = i; }, tuneChanged));
+    edits.add(appleSlider(panel, "Warmth", aw, t -> t.warmth, (t, i) -> { t.warmth = i; }, tuneChanged));
+    edits.add(appleSlider(panel, "Tint", aw, t -> t.tint, (t, i) -> { t.tint = i; }, tuneChanged));
+    editorGroup(panel, "DETAIL");
+    edits.add(appleSlider(panel, "Sharpness", aw, t -> t.sharpness, (t, i) -> { t.sharpness = i; }, tuneChanged));
+    edits.add(appleSlider(panel, "Noise reduction", aw, t -> t.noiseReduction, (t, i) -> { t.noiseReduction = i; }, tuneChanged));
+    edits.add(appleSlider(panel, "Clarity", aw, t -> t.clarity, (t, i) -> { t.clarity = i; }, tuneChanged));
+    return edits;
+  }
+
+  private void editorGroup(LinearLayout panel, String label) {
+    TextView heading = text(label, 9, MUTED);
+    heading.setTypeface(Typeface.SANS_SERIF, Typeface.BOLD);
+    heading.setLetterSpacing(.05f);
+    heading.setPadding(0, dp(10), 0, dp(2));
+    panel.addView(heading);
+  }
+
+  /** One editor slider row (long-press the name resets to 0). Returns the row's refresh. */
+  private Runnable appleSlider(
+      LinearLayout panel,
+      String name,
+      final AppleTune aw,
+      ToIntFunction<AppleTune> get,
+      ObjIntConsumer<AppleTune> set,
+      final Runnable onChanged) {
+    LinearLayout line = row();
+    TextView key = text(name, 10, INK);
+    key.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+    key.setContentDescription(name + ". Long-press resets to zero.");
+    final SeekBar bar = new SeekBar(this);
+    bar.setMax(AppleTune.MAX - AppleTune.MIN);
+    final TextView value = text("", 10, INK);
+    value.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+    final boolean[] syncing = {false};
+    final Runnable show =
+        () -> {
+          int v = get.applyAsInt(aw);
+          syncing[0] = true;
+          bar.setProgress(v - AppleTune.MIN);
+          syncing[0] = false;
+          value.setText(v == 0 ? "0" : v > 0 ? "+" + v : String.valueOf(v));
+          value.setContentDescription(name + " " + v + (v == 0 ? ", neutral" : ", changed"));
+          value.setTextColor(v == 0 ? INK : ORANGE);
+          key.setTextColor(v == 0 ? INK : ORANGE);
+        };
+    key.setOnLongClickListener(
+        v -> {
+          if (get.applyAsInt(aw) == 0) return true;
+          set.accept(aw, 0);
+          onChanged.run();
+          return true;
+        });
+    bar.setOnSeekBarChangeListener(
+        new SeekBar.OnSeekBarChangeListener() {
+          @Override
+          public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+            if (!fromUser || syncing[0]) return;
+            set.accept(aw, progress + AppleTune.MIN);
+            int v = get.applyAsInt(aw);
+            value.setText(v == 0 ? "0" : v > 0 ? "+" + v : String.valueOf(v));
+            value.setTextColor(v == 0 ? INK : ORANGE);
+            key.setTextColor(v == 0 ? INK : ORANGE);
+          }
+
+          @Override
+          public void onStartTrackingTouch(SeekBar seekBar) {}
+
+          @Override
+          public void onStopTrackingTouch(SeekBar seekBar) {
+            onChanged.run();
+          }
+        });
+    line.addView(key, size(96, 32));
+    line.addView(bar, new LinearLayout.LayoutParams(0, dp(32), 1));
+    line.addView(value, size(40, 32));
+    panel.addView(line);
+    show.run();
+    return show;
+  }
+
+  /** The tone-curve row: state label + Edit button (long-press the name restores the identity). */
+  private Runnable appleCurveRow(LinearLayout panel, final AppleTune aw, final Runnable onChanged) {
+    LinearLayout line = row();
+    TextView key = text("Tone curve", 10, INK);
+    key.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+    key.setContentDescription("Tone curve. Long-press resets to default.");
+    final TextView state = text("", 10, INK);
+    state.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+    TextView edit = button("Edit", 10, INK, () -> openAppleCurveEditor(aw, onChanged));
+    edit.setBackground(bg(PAPER, 15, LINE, 1));
+    edit.setContentDescription("Edit tone curve");
+    final Runnable show =
+        () -> {
+          int n = aw.curveX.length;
+          state.setText(n == 0 ? "Default" : n + " knots");
+          state.setTextColor(n == 0 ? MUTED : ORANGE);
+          key.setTextColor(n == 0 ? INK : ORANGE);
+        };
+    key.setOnLongClickListener(
+        v -> {
+          if (aw.curveX.length == 0) return true;
+          aw.curveX = new float[0];
+          aw.curveY = new float[0];
+          onChanged.run();
+          return true;
+        });
+    line.addView(key, size(96, 32));
+    line.addView(state, new LinearLayout.LayoutParams(0, dp(32), 1));
+    line.addView(edit, size(90, 30));
+    panel.addView(line);
+    show.run();
+    return show;
+  }
+
+  private void openAppleCurveEditor(final AppleTune aw, final Runnable onChanged) {
+    final AppleTuneCurveView view = new AppleTuneCurveView(this, aw);
+    int pad = dp(12);
+    LinearLayout box = new LinearLayout(this);
+    box.setPadding(pad, 0, pad, 0);
+    box.addView(view, new LinearLayout.LayoutParams(-1, -2));
+    AlertDialog dialog =
+        new AlertDialog.Builder(this)
+            .setTitle("Tone curve")
+            .setView(box)
+            .setNegativeButton("Cancel", null)
+            .setNeutralButton("Reset", null)
+            .setPositiveButton(
+                "Done",
+                (dlg, w) -> {
+                  view.commit();
+                  onChanged.run();
+                })
+            .show();
+    // keep Reset from dismissing the dialog
+    dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> view.reset());
+  }
+
+  /**
+   * Free tone-curve editor: square graph, drag knots, tap empty space to add a knot, drag an
+   * interior knot below the graph to remove it. The curve stays monotone by construction; values
+   * commit to the tune only on Done.
+   */
+  private final class AppleTuneCurveView extends View {
+    private final AppleTune tune;
+    private float[] xs, ys;
+    private int drag = -1;
+    private final Paint frame, grid, diag, curve, dots, dotsHot, paperBg;
+
+    AppleTuneCurveView(android.content.Context context, AppleTune aw) {
+      super(context);
+      tune = aw;
+      if (aw.curveX.length >= 2) {
+        xs = aw.curveX.clone();
+        ys = aw.curveY.clone();
+      } else {
+        xs = new float[] {0f, 1f};
+        ys = new float[] {0f, 1f};
+      }
+      frame = stroke(LINE, 2);
+      grid = stroke(LINE, 1);
+      diag = stroke(LINE, 1);
+      curve = stroke(INK, 3);
+      dots = fill(INK);
+      dotsHot = fill(ORANGE);
+      paperBg = fill(PAPER);
+    }
+
+    private Paint stroke(int color, float wDp) {
+      Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+      p.setStyle(Paint.Style.STROKE);
+      p.setColor(color);
+      p.setStrokeWidth(dp(wDp));
+      return p;
+    }
+
+    private Paint fill(int color) {
+      Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+      p.setStyle(Paint.Style.FILL);
+      p.setColor(color);
+      return p;
+    }
+
+    private float padPx() {
+      return dp(16);
+    }
+
+    private float graphSize() {
+      return Math.min(getWidth(), getHeight()) - 2 * padPx();
+    }
+
+    @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+      int w = getDefaultSize(getSuggestedMinimumWidth(), widthMeasureSpec);
+      w = Math.min(w, dp(430));
+      setMeasuredDimension(w, w);
+    }
+
+    @Override
+    protected void onDraw(Canvas canvas) {
+      float pad = padPx(), s = graphSize();
+      canvas.drawRoundRect(0, 0, getWidth(), getHeight(), dp(10), dp(10), paperBg);
+      for (int i = 0; i <= 4; i++) {
+        float g = pad + s * i / 4f;
+        canvas.drawLine(pad, g, pad + s, g, grid);
+        canvas.drawLine(g, pad, g, pad + s, grid);
+      }
+      canvas.drawLine(pad, pad + s, pad + s, pad, diag); // identity
+      canvas.drawRect(pad, pad, pad + s, pad + s, frame);
+      Path path = new Path();
+      for (int i = 0; i <= 128; i++) {
+        float x = i / 128f;
+        float y = AppleTune.curveAt(xs, ys, x);
+        float px = pad + x * s, py = pad + (1f - y) * s;
+        if (i == 0) path.moveTo(px, py);
+        else path.lineTo(px, py);
+      }
+      canvas.drawPath(path, curve);
+      float r = dp(6);
+      for (int i = 0; i < xs.length; i++) {
+        float px = pad + xs[i] * s, py = pad + (1f - ys[i]) * s;
+        canvas.drawCircle(px, py, r, dots);
+        if (i == drag) canvas.drawCircle(px, py, r * 0.55f, dotsHot);
+      }
+    }
+
+    @Override
+    public boolean onTouchEvent(android.view.MotionEvent event) {
+      float pad = padPx(), s = graphSize();
+      float fx = (event.getX() - pad) / s, fy = 1f - (event.getY() - pad) / s;
+      switch (event.getActionMasked()) {
+        case android.view.MotionEvent.ACTION_DOWN:
+          int best = -1;
+          float bestD = 0.07f;
+          for (int i = 0; i < xs.length; i++) {
+            float d = (float) Math.hypot(xs[i] - fx, ys[i] - fy);
+            if (d < bestD) {
+              bestD = d;
+              best = i;
+            }
+          }
+          if (best >= 0) {
+            drag = best;
+          } else if (fx > 0.02f && fx < 0.98f) {
+            insert(fx, fy);
+          }
+          invalidate();
+          return true;
+        case android.view.MotionEvent.ACTION_MOVE:
+          if (drag < 0) return true;
+          boolean interior = drag > 0 && drag < xs.length - 1;
+          if (interior && fy < -0.06f) {
+            // drag an interior knot below the graph to remove it
+            float[] nx = new float[xs.length - 1], ny2 = new float[ys.length - 1];
+            System.arraycopy(xs, 0, nx, 0, drag);
+            System.arraycopy(xs, drag + 1, nx, drag, xs.length - drag - 1);
+            System.arraycopy(ys, 0, ny2, 0, drag);
+            System.arraycopy(ys, drag + 1, ny2, drag, ys.length - drag - 1);
+            xs = nx;
+            ys = ny2;
+            drag = -1;
+            invalidate();
+            return true;
+          }
+          float yLo = interior ? Math.min(ys[drag - 1], ys[drag + 1]) : 0f;
+          float yHi = interior ? Math.max(ys[drag - 1], ys[drag + 1]) : 1f;
+          if (interior)
+            xs[drag] = Math.max(xs[drag - 1] + 0.02f, Math.min(xs[drag + 1] - 0.02f, fx));
+          ys[drag] = Math.max(yLo, Math.min(yHi, fy));
+          invalidate();
+          return true;
+        case android.view.MotionEvent.ACTION_UP:
+          drag = -1;
+          invalidate();
+          return true;
+        default:
+          return true;
+      }
+    }
+
+    private void insert(float fx, float fy) {
+      int at = 0;
+      while (at < xs.length && xs[at] < fx) at++;
+      if (at == 0 || at >= xs.length) return;
+      float yLo = Math.min(ys[at - 1], ys[at]), yHi = Math.max(ys[at - 1], ys[at]);
+      float y = Math.max(yLo, Math.min(yHi, fy));
+      float x = Math.max(xs[at - 1] + 0.02f, Math.min(xs[at] - 0.02f, fx));
+      float[] nx = new float[xs.length + 1], nya = new float[ys.length + 1];
+      System.arraycopy(xs, 0, nx, 0, at);
+      System.arraycopy(xs, at, nx, at + 1, xs.length - at);
+      System.arraycopy(ys, 0, nya, 0, at);
+      System.arraycopy(ys, at, nya, at + 1, ys.length - at);
+      nx[at] = x;
+      nya[at] = y;
+      xs = nx;
+      ys = nya;
+      drag = at;
+    }
+
+    void reset() {
+      xs = new float[] {0f, 1f};
+      ys = new float[] {0f, 1f};
+      drag = -1;
+      invalidate();
+    }
+
+    /** Writes the knots back to the tune; an identity curve becomes the default (no knots). */
+    void commit() {
+      boolean identity = true;
+      for (int i = 0; i < xs.length; i++)
+        if (Math.abs(ys[i] - xs[i]) > 0.004f) {
+          identity = false;
+          break;
+        }
+      if (identity) {
+        tune.curveX = new float[0];
+        tune.curveY = new float[0];
+      } else {
+        tune.curveX = xs.clone();
+        tune.curveY = ys.clone();
+      }
+    }
   }
 
   /**
@@ -2164,6 +2529,7 @@ public final class MainActivity extends ComponentActivity
                       mergedCapture,
                       film,
                       tuned,
+                      tuning.appleEffective(film),
                       lut,
                       developEv,
                       mergedSeed,
@@ -2293,6 +2659,7 @@ public final class MainActivity extends ComponentActivity
                       capture,
                       f,
                       fTuned,
+                      tuning.appleEffective(f),
                       lut,
                       developEv,
                       capture.frame.exposureNs ^ System.nanoTime(),
