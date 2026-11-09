@@ -1,4 +1,20 @@
-## Grain Photo vVERSION — iPhone Editor Tuner: Gallery-Style Sliders + Tone Curve
+## Grain Photo vVERSION — Q Menu Joins the iPhone Editor
+
+- **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
+- **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
+
+### What's new in v0.9.14
+
+#### The Q menu now speaks editor on iPhone looks
+v0.9.13's editor tuner lived only on the recipe SETTINGS page; pressing **Q** still showed the old Fujifilm steppers. For iPhone looks the Q grid now is:
+
+- **FILM · WB · WB R · WB B** — as before (viewfinder follows white balance).
+- **EXP** (Exposure) · **HI** (Highlights) · **SHDW** (Shadows) · **SAT** (Saturation) · **SHARP** (Sharpness) · **NR** (Noise reduction) · **CLAR** (Clarity) · **GRAIN** (kept, Fujifilm-style) · **VIBR** (Vibrance) · **WARM** (Warmth) · **CNTR** (Contrast) · **FACE** — all editor tiles step by 5, run −100…+100, and glow orange off neutral.
+
+The same per-look values as the SETTINGS editor, of course — adjust a tile in Q and the matching slider has moved when you open SETTINGS. The remaining ten sliders (Brightness, Lightness, Light/Dark range, Whites, Blacks, Fade, Tint) and the tone curve stay on the full SETTINGS page.
+
+### Previously in v0.9.13 — the iPhone editor tuner
+Gallery-style sliders for the five iPhone looks: Light (Exposure…Fade + tone curve), Color (Saturation, Vibrance, Warmth, Tint), Detail (Sharpness, NR, Clarity) — OKLab domain, vibrance skin-protected and truly different from saturation, all −100…+100 with 0 = published look, saved per look.
 
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).

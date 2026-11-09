@@ -5907,9 +5907,80 @@ public final class MainActivity extends ComponentActivity
     {"FACE", "face"}
   };
 
+  /**
+   * Q tiles for iPhone looks: WB, its shifts and Grain stay Fujifilm-style; the other ten tiles are
+   * the gallery-editor sliders from {@link AppleTune}, adjusted in steps of 5.
+   */
+  private static final String[][] APPLE_Q_ITEMS = {
+    {"FILM", "film"}, {"WB", "White balance"}, {"WB R", "WB shift red"}, {"WB B", "WB shift blue"},
+    {"EXP", "apple.exposure"}, {"HI", "apple.highlights"}, {"SHDW", "apple.shadows"}, {"SAT", "apple.saturation"},
+    {"SHARP", "apple.sharpness"}, {"NR", "apple.noiseReduction"}, {"CLAR", "apple.clarity"}, {"GRAIN", "Grain"},
+    {"VIBR", "apple.vibrance"}, {"WARM", "apple.warmth"}, {"CNTR", "apple.contrast"}, {"FACE", "face"}
+  };
+
+  /** The AppleTune editor field behind a Q tile of an iPhone look, or null for WB/grain/film/face. */
+  private static String appleQKey(Recipe r, int index) {
+    if (!r.raw || !r.fuji.apple()) return null;
+    String key = APPLE_Q_ITEMS[index][1];
+    return key.startsWith("apple.") ? key.substring(6) : null;
+  }
+
+  private static int appleTuneValue(AppleTune t, String key) {
+    switch (key) {
+      case "exposure": return t.exposure;
+      case "highlights": return t.highlights;
+      case "shadows": return t.shadows;
+      case "saturation": return t.saturation;
+      case "sharpness": return t.sharpness;
+      case "noiseReduction": return t.noiseReduction;
+      case "clarity": return t.clarity;
+      case "vibrance": return t.vibrance;
+      case "warmth": return t.warmth;
+      case "contrast": return t.contrast;
+      default: return 0;
+    }
+  }
+
+  private static void appleTuneSet(AppleTune t, String key, int v) {
+    switch (key) {
+      case "exposure": t.exposure = v; break;
+      case "highlights": t.highlights = v; break;
+      case "shadows": t.shadows = v; break;
+      case "saturation": t.saturation = v; break;
+      case "sharpness": t.sharpness = v; break;
+      case "noiseReduction": t.noiseReduction = v; break;
+      case "clarity": t.clarity = v; break;
+      case "vibrance": t.vibrance = v; break;
+      case "warmth": t.warmth = v; break;
+      case "contrast": t.contrast = v; break;
+      default: break;
+    }
+  }
+
+  private static String appleQTitle(String key) {
+    switch (key) {
+      case "exposure": return "EXPOSURE";
+      case "highlights": return "HIGHLIGHTS";
+      case "shadows": return "SHADOWS";
+      case "saturation": return "SATURATION";
+      case "sharpness": return "SHARPNESS";
+      case "noiseReduction": return "NOISE REDUCTION";
+      case "clarity": return "CLARITY";
+      case "vibrance": return "VIBRANCE";
+      case "warmth": return "WARMTH";
+      case "contrast": return "CONTRAST";
+      default: return key.toUpperCase(Locale.ROOT);
+    }
+  }
+
   /** The tuning control behind a Q tile, or null when this film has no such setting. */
   private TuningControl qControl(Recipe r, int index) {
     if (!r.raw) return null;
+    if (r.fuji.apple()) {
+      // iPhone looks: only WB / WB shifts / Grain remain live Fujifilm controls in Q; the other
+      // tiles are gallery-editor sliders (@link AppleTune), handled separately.
+      if (!(index == 1 || index == 2 || index == 3 || index == 11)) return null;
+    }
     String name = Q_ITEMS[index][1];
     if (r.fuji.monochrome() && "Color".equals(name)) name = "Filter";
     List<TuningControl> all = new ArrayList<>(TuningControl.fujifilm(r.fuji));
@@ -5925,6 +5996,7 @@ public final class MainActivity extends ComponentActivity
   }
 
   private String qLabel(Recipe r, int index) {
+    if (r.raw && r.fuji.apple()) return APPLE_Q_ITEMS[index][0];
     if (!r.raw && index == 1) return "STRENGTH";
     if (r.raw && r.fuji.monochrome() && index == 7) return "FILTER";
     return Q_ITEMS[index][0];
@@ -5935,7 +6007,10 @@ public final class MainActivity extends ComponentActivity
     if ("film".equals(key)) return "FILM SIMULATION · " + r.name.toUpperCase(Locale.ROOT);
     if ("face".equals(key)) return "FACE EXPOSURE";
     if (!r.raw) return index == 1 ? "LOOK STRENGTH" : "NOT FOR ISP LOOKS";
+    String ak = appleQKey(r, index);
+    if (ak != null) return appleQTitle(ak);
     TuningControl c = qControl(r, index);
+    if (r.fuji.apple()) return c == null ? "—" : c.name.toUpperCase(Locale.ROOT);
     return c == null ? "NOT FOR THIS FILM" : c.name.toUpperCase(Locale.ROOT);
   }
 
@@ -5944,6 +6019,11 @@ public final class MainActivity extends ComponentActivity
     if ("film".equals(key)) return filmCode(r);
     if ("face".equals(key)) return r.raw ? onOff(faceExposure) : "—";
     if (!r.raw) return index == 1 ? strengths[recipe] + "%" : "—";
+    String ak = appleQKey(r, index);
+    if (ak != null) {
+      int v = appleTuneValue(tuning.appleEffective(r.fuji), ak);
+      return v == 0 ? "0" : v > 0 ? "+" + v : String.valueOf(v);
+    }
     TuningControl c = qControl(r, index);
     if (c == null) return "—";
     if (!c.enabled(t)) return c.disabledLabel == null ? "—" : shortLabel(c.disabledLabel);
@@ -6041,9 +6121,15 @@ public final class MainActivity extends ComponentActivity
       views[0].setText(qLabel(r, i));
       views[1].setText(qValueText(r, i, t));
       TuningControl c = qControl(r, i);
+      String ak = appleQKey(r, i);
       boolean usable =
-          i == 0 || (i == 15 && r.raw) || (!r.raw && i == 1) || (c != null && t != null && c.enabled(t));
+          i == 0
+              || (i == 15 && r.raw)
+              || (!r.raw && i == 1)
+              || ak != null
+              || (c != null && t != null && c.enabled(t));
       boolean changed = c != null && t != null && c.enabled(t) && c.at(t) != c.at(defaults);
+      if (ak != null) changed = appleTuneValue(tuning.appleEffective(r.fuji), ak) != 0;
       if (!r.raw && i == 1) changed = strengths[recipe] != 80;
       views[1].setTextColor(!usable ? 0xff6f6b63 : changed ? 0xffff9a66 : 0xfff4f1e8);
       View tile = (View) views[0].getParent();
@@ -6087,6 +6173,16 @@ public final class MainActivity extends ComponentActivity
         camera.update(snapshot());
         pushOsd();
       }
+      refreshQ();
+      return;
+    }
+    String ak = appleQKey(r, qIndex);
+    if (ak != null) {
+      AppleTune at = tuning.appleEffective(r.fuji);
+      int v = appleTuneValue(at, ak) + (delta > 0 ? 5 : -5);
+      appleTuneSet(at, ak, Math.max(AppleTune.MIN, Math.min(AppleTune.MAX, v)));
+      tuning.appleSave(r.fuji, at);
+      updateLabels();
       refreshQ();
       return;
     }
