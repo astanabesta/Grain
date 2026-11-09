@@ -112,8 +112,8 @@ public final class AppleRender {
         "APPLE-XS-MAX",
         "iXS",
         "A12 Smart HDR · XS Max Warm",
-        1.050,
-        0.920,
+        1.056,
+        0.915,
         0.62f,
         0.86f,
         1.15,
@@ -470,6 +470,8 @@ public final class AppleRender {
         case XS_MAX_WARM:
           // Iconic A12 Smart HDR iPhone XS Max: golden-honey warmth, velvety warm-peach skin,
           // lush sunlit greens, deep cobalt skies, and vibrant warm-lit backgrounds.
+          // Chroma-magnitude ramp matched to the reference Mi-gallery edit (vibrance +24 /
+          // saturation +4): near-neutrals untouched, mid chroma +3.5%, rich chroma +5.5%.
           L += 0.012f * midSkin;
           cScale *=
               (1f
@@ -478,6 +480,8 @@ public final class AppleRender {
                   + 0.08f * wSky
                   + 0.05f * wRed
                   + 0.07f * wGold * (1f - 0.65f * wSkin)
+                  + 0.035f * sstep(0.028f, 0.055f, C) * (1f - 0.5f * wSkin)
+                  + 0.020f * sstep(0.055f, 0.12f, C) * (1f - 0.5f * wSkin)
                   + 0.02f * wSkin);
           L -= (0.026f * wSky + 0.020f * wLeaf + 0.015f * wRed) * L;
           rotDeg = 1.8f * wSkin + 4.5f * wLeaf - 3.2f * wSky - 1.2f * wGold;
