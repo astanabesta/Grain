@@ -1464,6 +1464,11 @@ public final class GrainCamera {
       Runnable r = burstSalvage;
       if (r != null) handler.removeCallbacks(r);
       assembleBurst();
+      // Belt and braces: the salvage is gone, so any post-assemble limbo is incompletable — fail
+      // the shot now rather than leaving it to the 12 s watchdog (v0.9.19 silent-hang lesson).
+      if (inFlight && pendingStack == null && pendingRaw == null)
+        failCapture(
+            "Stack could not assemble (" + burstImages.size() + " frames arrived); retry the shot.");
     }
   }
 
@@ -1478,7 +1483,16 @@ public final class GrainCamera {
     try {
       java.util.List<Long> ts = new java.util.ArrayList<>(burstImages.keySet());
       java.util.Collections.sort(ts);
-      if (ts.isEmpty()) return; // caller fails/salvages
+      if (ts.isEmpty()) {
+        // terminal: callers (maybeAssemble/salvage) treat assembleBurst as the last word
+        failCapture(
+            "Stack capture desynced: no RAW frames arrived (jpeg="
+                + (pendingBytes != null)
+                + ", results="
+                + burstResults.size()
+                + "). Retry the shot; if it repeats, set SHOOT -> FRAME STACK to OFF.");
+        return;
+      }
       Image refImg = burstImages.get(ts.get(0));
       // The JPEG rides the last request: the receipt's "actual" metadata is keyed to the JPEG's
       // timestamp, exactly like a single capture. (max() is only a fallback — a HAL dropping the
@@ -1497,6 +1511,12 @@ public final class GrainCamera {
                 + (pendingBytes != null) + ", results=" + burstResults.size() + ". Retry the shot.");
         return;
       }
+      // Rekey the receipt to the result we actually hold. A HAL that drops the JPEG request's
+      // result must not hang on tryFinish()'s timestamp-equality rule (the v0.9.19 fallback was
+      // silently defeated by it: assemble "succeeded", tryFinish no-op'd, 12 s watchdog fired).
+      // In that degraded case the metadata frame is a same-burst sibling of the JPEG — same AE,
+      // ~50 ms apart; still honest evidence, and the shot can never stall.
+      pendingImageTime = lastTs;
       java.util.List<short[]> planes = new java.util.ArrayList<>(ts.size());
       for (Long t : ts) planes.add(RawSupport.planeShorts(burstImages.get(t)));
       for (int i = 1; i < ts.size(); i++) burstImages.get(ts.get(i)).close();

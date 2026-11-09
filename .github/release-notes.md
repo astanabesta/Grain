@@ -1,4 +1,20 @@
-## Grain Photo vVERSION — Critical Hotfix: RAW Captures Develop Again
+## Grain Photo vVERSION — Stack Automatic Can No Longer Stall
+
+- **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
+- **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
+
+### What's new in v0.9.20 — the timeout toast is gone for good
+
+**"Photo capture timed out" with FRAME STACK = AUTOMATIC.** Found the last escape hatch, and it was a subtle one: when the camera pipeline drops the burst frame's *result* (metadata) which also carries the JPEG, v0.9.19's fallback correctly found an adjacent frame's result — but a timestamp-equality check further down the receipt path then rejected it with a *silent* return, and with the safety-net already disarmed, the shot sat until the 12 s watchdog. Three fixes close every variant of this:
+
+1. The receipt is now keyed to the result the burst actually holds — a dropped JPEG result degrades to same-burst sibling metadata instead of deadlocking.
+2. Every desync state inside burst assembly now fails the shot **immediately and loudly** (toast lists frames/JPEG/result counts) instead of waiting on anyone.
+3. The success path gained a terminal guarantee: if assembly leaves the shot incompletable for any reason, it fails at once — the 6 s salvage and this backstop mean the 12 s watchdog should now be unreachable in practice.
+
+Worst case on problematic hardware is now a clear error inside ~6 s (or a degraded single/partial-frame photo), never a frozen shot.
+
+### Previously in v0.9.19 — critical hotfix: RAW captures develop again
+Fixed the v0.9.17/18 RAW-develop NPE (stack label read after the frame release) with a new end-to-end smoke test, plus the first round of burst-desync hardening.
 
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
