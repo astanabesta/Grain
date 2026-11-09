@@ -1368,7 +1368,7 @@ public final class GrainCamera {
   }
 
   /**
-   * How many RAW frames to burst for a multi-frame stack (v0.9.17): 0/1 = plain single capture.
+   * How many RAW frames to burst for a multi-frame stack (v0.9.17): 0/1 = plain single capture, 3 = stack.
    * Automatic mode engages for RAW recipes in low light or at a digital crop — exactly the shots
    * where a single 12 MP frame runs out of photons or pixels. Flash never stacks (per-frame flash
    * would fight the moving subject anyway).
@@ -1378,16 +1378,14 @@ public final class GrainCamera {
     if (s.flashMode != ExposureMath.FLASH_OFF) return 0;
     double zoom = s.zoom;
     if (zoom >= 1.6) return 3; // digital crop: 1/4 of the sensor -> 1/4 of the photons
-    if (s.shutterNs >= 33_333_333L) return 4;
     if (s.shutterNs >= 16_600_000L) return 3;
     double nsIso = sceneNeutralNsIso;
-    if (nsIso > 9.0e9) return 4; // rough indoor window light
-    if (nsIso > 4.0e9) return 3; // e.g. 1/100s at ISO 400+
+    if (nsIso > 4.0e9) return 3; // ~1/100s at ISO 400+; 3 frames = 1.7x noise, MTK-burst friendly
     return 0;
   }
 
   /**
-   * Captures a burst of identical RAW stills (the last one also carries the JPEG target so the
+   * Captures a burst of 3 identical RAW stills (the last one also carries the JPEG target so the
    * existing receipt path matches timestamps exactly as for a single capture), then assembles the
    * stack in {@link #assembleBurst}. Any shortfall salvages to fewer frames — down to the plain
    * single-frame path — rather than failing the shot.
@@ -1436,13 +1434,20 @@ public final class GrainCamera {
       Handler hh = handler;
       burstSalvage =
           () -> {
-            if (inFlight && pending == tag && burstWanted > 0) {
-              // salvage whatever arrived: >=2 raw frames -> partial stack, 1 -> single frame path
-              assembleBurst();
-              if (inFlight && pending == tag && pendingStack == null)
-                failCapture(
-                    "Stack capture stalled: " + burstImages.size() + "/" + burstWanted + " frames; retry the shot.");
+            if (!inFlight || pending != tag || burstWanted == 0) return;
+            int got = burstImages.size();
+            if (pendingBytes == null) {
+              // Without the burst JPEG the receipt pipeline can never finish — fail loudly instead
+              // of hanging on the "capturing" shutter note (v0.9.17 hang).
+              failCapture(
+                  "Stack stalled at " + got + "/" + burstWanted
+                      + " frames and no JPEG. Retry the shot; if it repeats, set SHOOT -> FRAME STACK to OFF and tell Sajid.");
+              return;
             }
+            // partial burst: merge the 2+ frames that arrived (or fall back to a single frame)
+            assembleBurst();
+            if (inFlight && pending == tag)
+              failCapture("Stack could not assemble (" + got + " frames arrived); retry the shot.");
           };
       hh.postDelayed(burstSalvage, 6000);
     } catch (Exception e) {
@@ -1533,6 +1538,15 @@ public final class GrainCamera {
   private void submitStillCapture(Snapshot snapshot, boolean wantsRaw) {
     if (session == null || device == null || !inFlight || pending != snapshot) return;
     try {
+      // The hard timeout protects both the single path and a stalled stack burst alike.
+      Snapshot tag = snapshot;
+      handler.postDelayed(
+          () -> {
+            if (inFlight && pending == tag)
+              failCapture(
+                  "Photo capture timed out. No success was reported; retry the shot.");
+          },
+          12000);
       int stackFrames = wantStackFrames(snapshot, wantsRaw);
       if (stackFrames > 1) {
         submitBurst(snapshot, stackFrames);
@@ -1567,14 +1581,6 @@ public final class GrainCamera {
             }
           },
           handler);
-      Snapshot tag = snapshot;
-      handler.postDelayed(
-          () -> {
-            if (inFlight && pending == tag)
-              failCapture(
-                  "Photo capture timed out. No success was reported; retry the shot.");
-          },
-          12000);
     } catch (Exception e) {
       failCapture("Capture failed: " + e.getMessage());
     }

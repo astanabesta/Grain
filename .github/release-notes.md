@@ -1,4 +1,21 @@
-## Grain Photo vVERSION — Multi-Frame RAW Stacking (Automatic)
+## Grain Photo vVERSION — Frame Stack Stabilised
+
+- **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
+- **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
+
+### What's new in v0.9.18
+
+#### Fixes a possible stuck shutter on stacked captures
+v0.9.17's burst could stall on "capturing RAW + phone JPEG" if the camera pipeline dropped or delayed a burst frame: the burst path registered no overall timeout and the salvage routine could leave the shot waiting on a JPEG that never came. Now:
+
+- **Every capture path sits under the same 12 s watchdog** — single or stacked.
+- **The 6 s salvage is decisive**: no JPEG → fail with a clear message; fewer frames than requested → merge the ones that arrived (a 2-frame stack is still a stack), or fall back to the plain single-frame path. A stack burst can never hang anymore.
+- Stacks are **3 frames everywhere** (zoom crop and low light alike) — the difference versus 4 frames is ~1.15× noise, halve-a-heartbeat faster and kinder to conservative camera HALs.
+
+If a stack still fails on your device, the toast now says exactly which stage starved ("n/3 raw frames in"), and **SHOOT → FRAME STACK → OFF** stays the escape hatch.
+
+### Previously in v0.9.17 — multi-frame RAW stacking (automatic)
+RAW recipes auto-burst 3 frames into one for zoom crops and low light: Bayer-phase-safe global alignment, per-pixel 2.4-sigma motion gate (moved subjects fall back to frame 1 — can never ghost), frame-measured noise model follows the stack so NR relaxes by the real gain. Receipt reports stackFrames/stackGatedPct/stackMeanShiftPx.
 
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
