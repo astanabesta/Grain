@@ -31,6 +31,13 @@ public final class PortraitBokeh {
     return x <= 0.0031308f ? 12.92f * x : (float) (1.055 * Math.pow(x, 1.0 / 2.4) - 0.055);
   }
 
+  /** sRGB code (0..1) to linear — scalar form used by the milk blend. */
+  private static float srgbToLin(float c) {
+    if (c <= 0f) return 0f;
+    if (c >= 1f) return 1f;
+    return c <= 0.04045f ? c / 12.92f : (float) Math.pow((c + 0.055f) / 1.055f, 2.4);
+  }
+
   /** Max disc radius at full resolution (px) for a simulated f-number. */
   public static float maxRadiusPx(int h, float fNumber) {
     float f = Math.max(0.7f, Math.min(22f, fNumber));
@@ -69,9 +76,11 @@ public final class PortraitBokeh {
       int[] argb, int w, int h, float[] maskQ, int qw, int qh, float rMaxFull, int[] out,
       float[] depthQ) {
     final int n = qw * qh;
-    // Quarter-resolution linear-light downsample of the frame.
+    // Quarter-resolution downsample of the frame in linear light AND in original sRGB codes
+    // (the second powers the "milk" layer: gamma-domain blending is what makes bokeh creamy).
     float[] lr = new float[n], lg = new float[n], lb = new float[n];
-    downsampleLinear(argb, w, h, lr, lg, lb, qw, qh);
+    float[] gr = new float[n], gmG = new float[n], gb = new float[n];
+    downsampleLinearAndGamma(argb, w, h, lr, lg, lb, gr, gmG, gb, qw, qh);
 
     float[] ms = new float[n];
     boxBlur(maskQ, ms, qw, qh, 1); // smooth the matte stair-steps (~6 full-res px)
@@ -113,6 +122,17 @@ public final class PortraitBokeh {
       pb[i] = bb0[i] * bgw[i];
       pw[i] = bgw[i];
     }
+    // Second cascade on the sRGB-domain quarter pixels, same exclusion weights and radii.
+    // Mixing ~30% of this into the linear pick churns bright+dark tones toward mid when blurred —
+    // the "milky cream" character of dedicated portrait editors.
+    float[][] lvlSR = new float[3][], lvlSG = new float[3][], lvlSB = new float[3][];
+    float[] sr0 = new float[n], sg0 = new float[n], sb0 = new float[n];
+    for (int i = 0; i < n; i++) {
+      sr0[i] = gr[i] * bgw[i];
+      sg0[i] = gmG[i] * bgw[i];
+      sb0[i] = gb[i] * bgw[i];
+    }
+
     float prevSig = 0f;
     for (int k = 0; k < 3; k++) {
       // Cascaded box blurs add variance in quadrature; a disc of radius r has sigma = r/sqrt(2).
@@ -129,18 +149,33 @@ public final class PortraitBokeh {
       pg = tg;
       pb = tb;
       pw = tw;
+      float[] tsr = new float[n], tsg = new float[n], tsb = new float[n];
+      boxBlur(sr0, tsr, qw, qh, step);
+      boxBlur(sg0, tsg, qw, qh, step);
+      boxBlur(sb0, tsb, qw, qh, step);
+      sr0 = tsr;
+      sg0 = tsg;
+      sb0 = tsb;
       lvlR[k] = new float[n];
       lvlG[k] = new float[n];
       lvlB[k] = new float[n];
+      lvlSR[k] = new float[n];
+      lvlSG[k] = new float[n];
+      lvlSB[k] = new float[n];
       for (int i = 0; i < n; i++) {
         float den = Math.max(1e-4f, pw[i]);
         lvlR[k][i] = pr[i] / den;
         lvlG[k][i] = pg[i] / den;
         lvlB[k][i] = pb[i] / den;
+        lvlSR[k][i] = sr0[i] / den;
+        lvlSG[k][i] = sg0[i] / den;
+        lvlSB[k][i] = sb0[i] / den;
       }
     }
 
-    // Per-pixel continuous-radius pick between stack levels (log-radius interpolation).
+    // Per-pixel continuous-radius pick between stack levels (log-radius interpolation), with the
+    // milk blend: ~30% of the same pick computed on the gamma-domain cascade (churns blurred
+    // highlights+shadows toward mid for the creamy editor look), re-encoded to linear.
     float[] br = new float[n], bg = new float[n], bb = new float[n];
     for (int i = 0; i < n; i++) {
       float r = rf[i];
@@ -152,26 +187,38 @@ public final class PortraitBokeh {
       }
       int k0;
       float x0, x1;
+      float rr, gg2, bbc, sr, sg, sb2;
       if (r <= radii[0]) {
         // interpolate between the sharp image and the smallest disc level
         float t = r / Math.max(0.25f, radii[0]);
-        br[i] = lr[i] + t * (lvlR[0][i] - lr[i]);
-        bg[i] = lg[i] + t * (lvlG[0][i] - lg[i]);
-        bb[i] = lb[i] + t * (lvlB[0][i] - lb[i]);
-        continue;
-      } else if (r >= radii[1]) {
-        k0 = 1;
-        x0 = radii[1];
-        x1 = radii[2];
+        rr = lr[i] + t * (lvlR[0][i] - lr[i]);
+        gg2 = lg[i] + t * (lvlG[0][i] - lg[i]);
+        bbc = lb[i] + t * (lvlB[0][i] - lb[i]);
+        sr = gr[i] + t * (lvlSR[0][i] - gr[i]);
+        sg = gmG[i] + t * (lvlSG[0][i] - gmG[i]);
+        sb2 = gb[i] + t * (lvlSB[0][i] - gb[i]);
       } else {
-        k0 = 0;
-        x0 = radii[0];
-        x1 = radii[1];
+        if (r >= radii[1]) {
+          k0 = 1;
+          x0 = radii[1];
+          x1 = radii[2];
+        } else {
+          k0 = 0;
+          x0 = radii[0];
+          x1 = radii[1];
+        }
+        float t = (float) Math.max(0f, Math.min(1f, Math.log(r / x0) / Math.log(x1 / x0)));
+        rr = lvlR[k0][i] + t * (lvlR[k0 + 1][i] - lvlR[k0][i]);
+        gg2 = lvlG[k0][i] + t * (lvlG[k0 + 1][i] - lvlG[k0][i]);
+        bbc = lvlB[k0][i] + t * (lvlB[k0 + 1][i] - lvlB[k0][i]);
+        sr = lvlSR[k0][i] + t * (lvlSR[k0 + 1][i] - lvlSR[k0][i]);
+        sg = lvlSG[k0][i] + t * (lvlSG[k0 + 1][i] - lvlSG[k0][i]);
+        sb2 = lvlSB[k0][i] + t * (lvlSB[k0 + 1][i] - lvlSB[k0][i]);
       }
-      float t = (float) Math.max(0f, Math.min(1f, Math.log(r / x0) / Math.log(x1 / x0)));
-      br[i] = lvlR[k0][i] + t * (lvlR[k0 + 1][i] - lvlR[k0][i]);
-      bg[i] = lvlG[k0][i] + t * (lvlG[k0 + 1][i] - lvlG[k0][i]);
-      bb[i] = lvlB[k0][i] + t * (lvlB[k0 + 1][i] - lvlB[k0][i]);
+      float milk = 0.30f;
+      br[i] = rr * (1f - milk) + srgbToLin(sr) * milk;
+      bg[i] = gg2 * (1f - milk) + srgbToLin(sg) * milk;
+      bb[i] = bbc * (1f - milk) + srgbToLin(sb2) * milk;
     }
 
     // Full-resolution composite: sharp linear-light foreground over the upscaled bokeh layer.
@@ -224,26 +271,46 @@ public final class PortraitBokeh {
   /** 4x4 average downsample with sRGB to linear decode. */
   private static void downsampleLinear(
       int[] argb, int w, int h, float[] lr, float[] lg, float[] lb, int qw, int qh) {
+    downsampleLinearAndGamma(argb, w, h, lr, lg, lb, null, null, null, qw, qh);
+  }
+
+  /**
+   * 4x4 average downsample: linear-light accumulation into {@code lr/lg/lb}, plus the mean of the
+   * raw sRGB codes into {@code gr/gg/gb} when supplied (the "milk" layer's domain).
+   */
+  private static void downsampleLinearAndGamma(
+      int[] argb, int w, int h, float[] lr, float[] lg, float[] lb,
+      float[] gr, float[] gg, float[] gb, int qw, int qh) {
     for (int qy = 0; qy < qh; qy++) {
       int y0 = qy * 4, y1 = Math.min(h, y0 + 4);
       int o = qy * qw;
       for (int qx = 0; qx < qw; qx++) {
         int x0 = qx * 4, x1 = Math.min(w, x0 + 4);
         float r = 0, g = 0, b = 0;
+        float sr = 0, sg = 0, sb = 0;
         int cnt = 0;
         for (int y = y0; y < y1; y++) {
           int ro = y * w;
           for (int x = x0; x < x1; x++) {
             int px = argb[ro + x];
-            r += SRGB_LIN[(px >>> 16) & 255];
-            g += SRGB_LIN[(px >>> 8) & 255];
-            b += SRGB_LIN[px & 255];
+            int cr = (px >>> 16) & 255, cg = (px >>> 8) & 255, cb = px & 255;
+            r += SRGB_LIN[cr];
+            g += SRGB_LIN[cg];
+            b += SRGB_LIN[cb];
+            sr += cr;
+            sg += cg;
+            sb += cb;
             cnt++;
           }
         }
         lr[o + qx] = r / cnt;
         lg[o + qx] = g / cnt;
         lb[o + qx] = b / cnt;
+        if (gr != null) {
+          gr[o + qx] = sr / cnt / 255f;
+          gg[o + qx] = sg / cnt / 255f;
+          gb[o + qx] = sb / cnt / 255f;
+        }
       }
     }
   }
@@ -266,7 +333,11 @@ public final class PortraitBokeh {
         rf[o + x] = d;
       }
     }
-    float ramp = Math.max(2f, rMaxQ * 0.55f);
+    // Cream tuning: asymptotic approach to the max disc radius instead of hard saturation.
+    // Radius keeps growing with distance forever (rf = rMax * (1 - e^(-d/ta))), so mid-distance
+    // content keeps a visible gradient — that continuous falloff reads as "creamy", whereas a
+    // hard saturate reads as AI smear.
+    float tau = Math.max(3f, rMaxQ * 0.9f);
     for (int y = qh - 1; y >= 0; y--) {
       int o = y * qw;
       for (int x = qw - 1; x >= 0; x--) {
@@ -278,7 +349,7 @@ public final class PortraitBokeh {
           if (x < qw - 1) d = Math.min(d, rf[o + qw + x + 1] + 1.4142f);
           if (x > 0) d = Math.min(d, rf[o + qw + x - 1] + 1.4142f);
         }
-        rf[o + x] = d >= INF * 0.5f ? rMaxQ : Math.min(rMaxQ, d * rMaxQ / ramp);
+        rf[o + x] = d >= INF * 0.5f ? rMaxQ : (float) (rMaxQ * (1f - Math.exp(-d / tau)));
       }
     }
   }
@@ -431,7 +502,10 @@ public final class PortraitBokeh {
       float gate = c <= 0.25f ? 1f : c >= 0.65f ? 0f : (0.65f - c) / 0.4f;
       float dd = depth[i];
       float delta = dd >= dFocus ? 0f : Math.min(1f, (dFocus - dd) / scale);
-      float s = delta * delta * (3f - 2f * delta);
+      // optically-plausible yet creamy: pow lifts mid-depth defocus above smoothstep's shallow
+      // start, so the falloff is visible but continuous — matching dedicated portrait editors.
+      float deltaE = (float) Math.pow(delta, 0.70f);
+      float s = deltaE * deltaE * (3f - 2f * deltaE);
       rf[i] = rMaxQ * s * gate;
     }
     return true;

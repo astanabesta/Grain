@@ -1,11 +1,23 @@
-## Grain Photo vVERSION — Portrait Fix: Hair Stays Sharp + Depth Model Now Actually Engages
+## Grain Photo vVERSION — Creamy Bokeh: Continuous Depth Gradient + Milky Blend
 
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, and photos). Arm64 phones only. The APK grows to ~53 MB because the portrait brain is now **three bundled neural networks** — everything still runs **fully offline on your phone**; no shot ever leaves the device.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (portrait mode is still Android-first; sideload instructions as before).
 
-### What's new in v0.9.7 — Hair Anchor & Depth Telemetry
+### What's new in v0.9.8 — The "Cream" Render
 
-From the f/4 comparison shot vs. the Mi Gallery edit (Thanks — that Goldilocks pair is exactly what testing needs):
+Built from your Mi Gallery comparison: the buttery look isn't "more blur", it's two specific behaviours our renderer lacked:
+
+#### 1. Continuous Blur Gradient (no more flat frosted wall)
+- Our fallback ramp reached max radius within ~3 px of your silhouette, so the entire background became one uniform smear (measured d1 flattened to constant 0.12).
+- The ramp is now **asymptotic** — blur keeps growing with distance forever (`1 − e^−d/τ`), so near-mid content keeps a visible gradient, exactly like glass. The depth-driven path (when the depth model engages) gets the same eased curve (`pow(δ, 0.7)`).
+
+#### 2. Milky Gamma-Domain Blend (~30%)
+- Blur remains computed in physically-neutral linear light (that's why highlights render as true discs), then a second identical cascade run **in sRGB space** is mixed in at 30% with the same exclusion weights and pick radius. Blurred bright+dark tones churn toward middle values — the "whipped cream" of the Mi/Samsung editors — without touching subject sharpness or disc highlights.
+- Cost: ~+25% bokeh time (a portrait shot develops ≈ 1 s longer).
+
+#### 3. Kept from 0.9.7
+- Hair-band anchor (flyaways stay sharp), depth telemetry (`portraitDepthNull`), full-res letterbox fix, coverage guard, v0.9.3 texture fixes.
+
 
 #### 1. Hair Stays Pixel-Sharp (was blurred 4.7×)
 - On your shot our hair registered `d1=1.36` vs `6.37` in the reference. RVM at 480 px can't resolve flyaways 1500 px tall, so strands got alpha ≈0.3 and we half-blurred them.
@@ -15,8 +27,7 @@ From the f/4 comparison shot vs. the Mi Gallery edit (Thanks — that Goldilocks
 - Receipt showed the int8 MiDaS run (148 ms) but silently rejected output and fell back to the distance-from-edge ramp — so objects at your exact focal plane could over-blur.
 - The model now records **why** it refused (`portraitDepthNull` in the receipt: load/flat-range/tight-spread/exception) and the flat-scene threshold went from 2 % to 0.8 % — real portraits are depth-tight by nature. If it still refuses on your next shot, the receipt will tell me in one screenshot which guard is too strict and I fix it remotely.
 
-#### 3. Everything kept
-- v0.9.6 full-res letterbox fix, alpha matting, highlight discs, P-key aperture + 23/50/85 mm dial, v0.9.3 hair-smudge repair, Ultra HDR.
+#### From v0.9.6 (all kept): letterbox fix & guard
 
 - **Root cause (my bug):** the matting and depth models letterboxed against the small 480×640 *preview* bitmap while the quarter-grid indexes *full-sensor* pixels — so the alpha matte read nearly-empty everywhere and the safety fallback blurred your face. Portrait mode behaved as random fog on ~v0.9.5 for most portrait-oriented photos.
 - **Fixes:** all three models now share one full-res-stable letterbox math; and a **hard guard** (person-core coverage sanity) skips bokeh entirely if any model map looks wrong — a future regression can dim the portrait effect, but **never** blur the subject.
