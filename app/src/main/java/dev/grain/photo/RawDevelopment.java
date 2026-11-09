@@ -170,6 +170,7 @@ final class RawDevelopment {
                   + recipe.filmLabel
                   + (apple ? ", Vibrant sRGB + Ultra HDR" : " LUT")
                   + (tuned || appleEditor ? ", tuned" : "")
+                  + (frame.stackCount > 1 ? ", " + frame.stackCount + "-frame stack" : "")
                   + ")"));
       exif.saveAttributes();
       if (wroteGainmap) {

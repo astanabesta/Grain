@@ -85,6 +85,11 @@ final class RawSupport {
 
   /** Copies the RAW plane and gathers everything the developer needs. Call before image.close(). */
   static RawFrame frame(Image image, CameraCharacteristics chars, CaptureResult result) {
+    return frame(planeShorts(image), image.getWidth(), image.getHeight(), chars, result);
+  }
+
+  /** Packed copy of the RAW plane (stride folded away). Call before image.close(). */
+  static short[] planeShorts(Image image) {
     Image.Plane plane = image.getPlanes()[0];
     int w = image.getWidth(), h = image.getHeight();
     int rowStride = plane.getRowStride() / 2, pixelStride = plane.getPixelStride();
@@ -98,6 +103,12 @@ final class RawSupport {
         shorts.position(y * rowStride);
         shorts.get(data, y * w, w);
       }
+    return data;
+  }
+
+  /** Assembles a RawFrame around an already-packed RAW plane (single frame or merged stack). */
+  static RawFrame frame(
+      short[] data, int w, int h, CameraCharacteristics chars, CaptureResult result) {
     RawFrame f = new RawFrame(data, w, h, w);
     Integer cfa = chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT);
     f.cfa = cfa == null ? RawFrame.RGGB : cfa;

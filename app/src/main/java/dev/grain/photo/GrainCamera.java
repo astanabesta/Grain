@@ -13,6 +13,7 @@ import android.util.*;
 import android.view.*;
 import dev.grain.photo.develop.FujiRecipe;
 import dev.grain.photo.develop.RawFrame;
+import dev.grain.photo.develop.RawStack;
 import java.io.File;
 import java.nio.ByteBuffer;
 import java.util.*;
@@ -228,6 +229,29 @@ public final class GrainCamera {
   private Size rawSize;
   private Image pendingRaw;
   private long pendingRawTime;
+  // ── multi-frame RAW stack (v0.9.17) ─────────────────────────────────────────
+  /** 0 = automatic (low light / zoomed), 1 = off. */
+  public static final int STACK_AUTO = 0, STACK_OFF = 1;
+  private volatile int stackMode = STACK_AUTO;
+  /** >1 while a stack burst is in flight (frames still being collected). */
+  private int burstWanted = 0;
+  private final java.util.Map<Long, Image> burstImages = new java.util.HashMap<>();
+  private final java.util.Map<Long, TotalCaptureResult> burstResults = new java.util.HashMap<>();
+  private int burstFailed = 0; // requests the HAL reported as failed inside the burst
+  /** Merged frame ready for tryFinish (skip the pendingRaw paths), or null on single capture. */
+  private RawFrame pendingStack = null;
+  private int pendingStackFrames = 1;
+  private float pendingStackGate = 0f, pendingStackShift = 0f;
+  private Runnable burstSalvage;
+
+  public void setStackMode(int mode) {
+    stackMode = mode == STACK_OFF ? STACK_OFF : STACK_AUTO;
+  }
+
+  public void setStackOff(boolean off) {
+    setStackMode(off ? STACK_OFF : STACK_AUTO);
+  }
+
   private boolean pendingWantsRaw;
   /** Physical device rotation (clockwise degrees) from the activity, and its value at the shutter. */
   private volatile int deviceRotation;
@@ -430,6 +454,7 @@ public final class GrainCamera {
               if (!inFlight) return;
               pendingBytes = bytes;
               pendingImageTime = image.getTimestamp();
+              maybeAssemble(); // stack bursts: the JPEG often lands last
               tryFinish();
             } catch (Exception e) {
               failCapture("Could not read camera JPEG: " + e.getMessage());
@@ -446,7 +471,7 @@ public final class GrainCamera {
         rawSize = RawSupport.rawSize(streams);
         rawReader =
             ImageReader.newInstance(
-                rawSize.getWidth(), rawSize.getHeight(), ImageFormat.RAW_SENSOR, 2);
+                rawSize.getWidth(), rawSize.getHeight(), ImageFormat.RAW_SENSOR, 6); // 4-frame stack + slack
         rawReader.setOnImageAvailableListener(
             reader -> {
               Image image = null;
@@ -454,6 +479,14 @@ public final class GrainCamera {
                 image = reader.acquireNextImage();
                 if (image == null) return;
                 if (closed || token != generation || !inFlight || !pendingWantsRaw) return;
+                if (burstWanted > 0) {
+                  // stack burst: hold the frame; the merger unpacks and closes them at assemble time
+                  Image dup = burstImages.put(image.getTimestamp(), image);
+                  if (dup != null) dup.close();
+                  image = null;
+                  maybeAssemble();
+                  return;
+                }
                 if (pendingRaw != null) pendingRaw.close();
                 pendingRaw = image;
                 pendingRawTime = image.getTimestamp();
@@ -1334,9 +1367,177 @@ public final class GrainCamera {
         });
   }
 
+  /**
+   * How many RAW frames to burst for a multi-frame stack (v0.9.17): 0/1 = plain single capture.
+   * Automatic mode engages for RAW recipes in low light or at a digital crop — exactly the shots
+   * where a single 12 MP frame runs out of photons or pixels. Flash never stacks (per-frame flash
+   * would fight the moving subject anyway).
+   */
+  private int wantStackFrames(Snapshot s, boolean wantsRaw) {
+    if (!wantsRaw || stackMode == STACK_OFF) return 0;
+    if (s.flashMode != ExposureMath.FLASH_OFF) return 0;
+    double zoom = s.zoom;
+    if (zoom >= 1.6) return 3; // digital crop: 1/4 of the sensor -> 1/4 of the photons
+    if (s.shutterNs >= 33_333_333L) return 4;
+    if (s.shutterNs >= 16_600_000L) return 3;
+    double nsIso = sceneNeutralNsIso;
+    if (nsIso > 9.0e9) return 4; // rough indoor window light
+    if (nsIso > 4.0e9) return 3; // e.g. 1/100s at ISO 400+
+    return 0;
+  }
+
+  /**
+   * Captures a burst of identical RAW stills (the last one also carries the JPEG target so the
+   * existing receipt path matches timestamps exactly as for a single capture), then assembles the
+   * stack in {@link #assembleBurst}. Any shortfall salvages to fewer frames — down to the plain
+   * single-frame path — rather than failing the shot.
+   */
+  private void submitBurst(Snapshot snapshot, int frames) {
+    if (session == null || device == null || !inFlight || pending != snapshot) return;
+    try {
+      burstWanted = frames;
+      burstFailed = 0;
+      burstImages.clear();
+      burstResults.clear();
+      pendingStack = null;
+      java.util.List<CaptureRequest> requests = new java.util.ArrayList<>(frames);
+      for (int i = 0; i < frames; i++) {
+        CaptureRequest.Builder b2 =
+            device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
+        JSONObject applied = applyRecipe(b2, snapshot, true);
+        b2.addTarget(rawReader.getSurface());
+        if (i == frames - 1) {
+          b2.addTarget(jpegReader.getSurface());
+          pendingApplied = applied;
+        }
+        b2.setTag(snapshot);
+        requests.add(b2.build());
+      }
+      session.captureBurst(
+          requests,
+          new CameraCaptureSession.CaptureCallback() {
+            @Override
+            public void onCaptureCompleted(
+                CameraCaptureSession sc, CaptureRequest r, TotalCaptureResult result) {
+              Long ts = result.get(CaptureResult.SENSOR_TIMESTAMP);
+              if (ts != null) burstResults.put(ts, result);
+              maybeAssemble();
+            }
+
+            @Override
+            public void onCaptureFailed(
+                CameraCaptureSession sc, CaptureRequest r, CaptureFailure failure) {
+              burstFailed++;
+              maybeAssemble();
+            }
+          },
+          handler);
+      Snapshot tag = snapshot;
+      Handler hh = handler;
+      burstSalvage =
+          () -> {
+            if (inFlight && pending == tag && burstWanted > 0) {
+              // salvage whatever arrived: >=2 raw frames -> partial stack, 1 -> single frame path
+              assembleBurst();
+              if (inFlight && pending == tag && pendingStack == null)
+                failCapture(
+                    "Stack capture stalled: " + burstImages.size() + "/" + burstWanted + " frames; retry the shot.");
+            }
+          };
+      hh.postDelayed(burstSalvage, 6000);
+    } catch (Exception e) {
+      burstWanted = 0;
+      failCapture("Stack capture failed: " + e.getMessage());
+    }
+  }
+
+  /** Burst progress check: assemble when the last request's JPEG and every raw frame are in. */
+  private void maybeAssemble() {
+    if (burstWanted <= 0 || pendingBytes == null) return;
+    int expect = burstWanted - burstFailed;
+    if (burstImages.size() >= expect) {
+      Runnable r = burstSalvage;
+      if (r != null) handler.removeCallbacks(r);
+      assembleBurst();
+    }
+  }
+
+  /**
+   * Merges the collected RAW frames into {@link #pendingStack} and hands control back to the
+   * ordinary finish path. Reference frame = earliest capture (also kept as the DNG's pixels so the
+   * DNG stays a true raw capture; the developed JPEG comes from the stack).
+   */
+  private void assembleBurst() {
+    if (burstWanted == 0 || pendingStack != null) return;
+    burstWanted = 0;
+    try {
+      java.util.List<Long> ts = new java.util.ArrayList<>(burstImages.keySet());
+      java.util.Collections.sort(ts);
+      if (ts.isEmpty()) return; // caller fails/salvages
+      Image refImg = burstImages.get(ts.get(0));
+      // The JPEG rides the last request: its result is the receipt's "actual" metadata, and its
+      // timestamp matches pendingBytes, exactly like a single capture.
+      Long lastTs = burstResults.isEmpty() ? null : java.util.Collections.max(burstResults.keySet());
+      TotalCaptureResult lastResult = lastTs == null ? null : burstResults.get(lastTs);
+      TotalCaptureResult refResult = burstResults.get(ts.get(0));
+      if (lastResult == null || refResult == null) return;
+      java.util.List<short[]> planes = new java.util.ArrayList<>(ts.size());
+      for (Long t : ts) planes.add(RawSupport.planeShorts(burstImages.get(t)));
+      for (int i = 1; i < ts.size(); i++) burstImages.get(ts.get(i)).close();
+      RawFrame refMeta = RawSupport.frame(planes.get(0), rawSize.getWidth(), rawSize.getHeight(), chars, refResult);
+      if (ts.size() == 1) {
+        // single-frame salvage: only viable when the lone raw frame is the last request's frame,
+        // i.e. the one that also produced the JPEG (the plain path requires matching timestamps)
+        if (!ts.get(0).equals(lastTs)) {
+          refImg.close();
+          burstImages.clear();
+          failCapture("Stack capture desynced (JPEG frame missing); retry the shot.");
+          return;
+        }
+        pendingResult = lastResult;
+        pendingRaw = refImg;
+        pendingRawTime = ts.get(0);
+        burstImages.clear();
+        tryFinish();
+        return;
+      }
+      double nS = 3e-5, nO = 1e-5;
+      if (refMeta.noiseS != null && refMeta.noiseO != null) {
+        double s0 = 0, o0 = 0;
+        for (int k = 0; k < refMeta.noiseS.length; k++) {
+          s0 += refMeta.noiseS[k];
+          o0 += refMeta.noiseO[k];
+        }
+        nS = s0 / refMeta.noiseS.length;
+        nO = o0 / refMeta.noiseO.length;
+      }
+      float black = (refMeta.black[0] + refMeta.black[1] + refMeta.black[2] + refMeta.black[3]) / 4f;
+      RawStack.Out merged =
+          RawStack.merge(planes, rawSize.getWidth(), rawSize.getHeight(), rawSize.getWidth(), black, refMeta.white, nS, nO);
+      RawFrame stacked = RawStack.withData(refMeta, merged.data);
+      stacked.stackCount = merged.framesUsed;
+      pendingStack = stacked;
+      pendingStackFrames = merged.framesUsed;
+      pendingStackGate = merged.gatedFraction;
+      pendingStackShift = merged.meanShift;
+      pendingResult = lastResult;
+      pendingRaw = refImg; // DNG pixels = reference frame
+      pendingRawTime = ts.get(0);
+      burstImages.clear();
+      tryFinish();
+    } catch (Exception e) {
+      failCapture("Stack merge failed: " + e.getMessage());
+    }
+  }
+
   private void submitStillCapture(Snapshot snapshot, boolean wantsRaw) {
     if (session == null || device == null || !inFlight || pending != snapshot) return;
     try {
+      int stackFrames = wantStackFrames(snapshot, wantsRaw);
+      if (stackFrames > 1) {
+        submitBurst(snapshot, stackFrames);
+        return;
+      }
       CaptureRequest.Builder b =
           device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
       pendingApplied = applyRecipe(b, snapshot, true);
@@ -1381,10 +1582,11 @@ public final class GrainCamera {
 
   private void tryFinish() {
     if (!inFlight || pendingBytes == null || pendingResult == null) return;
-    if (pendingWantsRaw && pendingRaw == null) return;
+    if (pendingWantsRaw && pendingRaw == null && pendingStack == null) return;
     Long timestamp = pendingResult.get(CaptureResult.SENSOR_TIMESTAMP);
     if (timestamp == null || timestamp != pendingImageTime) return;
-    if (pendingWantsRaw && timestamp != pendingRawTime) return;
+    // stacked: the raw is a merge of earlier frames, so the raw/JPEG timestamp rule does not apply
+    if (pendingWantsRaw && pendingStack == null && timestamp != pendingRawTime) return;
     try {
       JSONObject receipt =
           new JSONObject()
@@ -1426,7 +1628,7 @@ public final class GrainCamera {
         File dng = null;
         int orientation = jpegOrientation();
         try {
-          frame = RawSupport.frame(raw, chars, pendingResult);
+          frame = pendingStack != null ? pendingStack : RawSupport.frame(raw, chars, pendingResult);
           if ((frame.faces == null || frame.faces.length == 0)
               && faceDetection
               && lastPreviewFaces != null
@@ -1449,6 +1651,12 @@ public final class GrainCamera {
               receipt.put("dngWarning", "DNG not written: " + e.getMessage());
             }
           }
+          if (pendingStackFrames > 1)
+            receipt.put(
+                "dngNote",
+                "DNG holds reference frame 1; the photo was developed from a stack of "
+                    + pendingStackFrames
+                    + " frames.");
           receipt.put("rawFrame", RawSupport.describe(frame, pendingResult));
         } finally {
           raw.close();
@@ -1456,6 +1664,9 @@ public final class GrainCamera {
         receipt
             .put("raw", true)
             .put("sourceFormat", "Camera2 RAW_SENSOR developed on device; phone ISP JPEG kept as reference")
+            .put("stackFrames", pendingStackFrames)
+            .put("stackGatedPct", Math.round(pendingStackGate * 1000f) / 10f)
+            .put("stackMeanShiftPx", Math.round(pendingStackShift * 10f) / 10f)
             .put("rawSize", frame.width + "x" + frame.height);
         RawCapture capture =
             new RawCapture(frame, bytes, dng, orientation, (orientation + extraRotation()) % 360);
@@ -1500,6 +1711,12 @@ public final class GrainCamera {
       pendingRaw.close();
       pendingRaw = null;
     }
+    burstWanted = 0;
+    pendingStack = null;
+    pendingStackFrames = 1;
+    for (Image im : burstImages.values()) im.close();
+    burstImages.clear();
+    burstResults.clear();
     pending = null;
     pendingBytes = null;
     pendingResult = null;

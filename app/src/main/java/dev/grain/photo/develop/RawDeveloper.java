@@ -914,8 +914,11 @@ public final class RawDeveloper {
       double baseS = HAL_NOISE_SCALE * halS, baseO = HAL_NOISE_SCALE * halO;
       double nS = baseS, nO = baseO;
       if (measured != null) {
-        nS = Math.max(0.5 * baseS, Math.min(1.6 * baseS, measured[0]));
-        nO = Math.max(0.5 * baseO, Math.min(12 * baseO, measured[1]));
+        // Stacked frames: the measurement on the averaged frame legitimately drops to var/N, so
+        // the distrust floor must drop with it (per-frame profile still caps the upside).
+        double stackVar = 1.0 / Math.max(1, f.stackCount);
+        nS = Math.max(0.5 * baseS * stackVar, Math.min(1.6 * baseS, measured[0]));
+        nO = Math.max(0.5 * baseO * stackVar, Math.min(12 * baseO, measured[1]));
         noiseSource += " x" + HAL_NOISE_SCALE + ", adjusted by frame measurement (" + (int) measured[2] + " bins)";
       } else noiseSource += " x" + HAL_NOISE_SCALE;
       int nrStep = Math.max(-4, Math.min(4, r.noiseReduction));

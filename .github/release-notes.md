@@ -1,4 +1,30 @@
-## Grain Photo vVERSION — Lift-Aware NR, Tuned Down to Keep Shadow Texture
+## Grain Photo vVERSION — Multi-Frame RAW Stacking (Automatic)
+
+- **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
+- **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
+
+### What's new in v0.9.17
+
+#### Computational photography arrives: stacks like the big vendors
+RAW recipes now automatically capture a **burst of 3–4 back-to-back frames** and merge them into one, exactly the way the phone's own app closes its detail gap. Automatic, and only where it matters:
+
+- **2× / zoomed shots** → 3 frames (a digital crop uses a quarter of the sensor's photons; the stack wins ~2× of them back).
+- **Low light** (roughly ISO 400+ territory, metering-based) → 3 frames, 4 when darker.
+- Bright daylight and non-RAW recipes stay plain single captures — nothing about them changes.
+- **SHOOT → FRAME STACK** can turn it off (AUTOMATIC/OFF).
+
+#### Motion-safe by construction
+Frames are aligned globally (fast thumbnail search, Bayer-phase-safe shifts), then merged with a **per-pixel motion gate**: any pixel where a frame disagrees with the reference by more than ~2.4 sigma of the sensor's noise model is dropped from the average *there*. Your subject can move — the moving area simply falls back to frame 1, so the output can never ghost or double; worst case is exactly the photo you'd have taken before. Hand jitter is the *good* part: it's what alignment eats for free.
+
+#### The numbers you can check
+- The merged frame is developed by the exact same pipeline — but the noise it measures is now genuinely ~2× lower, so denoise automatically relaxes and texture survives.
+- The photo receipt reports `stackFrames`, `stackGatedPct` (how much of the frame the motion gate rescued) and `stackMeanShiftPx` (how much your hands trembled).
+- The saved DNG, when RAW saving is on, holds reference frame 1 (a real single capture), and the EXIF description says "N-frame stack".
+
+Unit-tested on synthetic raw bursts: 4-frame noise variance quarters, alignment eats ±8 px shifts without tearing the Bayer pattern, and a moved subject is recovered from the reference frame bit-for-bit.
+
+### Previously in v0.9.16 — lift-aware NR follows √gain
+Shadow denoise for iPhone looks tuned down to keep shadow texture (caps 2.5× luma / 3.5× chroma on the tonal-gain response).
 
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).

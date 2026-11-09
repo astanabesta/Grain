@@ -185,6 +185,7 @@ public final class MainActivity extends ComponentActivity
       keepFull = true,
       faceExposure = true,
       faceLandmarks = false,
+      stackOff = false,
       afLock,
       larger,
       front,
@@ -336,6 +337,7 @@ public final class MainActivity extends ComponentActivity
     });
     camera = new GrainCamera(this, texture, this);
     camera.setFaceDetection(faceExposure);
+    camera.setStackOff(stackOff);
     camera.setFaceLandmarks(faceLandmarks);
     camera.setAfArea(afArea);
     camera.setAfLock(afLock);
@@ -4277,6 +4279,7 @@ public final class MainActivity extends ComponentActivity
     keepFull = preferences.getBoolean("keepFull", true);
     larger = preferences.getBoolean("larger", false);
     faceExposure = preferences.getBoolean("faceExposure", true);
+    stackOff = preferences.getBoolean("stackOff", false);
     faceLandmarks = preferences.getBoolean("faceLandmarks", false);
     afArea = Math.max(0, Math.min(4, preferences.getInt("afArea", GrainCamera.AF_SINGLE)));
     afLock = preferences.getBoolean("afLock", false);
@@ -4330,6 +4333,7 @@ public final class MainActivity extends ComponentActivity
             .putBoolean("keepFull", keepFull)
             .putBoolean("larger", larger)
             .putBoolean("faceExposure", faceExposure)
+            .putBoolean("stackOff", stackOff)
             .putBoolean("faceLandmarks", faceLandmarks)
             .putInt("afArea", afArea)
             .putBoolean("afLock", afLock)
@@ -6375,6 +6379,17 @@ public final class MainActivity extends ComponentActivity
         items.add(new Item("AE LOCK", () -> onOff(aeLock), d -> toggleAeLock(), false));
         break;
       case 2:
+        items.add(
+            new Item(
+                "FRAME STACK",
+                () -> stackOff ? "OFF" : "AUTOMATIC",
+                d -> {
+                  stackOff = !stackOff;
+                  camera.setStackOff(stackOff);
+                  savePrefs();
+                  pushOsd();
+                },
+                false));
         items.add(new Item("DRIVE", () -> DRIVES[drive], d -> setDrive(drive + (d < 0 ? -1 : 1)), false));
         items.add(
             new Item(

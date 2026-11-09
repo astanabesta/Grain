@@ -42,6 +42,12 @@ public final class RawFrame {
    * FaceDetector instead of the camera's statistics.
    */
   public int faceEyes, faceIds, faceMouths;
+  /**
+   * How many back-to-back frames were averaged into {@link #data} by {@link RawStack} (1 = plain
+   * single capture). The frame-measured noise model uses it to widen the clamp floor, and the
+   * receipt/EXIF report it.
+   */
+  public int stackCount = 1;
 
   public RawFrame(short[] data, int width, int height, int rowStride) {
     if (width < 8 || height < 8 || (width & 1) != 0 || (height & 1) != 0)
