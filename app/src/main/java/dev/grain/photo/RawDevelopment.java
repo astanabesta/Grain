@@ -68,6 +68,7 @@ final class RawDevelopment {
     final int outW = frame.width, outH = frame.height;
     final int frameIso = frame.iso;
     final long frameExposureNs = frame.exposureNs;
+    final int frameStackCount = frame.stackCount; // the local frame is nulled before the EXIF stage
     final Bitmap bitmap = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888);
     Bitmap gainmapBmp = null;
     File tmp = null;
@@ -170,7 +171,7 @@ final class RawDevelopment {
                   + recipe.filmLabel
                   + (apple ? ", Vibrant sRGB + Ultra HDR" : " LUT")
                   + (tuned || appleEditor ? ", tuned" : "")
-                  + (frame.stackCount > 1 ? ", " + frame.stackCount + "-frame stack" : "")
+                  + (frameStackCount > 1 ? ", " + frameStackCount + "-frame stack" : "")
                   + ")"));
       exif.saveAttributes();
       if (wroteGainmap) {

@@ -1434,7 +1434,7 @@ public final class GrainCamera {
       Handler hh = handler;
       burstSalvage =
           () -> {
-            if (!inFlight || pending != tag || burstWanted == 0) return;
+            if (!inFlight || pending != tag) return;
             int got = burstImages.size();
             if (pendingBytes == null) {
               // Without the burst JPEG the receipt pipeline can never finish — fail loudly instead
@@ -1480,12 +1480,23 @@ public final class GrainCamera {
       java.util.Collections.sort(ts);
       if (ts.isEmpty()) return; // caller fails/salvages
       Image refImg = burstImages.get(ts.get(0));
-      // The JPEG rides the last request: its result is the receipt's "actual" metadata, and its
-      // timestamp matches pendingBytes, exactly like a single capture.
-      Long lastTs = burstResults.isEmpty() ? null : java.util.Collections.max(burstResults.keySet());
-      TotalCaptureResult lastResult = lastTs == null ? null : burstResults.get(lastTs);
+      // The JPEG rides the last request: the receipt's "actual" metadata is keyed to the JPEG's
+      // timestamp, exactly like a single capture. (max() is only a fallback — a HAL dropping the
+      // JPEG request's result must not silently hang the shot, v0.9.18.)
+      long lastTs = pendingImageTime; // single captures pin pendingResult's ts to the JPEG ts
+      TotalCaptureResult lastResult = burstResults.get(pendingImageTime);
+      if (lastResult == null && !burstResults.isEmpty()) {
+        Long alt = java.util.Collections.max(burstResults.keySet());
+        lastResult = burstResults.get(alt);
+        lastTs = alt;
+      }
       TotalCaptureResult refResult = burstResults.get(ts.get(0));
-      if (lastResult == null || refResult == null) return;
+      if (pendingBytes == null || lastResult == null || refResult == null) {
+        failCapture(
+            "Stack capture desynced: " + burstImages.size() + "/" + ts.size() + " frames, jpeg="
+                + (pendingBytes != null) + ", results=" + burstResults.size() + ". Retry the shot.");
+        return;
+      }
       java.util.List<short[]> planes = new java.util.ArrayList<>(ts.size());
       for (Long t : ts) planes.add(RawSupport.planeShorts(burstImages.get(t)));
       for (int i = 1; i < ts.size(); i++) burstImages.get(ts.get(i)).close();

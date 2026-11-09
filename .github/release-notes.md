@@ -1,4 +1,17 @@
-## Grain Photo vVERSION — Frame Stack Stabilised
+## Grain Photo vVERSION — Critical Hotfix: RAW Captures Develop Again
+
+- **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
+- **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
+
+### What's new in v0.9.19 — two v0.9.17/18 regressions fixed
+
+1. **"RAW development failed: …stackCount… null object reference" on every RAW shot.** The v0.9.17 EXIF label for stacked photos read the frame **after** the develop pipeline deliberately frees the 225 MB pixel buffer (`frame = null`) — so every RAW capture, stacked or not, died at the EXIF stage. The stack count is now captured before the release. A new end-to-end smoke test drives a synthetic RAW through the full develop + EXIF + JPEG path so this class of regression can never ship again.
+2. **Stack-automatic shots time out at 12 s.** If the camera pipeline dropped a burst frame's *metadata result* (observed on MediaTek HALs), the receipt was keyed to a non-JPEG frame's timestamp, the finalizer's timestamp invariant failed silently, and the salvage routine then skipped itself. Now: the receipt result is keyed to the JPEG's own timestamp, missing metadata fails the shot loudly and immediately, and the salvage always resolves — merge partial, single-frame fallback, or a clear error — inside 6 s.
+
+Apologies for the double stumble on the stacking rollout. Everything you verified in v0.9.16 (lift-aware NR, editor tuner, Q tiles) is untouched; the stack engine itself (alignment, motion gate, noise-model coupling) is unchanged.
+
+### Previously in v0.9.18 — frame stack stabilised
+Same watchdog/decisive-salvage hardening, 3 frames everywhere.
 
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
