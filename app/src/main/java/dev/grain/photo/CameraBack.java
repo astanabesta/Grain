@@ -2405,65 +2405,103 @@ final class CameraBack extends ViewGroup {
       }
       float ax = img.left + o.afX * img.width(), ay = img.top + o.afY * img.height(), as = 16 * u * k;
       if (o.showLevel && !Float.isNaN(o.level) && !o.infoOff) {
-        // Sony dual-axis level gauge: center pitch stack (5 squares) + outer roll arcs with
-        // tick squares and static bow-tie pointers at 3/9 o'clock. Green when that axis is true.
+        // Sony dual-axis level gauge, per the reference: a five-square pitch stack (the middle
+        // three larger, the active cell filled dark) bracketed by "[" "]" with an hourglass
+        // pointer and outline square on the midline; each side carries a fixed trio of roll tick
+        // squares with a thick dark arc bar sliding between them. Green when that axis is true.
         boolean rollOk = Math.abs(o.level) < 1;
         boolean pitchOk = !Float.isNaN(o.pitch) && Math.abs(o.pitch) < 1;
         float cx = img.centerX(), cy = img.centerY();
         int rollCol = rollOk ? GREEN : 0xf2ffffff;
         int pitchCol = pitchOk ? GREEN : 0xf2ffffff;
         p.setShadowLayer(1.1f * u, 0, 0, 0xa0000000);
-        // --- pitch: vertical stack of 5 hollow squares, the active one filled
+        p.setStrokeWidth(Math.max(1, 1.0f * u));
         if (!Float.isNaN(o.pitch)) {
-          float sq = 4.4f * u, st = sq + 1.6f * u;
+          // --- pitch stack: small, big, big, big, small — the active cell filled
+          final float[] sz = {3.2f * u, 4.6f * u, 4.6f * u, 4.6f * u, 3.2f * u};
+          final float sg = 1.5f * u;
+          float stackH = 4 * sg;
+          for (float s : sz) stackH += s;
           int active = 2 + (int) Math.round(Math.max(-12, Math.min(12, o.pitch)) / 6.0);
           active = Math.max(0, Math.min(4, active));
-          p.setStrokeWidth(Math.max(1, 1.0f * u));
           p.setColor(pitchCol);
+          float y = cy - stackH / 2f;
           for (int i = 0; i < 5; i++) {
-            float top = cy + (i - 2) * st - sq / 2;
+            float s = sz[i];
             p.setStyle(i == active ? Paint.Style.FILL : Paint.Style.STROKE);
-            c.drawRect(cx - sq / 2, top, cx + sq / 2, top + sq, p);
+            c.drawRect(cx - s / 2f, y, cx + s / 2f, y + s, p);
+            y += s + sg;
           }
-          // middle-row end dashes, like the Sony gauge frame
           p.setStyle(Paint.Style.STROKE);
-          c.drawLine(cx - st * 2.2f, cy, cx - st * 1.2f, cy, p);
-          c.drawLine(cx + st * 1.2f, cy, cx + st * 2.2f, cy, p);
+          // --- center flanks: "[" "]" brackets spanning the big squares, then an hourglass
+          // pointer, then a small outline square — mirrored on both sides
+          float bkHalf = (sz[1] + sz[2] + sz[3] + 2 * sg) / 2f - .6f * u;
+          for (int sgn : new int[] {-1, 1}) {
+            float bxi = cx + sgn * 3.6f * u;               // bracket inner edge
+            c.drawLine(bxi, cy - bkHalf, bxi, cy + bkHalf, p);
+            c.drawLine(bxi, cy - bkHalf, bxi - sgn * 1.1f * u, cy - bkHalf, p);
+            c.drawLine(bxi, cy + bkHalf, bxi - sgn * 1.1f * u, cy + bkHalf, p);
+            float ms = 3.0f * u, mxc = cx + sgn * 10.6f * u;  // outer outline square
+            c.drawRect(mxc - ms / 2f, cy - ms / 2f, mxc + ms / 2f, cy + ms / 2f, p);
+            c.drawLine(mxc - sgn * (ms / 2f), cy, cx + sgn * 7.1f * u, cy, p); // link dash
+            p.setStyle(Paint.Style.FILL);
+            float wx = cx + sgn * 6.1f * u;                 // hourglass: two triangles apex-to-apex
+            path.reset();
+            path.moveTo(wx, cy);
+            path.lineTo(wx + sgn * 1.2f * u, cy - 1.1f * u);
+            path.lineTo(wx + sgn * 1.2f * u, cy + 1.1f * u);
+            path.close();
+            c.drawPath(path, p);
+            path.reset();
+            path.moveTo(wx, cy);
+            path.lineTo(wx - sgn * 1.2f * u, cy - 1.1f * u);
+            path.lineTo(wx - sgn * 1.2f * u, cy + 1.1f * u);
+            path.close();
+            c.drawPath(path, p);
+            p.setStyle(Paint.Style.STROKE);
+          }
         }
-        // --- roll: rotating parentheses + tick squares
-        float R = 26 * u, tk = 2.6f * u;
-        c.save();
-        c.rotate(-o.level, cx, cy);
-        p.setStyle(Paint.Style.STROKE);
-        p.setStrokeWidth(Math.max(1, 1.6f * u));
+        // --- roll: fixed tick-square trios with the thick arc bar sliding between them
+        float ra = 16.5f * u;   // arc radius
+        float rt = 24.5f * u;   // tick square radius
         p.setColor(rollCol);
-        spiralOval.set(cx - R, cy - R, cx + R, cy + R);
-        c.drawArc(spiralOval, 142, 76, false, p);   // left "("
-        c.drawArc(spiralOval, -38, 76, false, p);   // right ")"
-        p.setStrokeWidth(Math.max(1, 1.0f * u));
-        for (double deg : new double[] {-27, 0, 27}) {
+        // static tick squares: top / mid / bottom along each side
+        p.setStyle(Paint.Style.STROKE);
+        for (double deg : new double[] {-40, 0, 40}) {
           float rad = (float) Math.toRadians(deg);
           for (int sgn : new int[] {-1, 1}) {
-            float px = cx + sgn * R * (float) Math.cos(rad), py = cy + R * (float) Math.sin(rad);
-            // squares stacked along the arc at its two ends and middle
-            c.drawRect(px - tk / 2, py - tk / 2, px + tk / 2, py + tk / 2, p);
+            float px = cx + sgn * rt * (float) Math.cos(rad), py = cy + rt * (float) Math.sin(rad);
+            float tk = 2.8f * u;
+            c.drawRect(px - tk / 2f, py - tk / 2f, px + tk / 2f, py + tk / 2f, p);
           }
         }
-        c.restore();
-        // static bow-tie pointers at 3 and 9 o'clock
+        // static hourglass pointers on the midline, pointing at where a level bar rests
         p.setStyle(Paint.Style.FILL);
-        p.setColor(rollCol);
         for (int sgn : new int[] {-1, 1}) {
-          float bx = cx + sgn * (R + 7 * u);
+          float wx = cx + sgn * (ra + 3.4f * u);
           path.reset();
-          path.moveTo(bx, cy - 2.4f * u);
-          path.lineTo(bx + sgn * 2.6f * u, cy - 1.1f * u);
-          path.lineTo(bx + sgn * 2.6f * u, cy + 1.1f * u);
-          path.lineTo(bx, cy + 2.4f * u);
+          path.moveTo(wx, cy);
+          path.lineTo(wx + sgn * 1.5f * u, cy - 1.3f * u);
+          path.lineTo(wx + sgn * 1.5f * u, cy + 1.3f * u);
+          path.close();
+          c.drawPath(path, p);
+          path.reset();
+          path.moveTo(wx, cy);
+          path.lineTo(wx - sgn * 1.5f * u, cy - 1.3f * u);
+          path.lineTo(wx - sgn * 1.5f * u, cy + 1.3f * u);
           path.close();
           c.drawPath(path, p);
         }
+        // the tilt bar itself: a thick dark arc segment that rotates with roll
+        c.save();
+        c.rotate(-o.level, cx, cy);
         p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(Math.max(1.5f, 4.6f * u));
+        spiralOval.set(cx - ra, cy - ra, cx + ra, cy + ra);
+        c.drawArc(spiralOval, 138, 84, false, p);   // left bar
+        c.drawArc(spiralOval, -42, 84, false, p);   // right bar
+        c.restore();
+        p.setStrokeWidth(Math.max(1, 1.0f * u));
         p.clearShadowLayer();
       }
       if (o.afArea == 1 && img.width() > 0) {

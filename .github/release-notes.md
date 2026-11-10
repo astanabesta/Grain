@@ -3,7 +3,16 @@
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
 
-### What's new in v0.9.33 — golden guides, eye where you want it
+### What's new in v0.9.34 — the level gauge, drawn like the Sony reference
+
+Re-measured the dual-axis electronic level against the Sony Alpha reference and redrew it to
+match: the pitch stack is now five squares with the **middle three larger** and the active cell
+filled solid, the center is bracketed by "[" "]" with **hourglass pointers and midline outline
+squares**, and roll is now a **thick dark arc bar that slides between three fixed tick squares**
+on each side — the dark filled section moving with tilt, exactly like the reference. Green when
+true, thin outlines, transparent background, accel+gyro-fused gravity sensor as before.
+
+### Previously in v0.9.33 — golden guides, eye where you want it
 
 Three gifts for composition: the **golden spiral is fixed** — a paint-style slip made its arcs
 render as giant filled wedges that greyed out the preview; it now draws as a true
