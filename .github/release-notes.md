@@ -3,7 +3,14 @@
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
 
-### What's new in v0.9.28 — watch your frame on the PC monitor
+### What's new in v0.9.29 — remote stream robustness
+
+Every keyframe now carries its SPS/PPS headers (Annex-B, normalized even if this phone's encoder
+only handshakes them once or in avcc form). Without this the Windows viewer could stay black on
+encoders that never repeat headers in-band — now the picture locks on within the first second,
+every time. No other changes; the remote viewfinder feature itself landed in v0.9.28, below.
+
+### Previously in v0.9.28 — watch your frame on the PC monitor
 
 1. **REMOTE VIEW** (MENU → SET UP): the phone streams the masked viewfinder frame — exactly what the sensor sees inside the film border — as H.264 over Wi-Fi (UDP 720p20, ~4 Mbps) to the companion **Grain Windows viewer**, plus a 10 Hz metadata sideband (ISO / shutter / aperture / EV, recipe name, framing-grid style, AF mode + focus point, roll & pitch, rotation, busy state). Tap the menu row once to enable; it shows the phone's Wi-Fi address and a 5-character token to type into the viewer.
 2. Keeps an eye on itself: while a viewer is connected the phone OSD shows a small **REC** tag inside the frame, the stream pauses cleanly during shots/bursts (no torn frames), and everything stops the moment you leave the app or flip the toggle off.

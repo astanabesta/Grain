@@ -56,6 +56,7 @@ final class RemoteStream {
   private DatagramSocket sock;
   private MediaCodec codec;
   private long frameSeq;
+  private byte[] csd; // Annex-B SPS+PPS, prepended at every keyframe that lacks them
 
   RemoteStream(Source source, int width, int height) {
     this.source = source;
@@ -141,13 +142,30 @@ final class RemoteStream {
         codec.getInputBuffer(inIdx).put(yuv, 0, n);
         codec.queueInputBuffer(inIdx, 0, n, now * 1000, 0);
         int outIdx;
-        while ((outIdx = codec.dequeueOutputBuffer(info, 0)) >= 0) {
+        while ((outIdx = codec.dequeueOutputBuffer(info, 0)) != MediaCodec.INFO_TRY_AGAIN_LATER) {
+          if (outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+            byte[] f = readCsd(codec.getOutputFormat());
+            if (f != null) csd = f;
+            continue;
+          }
+          if (outIdx < 0) continue;
           java.nio.ByteBuffer buf = codec.getOutputBuffer(outIdx);
           if (buf != null && info.size > 0) {
             byte[] nal = new byte[info.size];
             buf.get(nal);
-            sendFrame(nal, (info.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
-                || (info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0, sock, packet);
+            boolean key = (info.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0;
+            if ((info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+              csd = annexB(nal); // keep it; sent with the next IDR instead of bare
+            } else {
+              // Some encoders never repeat SPS/PPS in-band; the viewer decoder needs them.
+              if (key && csd != null && !startsWithSps(nal)) {
+                byte[] both = new byte[csd.length + nal.length];
+                System.arraycopy(csd, 0, both, 0, csd.length);
+                System.arraycopy(nal, 0, both, csd.length, nal.length);
+                nal = both;
+              }
+              sendFrame(nal, key, sock, packet);
+            }
           }
           codec.releaseOutputBuffer(outIdx, false);
         }
@@ -181,6 +199,45 @@ final class RemoteStream {
       System.arraycopy(data, off, scratch, 10, len);
       sock.send(new DatagramPacket(scratch, 10 + len, client));
     }
+  }
+
+  /** csd-0/csd-1 (SPS, PPS) from the output format, concatenated in Annex-B form; null if absent. */
+  private static byte[] readCsd(MediaFormat f) {
+    java.nio.ByteBuffer sps = f.getByteBuffer("csd-0"), pps = f.getByteBuffer("csd-1");
+    if (sps == null) return null;
+    byte[] a = annexB(bytes(sps));
+    byte[] b = pps == null ? new byte[0] : annexB(bytes(pps));
+    byte[] both = new byte[a.length + b.length];
+    System.arraycopy(a, 0, both, 0, a.length);
+    System.arraycopy(b, 0, both, a.length, b.length);
+    return both;
+  }
+
+  private static byte[] bytes(java.nio.ByteBuffer buf) {
+    byte[] d = new byte[buf.remaining()];
+    buf.duplicate().get(d);
+    return d;
+  }
+
+  private static boolean hasStartCode(byte[] d, int off) {
+    return d.length >= off + 4 && d[off] == 0 && d[off + 1] == 0
+        && (d[off + 2] == 1 || (d[off + 2] == 0 && d[off + 3] == 1));
+  }
+
+  /** A csd buffer may arrive as a bare NAL (avcc style); normalize to Annex-B with a start code. */
+  private static byte[] annexB(byte[] d) {
+    if (d.length == 0 || hasStartCode(d, 0)) return d;
+    byte[] out = new byte[d.length + 4];
+    out[2] = 0; out[3] = 1; // "00 00 00 01"
+    System.arraycopy(d, 0, out, 4, d.length);
+    return out;
+  }
+
+  /** True when the bytestream's first NAL is an SPS (type 7). */
+  private static boolean startsWithSps(byte[] d) {
+    if (!hasStartCode(d, 0)) return false;
+    int hdr = d[2] == 1 ? 3 : 4;
+    return d.length > hdr && (d[hdr] & 0x1f) == 7;
   }
 
   /** ARGB bitmap → I420 (yuv420p). Encoders accept this exact packing via YUV420Flexible. */
