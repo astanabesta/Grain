@@ -2116,6 +2116,7 @@ final class CameraBack extends ViewGroup {
   final class Osd extends View {
     private final Paint t = new Paint(Paint.ANTI_ALIAS_FLAG), p = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF img = new RectF();
+    private final RectF spiralOval = new RectF();
     private final Path path = new Path();
     private final ScaleGestureDetector scale;
     private float downX, downY, holdX, holdY;
@@ -2311,13 +2312,44 @@ final class CameraBack extends ViewGroup {
         p.setColor(0x60ffffff);
         p.setStrokeWidth(Math.max(1, .8f * u));
         if (o.gridStyle == 4) {
-          // Golden ratio: the phi cuts (38.2% / 61.8%) on both axes
-          final float phiLo = 0.381966f, phiHi = 0.618034f;
-          c.drawLine(img.left + img.width() * phiLo, img.top, img.left + img.width() * phiLo, img.bottom, p);
-          c.drawLine(img.left + img.width() * phiHi, img.top, img.left + img.width() * phiHi, img.bottom, p);
-          c.drawLine(img.left, img.top + img.height() * phiLo, img.right, img.top + img.height() * phiLo, p);
-          c.drawLine(img.left, img.top + img.height() * phiHi, img.right, img.top + img.height() * phiHi, p);
-          c.drawCircle(img.centerX(), img.centerY(), 1.2f * u, p);
+          // Golden ratio: the photographer's spiral — golden rectangles tiling inward with a
+          // quarter-circle arc in every square, winding to the eye at the frame's bottom-right.
+          final float PHI = 1.61803398875f;
+          float rw, rh;
+          if (img.width() >= img.height()) { rw = img.width(); rh = rw / PHI; }
+          else { rh = img.height(); rw = rh / PHI; }
+          float rx = img.left + (img.width() - rw) * .5f, ry = img.top + (img.height() - rh) * .5f;
+          c.drawRect(rx, ry, rx + rw, ry + rh, p);
+          float x = rx, y = ry, rectW = rw, rectH = rh;
+          int side = rectW >= rectH ? 0 : 1;
+          for (int i = 0; i < 9 && rectW > 2 && rectH > 2; i++) {
+            if (side == 0) {          // square on the left
+              float s = rectH, cx = x + s, cy = y + s;
+              spiralOval.set(cx - s, cy - s, cx + s, cy + s);
+              c.drawArc(spiralOval, 180, 90, false, p);
+              c.drawLine(x + s, y, x + s, y + rectH, p);
+              x += s; rectW -= s;
+            } else if (side == 1) {   // square on top
+              float s = rectW, cx = x + s, cy = y + s;
+              spiralOval.set(cx - s, cy - s, cx + s, cy + s);
+              c.drawArc(spiralOval, 180, 90, false, p);
+              c.drawLine(x, y + s, x + rectW, y + s, p);
+              y += s; rectH -= s;
+            } else if (side == 2) {   // square on the right
+              float s = rectH, sx = x + rectW - s, cx = sx, cy = y + s;
+              spiralOval.set(cx - s, cy - s, cx + s, cy + s);
+              c.drawArc(spiralOval, 270, 90, false, p);
+              c.drawLine(sx, y, sx, y + rectH, p);
+              rectW -= s;
+            } else {                  // square on the bottom
+              float s = rectW, sy = y + rectH - s, cx = x + s, cy = sy;
+              spiralOval.set(cx - s, cy - s, cx + s, cy + s);
+              c.drawArc(spiralOval, 90, 90, false, p);
+              c.drawLine(x, sy, x + rectW, sy, p);
+              rectH -= s;
+            }
+            side = (side + 1) & 3;
+          }
         } else {
         int cols, rows;
         if (o.gridStyle == 1) {
@@ -2343,39 +2375,36 @@ final class CameraBack extends ViewGroup {
       }
       float ax = img.left + o.afX * img.width(), ay = img.top + o.afY * img.height(), as = 16 * u * k;
       if (o.showLevel && !Float.isNaN(o.level) && !o.infoOff) {
+        // Sony-style dual-axis level: two short dashes straddling center rotate with roll; a
+        // chevron above/below center tracks pitch; all green + center dot when both are true.
         boolean rollOk = Math.abs(o.level) < 1;
         boolean pitchOk = !Float.isNaN(o.pitch) && Math.abs(o.pitch) < 1;
-        boolean level = rollOk && pitchOk; // Sony-style: green only when both axes are level
-        float len = Math.min(img.width(), img.height()) * .32f, gap = as + 6 * u;
+        boolean level = rollOk && pitchOk;
+        float R0 = 12 * u, half = 7 * u;
         c.save();
         c.rotate(-o.level, img.centerX(), img.centerY());
         p.setStrokeWidth(Math.max(1, 1.2f * u));
         p.setColor(level ? GREEN : 0xd8ffffff);
         p.setShadowLayer(1.2f * u, 0, 0, 0x90000000);
-        c.drawLine(img.centerX() - len, img.centerY(), img.centerX() - gap, img.centerY(), p);
-        c.drawLine(img.centerX() + gap, img.centerY(), img.centerX() + len, img.centerY(), p);
-        p.clearShadowLayer();
+        c.drawLine(img.centerX() - R0 - half, img.centerY(), img.centerX() - R0 + half, img.centerY(), p);
+        c.drawLine(img.centerX() + R0 - half, img.centerY(), img.centerX() + R0 + half, img.centerY(), p);
         c.restore();
         if (!Float.isNaN(o.pitch)) {
-          // Pitch chevron: sits on the side the camera tilts toward, converging on center; a
-          // green dot when the camera axis is truly horizontal.
-          p.setStrokeWidth(Math.max(1, 1.2f * u));
-          p.setShadowLayer(1.2f * u, 0, 0, 0x90000000);
           if (pitchOk && rollOk) {
             p.setStyle(Paint.Style.FILL);
             p.setColor(GREEN);
-            c.drawCircle(img.centerX(), img.centerY(), 1.6f * u, p);
+            c.drawCircle(img.centerX(), img.centerY(), 1.7f * u, p);
+            p.setStyle(Paint.Style.STROKE);
           } else {
             p.setColor(pitchOk ? GREEN : 0xd8ffffff);
-            float dist = (5 + Math.min(30, Math.abs(o.pitch)) * 1.1f) * u;
+            float dist = (7 + Math.min(30, Math.abs(o.pitch)) * .9f) * u;
             float cy = img.centerY() + (o.pitch > 0 ? dist : -dist);
-            float hs = 4 * u, tip = 2.4f * u * (o.pitch > 0 ? -1 : 1);
+            float hs = 2.8f * u, tip = 1.8f * u * (o.pitch > 0 ? -1 : 1);
             c.drawLine(img.centerX() - hs, cy, img.centerX(), cy + tip, p);
             c.drawLine(img.centerX() + hs, cy, img.centerX(), cy + tip, p);
           }
-          p.clearShadowLayer();
-          p.setStyle(Paint.Style.STROKE);
         }
+        p.clearShadowLayer();
       }
       if (o.afArea == 1 && img.width() > 0) {
         // MULTI: the grid the lens searches, drawn where the AF region actually is.

@@ -1,4 +1,15 @@
-## Grain Photo vVERSION — Sony-Style Dual-Axis Level
+## Grain Photo vVERSION — The Real Golden Spiral + Compact Sony Level
+
+- **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
+- **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
+
+### What's new in v0.9.26
+
+1. **Golden ratio = the golden spiral.** Replaces the plain phi-grid behind the same cycle slot: golden rectangles tile inward with a quarter-circle arc per square, winding into the eye at the frame's bottom-right — the overlay composition guides actually use. Works in portrait and landscape.
+2. **The leveler now looks like Sony's**: two short white dashes straddling center rotate with roll; a compact chevron above/below center tracks pitch; both axes true → green with a center dot. No more long horizon lines crossing the frame.
+
+### Previously in v0.9.25 — dual-axis level
+Electronic level gained pitch (gravity sensor) alongside roll.
 
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
