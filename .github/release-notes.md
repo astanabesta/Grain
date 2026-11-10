@@ -3,7 +3,21 @@
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
 
-### What's new in v0.9.31 — fix the striped stream
+### What's new in v0.9.32 — the zero-copy remote viewfinder
+
+REMOTE VIEW rebuilt on the architecture Monect and scrcpy use: the screen is captured by
+MediaProjection and fed **straight into the hardware encoder's GPU surface** — no GL readback,
+no CPU frame conversion, no fighting the camera preview. The result: 30 fps instead of 20,
+a realtime-priority encoder allowed to hold at most one frame, and a fresh keyframe the instant
+a viewer joins. What you see on the phone is exactly what the PC window shows — grids, level
+gauge, REC tag, capture moments and all.
+
+Heads-up: Android asks for screen-capture permission the first time you enable it per app start
+(the same consent Monect shows), and while streaming there is a minimal "Grain remote view"
+notification — a system requirement for every screen sharer, not us being chatty. Pairing rule
+is unchanged: viewer 0.2+ finds the phone by itself, you type the 5 letters.
+
+### Previously in v0.9.31 — fix the striped stream
 
 The remote feed came out as green/purple vertical stripes on some encoders: `COLOR_FormatYUV420Flexible`
 byte-buffer input is ambiguous and this phone's encoder read our planar I420 as semi-planar NV12,

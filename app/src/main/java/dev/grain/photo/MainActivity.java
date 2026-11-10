@@ -12,6 +12,8 @@ import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.media.MediaActionSound;
+import android.media.projection.MediaProjection;
+import android.media.projection.MediaProjectionManager;
 import android.net.Uri;
 import android.os.*;
 import android.provider.Settings;
@@ -4936,53 +4938,69 @@ public final class MainActivity extends ComponentActivity
 
   /** Electronic level, smoothed; NaN hides it (phone flat). */
   /** Start/stop the Wi-Fi remote viewfinder sender (the grain-remote companion app connects). */
+  private final ActivityResultLauncher<Intent> remoteConsent =
+      registerForActivityResult(
+          new ActivityResultContracts.StartActivityForResult(),
+          r -> {
+            if (r.getResultCode() == RESULT_OK && r.getData() != null) {
+              Intent svc =
+                  new Intent(this, RemoteService.class)
+                      .setAction(RemoteService.ACTION_START)
+                      .putExtra("code", r.getResultCode())
+                      .putExtra("data", r.getData());
+              startForegroundService(svc);
+              // RemoteService runs the onReady hook once the projection exists
+            } else {
+              remoteOn = false;
+              if (back != null) back.toast("REMOTE VIEW", "screen-capture permission is needed");
+              pushOsd();
+            }
+          });
+
   private void startRemote() {
     if (remote != null) return;
     if (remoteToken.isEmpty()) remoteToken = RemoteStream.newToken();
-    // stream the sensor buffer area; the Rust viewer masks to the framing ratio and rotates upright
-    int h = 720, w = Math.max(16, Math.round(h * sourceWidth / (float) sourceHeight / 16f) * 16);
+    // lifecycle hooks for the projection-holding foreground service
+    RemoteService.setOnReady(() -> { if (remoteOn && remote == null) startRemote(); });
+    RemoteService.setOnStopped(this::stopRemote);
+    MediaProjection mp = RemoteService.current();
+    if (mp == null) {
+      // first time (or after a restart): ask Android's screen-capture consent once,
+      // the service continues via setOnReady
+      remoteConsent.launch(
+          getSystemService(MediaProjectionManager.class).createScreenCaptureIntent());
+      return;
+    }
+    // stream the full screen (the app is portrait-locked): the PC mirrors exactly what you see
+    android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
+    getWindowManager().getDefaultDisplay().getRealMetrics(dm);
+    int h = 1080, w = Math.max(16, Math.round(h * dm.widthPixels / (float) dm.heightPixels / 16f) * 16);
     remote =
         new RemoteStream(
-            new RemoteStream.Source() {
-              @Override
-              public Bitmap grab(int w, int h) {
-                try {
-                  if (texture == null || !texture.isAvailable()) return null;
-                  return texture.getBitmap(w, h);
-                } catch (Throwable t) {
-                  return null;
-                }
+            () -> {
+              StringBuilder j = new StringBuilder(192);
+              j.append('{');
+              if (back != null) {
+                j.append("\"iso\":\"").append(back.state.iso).append('\"');
+                j.append(",\"ss\":\"").append(back.state.shutter).append('\"');
+                j.append(",\"f\":\"").append(back.state.aperture).append('\"');
+                j.append(",\"ev\":").append(String.format(Locale.US, "%.2f", back.state.exposure));
               }
-
-              @Override
-              public String metaJson() {
-                StringBuilder j = new StringBuilder(160);
-                j.append('{');
-                if (back != null) {
-                  j.append("\"iso\":\"").append(back.state.iso).append('\"');
-                  j.append(",\"ss\":\"").append(back.state.shutter).append('\"');
-                  j.append(",\"f\":\"").append(back.state.aperture).append('\"');
-                  j.append(",\"ev\":").append(String.format(Locale.US, "%.2f", back.state.exposure));
-                }
-                j.append(",\"recipe\":\"").append(Recipe.ALL[recipe].name.replace("\"", "'")).append('\"');
-                j.append(",\"grid\":").append(gridStyle);
-                j.append(",\"af\":\"").append(AF_NAMES[Math.min(afArea, AF_NAMES.length - 1)]).append('\"');
-                j.append(",\"afx\":").append(String.format(Locale.US, "%.3f", afX));
-                j.append(",\"afy\":").append(String.format(Locale.US, "%.3f", afY));
-                j.append(",\"roll\":").append(Float.isNaN(levelSmooth) ? "null" : String.format(Locale.US, "%.1f", levelSmooth));
-                j.append(",\"pitch\":").append(Float.isNaN(pitchSmooth) ? "null" : String.format(Locale.US, "%.1f", pitchSmooth));
-                j.append(",\"rot\":").append(uiRotation);
-                j.append(",\"shot\":").append(busy || saving ? 1 : 0);
-                return j.append('}').toString();
-              }
-
-              @Override
-              public boolean captureBusy() {
-                return busy || saving;
-              }
+              j.append(",\"recipe\":\"").append(Recipe.ALL[recipe].name.replace("\"", "'")).append('\"');
+              j.append(",\"grid\":").append(gridStyle);
+              j.append(",\"af\":\"").append(AF_NAMES[Math.min(afArea, AF_NAMES.length - 1)]).append('\"');
+              j.append(",\"afx\":").append(String.format(Locale.US, "%.3f", afX));
+              j.append(",\"afy\":").append(String.format(Locale.US, "%.3f", afY));
+              j.append(",\"roll\":").append(Float.isNaN(levelSmooth) ? "null" : String.format(Locale.US, "%.1f", levelSmooth));
+              j.append(",\"pitch\":").append(Float.isNaN(pitchSmooth) ? "null" : String.format(Locale.US, "%.1f", pitchSmooth));
+              j.append(",\"rot\":0,\"cap\":\"screen\""); // screen capture arrives upright already
+              j.append(",\"shot\":").append(busy || saving ? 1 : 0);
+              return j.append('}').toString();
             },
+            mp,
             w,
-            h);
+            h,
+            dm.densityDpi);
     final String describe = RemoteStream.describe(RemoteStream.localIp(), remoteToken);
     remote.start(
         remoteToken,
@@ -4990,7 +5008,7 @@ public final class MainActivity extends ComponentActivity
           back.toast("REMOTE VIEW", "stream failed — stopped");
           stopRemote();
         });
-    back.toast("REMOTE VIEW ON", describe + " — type this in the Grain Windows app");
+    back.toast("REMOTE VIEW ON", describe + " — run grain-remote.exe on the PC");
     pushOsd();
   }
 
@@ -6656,7 +6674,12 @@ public final class MainActivity extends ComponentActivity
               remoteOn = false;
               back.toast("REMOTE VIEW", "phone is not on Wi-Fi — join your PC's network first");
             } else startRemote();
-          } else { stopRemote(); back.toast("REMOTE VIEW", "off"); }
+          } else {
+            stopRemote();
+            // toggle-off also releases the screen-capture permission (next enable re-asks)
+            startService(new Intent(this, RemoteService.class).setAction(RemoteService.ACTION_STOP));
+            back.toast("REMOTE VIEW", "off");
+          }
           savePrefs();
           pushOsd();
         }, false));

@@ -1,9 +1,12 @@
 package dev.grain.photo;
 
-import android.graphics.Bitmap;
+import android.hardware.display.DisplayManager;
+import android.hardware.display.VirtualDisplay;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
+import android.media.projection.MediaProjection;
+import android.view.Surface;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
@@ -11,45 +14,42 @@ import java.net.SocketTimeoutException;
 import java.util.Locale;
 
 /**
- * Remote viewfinder sender: the masked photo frame hardware-encoded to H.264 and streamed over
- * Wi-Fi UDP, plus a small JSON metadata sideband (exposure, recipe, level, grid, shot pulse).
+ * Remote viewfinder sender: the whole screen (the app is portrait-locked, so what you see is what
+ * the PC sees) captured at the GPU level and hardware-encoded to H.264, streamed over Wi-Fi UDP,
+ * plus a small JSON metadata sideband (~10 Hz).
+ *
+ * <p>The capture path is the zero-copy one used by scrcpy/Monect: {@code MediaProjection →
+ * VirtualDisplay → MediaCodec input Surface}. No GL readback, no CPU frame copies, and the stream
+ * keeps running during photo capture.
  *
  * <p>Wire protocol (plain datagrams, one client at a time, LAN only):
  *
  * <ul>
- *   <li>client → phone {@code "GRV1 SUB <token>"} subscribes; wrong token is ignored. {@code
- *       "GRV1 BYE"} unsubscribes. A broadcast {@code "GRV1 FIND"} always gets a unicast {@code
- *       "GRV1 HERE <wifi-ip>"} answer, so the viewer can find the phone without anyone typing an
- *       IP address.
+ *   <li>client → phone {@code "GRV1 SUB <token>"} subscribes (starts with a fresh keyframe);
+ *       wrong token is ignored. {@code "GRV1 BYE"} unsubscribes. A broadcast {@code "GRV1 FIND"}
+ *       always gets a unicast {@code "GRV1 HERE <wifi-ip>"} answer.
  *   <li>phone → client video packets: 10-byte header {@code GRV f f f frameSeq(be32) chunkTot
  *       chunkIdx flags} + Annex-B payload chunk (≤1300 B). flags bit0 = keyframe.
  *   <li>phone → client metadata: {@code "GRM1 "}+JSON, ~10 Hz regardless of video.
  * </ul>
- *
- * The stream is paused (video only — metadata keeps flowing) while a shot is being captured so the
- * encode read-back never touches the RAW path.
  */
 final class RemoteStream {
-  /** Supplies encoded-sized frames and stream state from the camera side. */
+  /** Stream state from the camera side (exposure/recipe/level as wire JSON). */
   interface Source {
-    /** A fresh frame scaled to (w,h), or null if the preview cannot be read this round. */
-    Bitmap grab(int w, int h);
-
-    /** Exposure/recipe/level state as wire JSON (built by the activity). */
+    /** Exposure/recipe/level state as wire JSON (built by the activity). Must include "cap". */
     String metaJson();
-
-    /** True while a capture is in flight: video pauses, metadata continues. */
-    boolean captureBusy();
   }
 
   private static final int PORT = 4361;
   private static final String HELLO = "GRV1 ";
   private static final int MAX_PAYLOAD = 1300;
+  private static final int BITRATE = 6_000_000;
+  private static final int FPS = 30;
   static final long CLIENT_TTL_MS = 4000; // metadata keep-alive keeps the client alive
 
   private final Source source;
-  private final int width, height; // encoder size (multiple of 16)
-  private final int fps = 20;
+  private final MediaProjection projection;
+  private final int width, height, dpi; // virtual display size (multiple of 16)
 
   private volatile boolean running;
   private volatile InetSocketAddress client;
@@ -57,21 +57,23 @@ final class RemoteStream {
   private Thread thread;
   private DatagramSocket sock;
   private MediaCodec codec;
+  private Surface inputSurface;
+  private VirtualDisplay display;
   private long frameSeq;
   private byte[] csd; // Annex-B SPS+PPS, prepended at every keyframe that lacks them
-  private Boolean imagePath; // null = undecided; true = fill via getInputImage, false = bytes
 
-  RemoteStream(Source source, int width, int height) {
+  RemoteStream(Source source, MediaProjection projection, int width, int height, int dpi) {
     this.source = source;
+    this.projection = projection;
     this.width = width & ~15;
     this.height = height & ~15;
+    this.dpi = dpi;
   }
 
   synchronized void start(String token, Runnable error) {
     if (running) return;
     running = true;
-    thread =
-        new Thread(() -> loop(token == null ? "" : token, error), "grain-remote");
+    thread = new Thread(() -> loop(token == null ? "" : token, error), "grain-remote");
     thread.setDaemon(true);
     thread.start();
   }
@@ -90,27 +92,44 @@ final class RemoteStream {
   private void loop(String token, Runnable error) {
     try {
       sock = new DatagramSocket(PORT);
-      sock.setSoTimeout(250);
+      sock.setSoTimeout(100);
+
+      // Low-latency encoder, the game-streaming recipe: realtime priority, ≤1 frame of encoder
+      // latency, constrained baseline (no B-frames so nothing gets held hostage in the codec),
+      // sync frame when a client joins, keyframes every 2 s as safety.
       MediaFormat fmt =
           MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height);
       fmt.setInteger(
-          MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible);
-      fmt.setInteger(MediaFormat.KEY_BIT_RATE, 4_000_000);
-      fmt.setInteger(MediaFormat.KEY_FRAME_RATE, fps);
-      fmt.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
+          MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
+      fmt.setInteger(MediaFormat.KEY_BIT_RATE, BITRATE);
+      fmt.setInteger(MediaFormat.KEY_FRAME_RATE, FPS);
+      fmt.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2);
       fmt.setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline);
+      fmt.setInteger(MediaFormat.KEY_PRIORITY, 0); // realtime
+      fmt.setInteger(MediaFormat.KEY_LATENCY, 1); // ≤1 frame held by the encoder
       codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC);
       codec.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+      inputSurface = codec.createInputSurface();
       codec.start();
-      Bitmap frame = null;
-      long lastMeta = 0, lastVideo = 0;
+
+      display =
+          projection.createVirtualDisplay(
+              "grain-remote",
+              width,
+              height,
+              dpi,
+              DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+              inputSurface,
+              null,
+              null);
+
+      long lastMeta = 0;
       byte[] in = new byte[1024];
       DatagramPacket hello = new DatagramPacket(in, in.length);
       MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
-      byte[] yuv = new byte[width * height + width * height / 2];
       byte[] packet = new byte[MAX_PAYLOAD + 10];
       while (running) {
-        // client handshake / keep-alive
+        // client handshake / keep-alive / discovery
         try {
           hello.setData(in);
           sock.receive(hello);
@@ -118,8 +137,7 @@ final class RemoteStream {
           if (msg.equals("GRV1 BYE")) {
             client = null;
           } else if (msg.equals("GRV1 FIND")) {
-            // Monect-style zero-config: the viewer broadcasts this and we answer with our IP,
-            // so nobody has to read an address off the tiny menu row.
+            // Monect-style zero-config: the viewer broadcasts this and we answer with our IP.
             String ip = localIp();
             if (ip != null) {
               byte[] here = ("GRV1 HERE " + ip).getBytes("UTF-8");
@@ -129,48 +147,21 @@ final class RemoteStream {
             if (token.isEmpty() || msg.substring((HELLO + "SUB ").length()).trim().equals(token)) {
               client = new InetSocketAddress(hello.getAddress(), hello.getPort());
               lastClientMs = System.currentTimeMillis();
+              requestSyncFrame(); // a new viewer never waits for the next scheduled IDR
             }
           }
         } catch (SocketTimeoutException ignored) {
         }
-        if (client == null) {
-          continue;
-        }
+
+        // metadata sideband: ~10 Hz whenever a client is subscribed
         long now = System.currentTimeMillis();
-        if (now - lastMeta >= 100) {
+        if (client != null && now - lastMeta >= 100) {
           lastMeta = now;
           byte[] meta = ("GRM1 " + source.metaJson()).getBytes("UTF-8");
           sock.send(new DatagramPacket(meta, meta.length, client));
         }
-        if (source.captureBusy() || now - lastVideo < 1000 / fps) continue;
-        lastVideo = now;
-        frame = source.grab(width, height);
-        if (frame == null) continue;
-        int n = toYuv420(frame, yuv);
-        int inIdx = codec.dequeueInputBuffer(5000);
-        if (inIdx < 0) continue;
-        // Feed via getInputImage (honest per-plane strides) — a byte-buffer write to a
-        // "flexible YUV" encoder is ambiguous and MediaTek reads it as NV12, smearing chroma.
-        boolean wrote = false;
-        if (imagePath != Boolean.FALSE) {
-          try {
-            android.media.Image image = codec.getInputImage(inIdx);
-            if (image != null && image.getPlanes() != null && image.getPlanes().length == 3) {
-              putPlanes(image, yuv, width, height);
-              wrote = true;
-              imagePath = Boolean.TRUE;
-            }
-          } catch (Throwable t) {
-            imagePath = Boolean.FALSE;
-          }
-        }
-        if (!wrote) {
-          java.nio.ByteBuffer ib = codec.getInputBuffer(inIdx);
-          if (ib == null) continue;
-          ib.clear();
-          ib.put(yuv, 0, n);
-        }
-        codec.queueInputBuffer(inIdx, 0, n, now * 1000, 0);
+
+        // drain everything the encoder has — the surface feeds it at display rate
         int outIdx;
         while ((outIdx = codec.dequeueOutputBuffer(info, 0)) != MediaCodec.INFO_TRY_AGAIN_LATER) {
           if (outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
@@ -180,7 +171,7 @@ final class RemoteStream {
           }
           if (outIdx < 0) continue;
           java.nio.ByteBuffer buf = codec.getOutputBuffer(outIdx);
-          if (buf != null && info.size > 0) {
+          if (buf != null && info.size > 0 && client != null) {
             byte[] nal = new byte[info.size];
             buf.get(nal);
             boolean key = (info.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0;
@@ -204,9 +195,36 @@ final class RemoteStream {
       running = false;
       if (error != null) new android.os.Handler(android.os.Looper.getMainLooper()).post(error);
     } finally {
-      try { if (codec != null) codec.stop(); } catch (Throwable ignored) {}
-      try { if (codec != null) codec.release(); } catch (Throwable ignored) {}
-      try { if (sock != null) sock.close(); } catch (Throwable ignored) {}
+      try {
+        if (display != null) display.release();
+      } catch (Throwable ignored) {
+      }
+      try {
+        if (codec != null) codec.stop();
+      } catch (Throwable ignored) {
+      }
+      try {
+        if (codec != null) codec.release();
+      } catch (Throwable ignored) {
+      }
+      try {
+        if (inputSurface != null) inputSurface.release();
+      } catch (Throwable ignored) {
+      }
+      try {
+        if (sock != null) sock.close();
+      } catch (Throwable ignored) {
+      }
+    }
+  }
+
+  /** Ask the encoder for an IDR "soon" (called when a viewer subscribes). */
+  private void requestSyncFrame() {
+    try {
+      android.os.Bundle b = new android.os.Bundle();
+      b.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0);
+      codec.setParameters(b);
+    } catch (Throwable ignored) {
     }
   }
 
@@ -254,32 +272,6 @@ final class RemoteStream {
         && (d[off + 2] == 1 || (d[off + 2] == 0 && d[off + 3] == 1));
   }
 
-  /**
-   * Write an I420 byte array (Y then U then V, dense) into an encoder input Image, honoring each
-   * plane's real rowStride/pixelStride. Handles both planar (ps=1) and semi-planar (ps=2).
-   */
-  private static void putPlanes(android.media.Image image, byte[] yuv, int w, int h) {
-    int yLen = w * h, uLen = yLen / 4;
-    writePlane(image.getPlanes()[0], yuv, 0, w, h, w);
-    writePlane(image.getPlanes()[1], yuv, yLen, w / 2, h / 2, w / 2);
-    writePlane(image.getPlanes()[2], yuv, yLen + uLen, w / 2, h / 2, w / 2);
-  }
-
-  private static void writePlane(
-      android.media.Image.Plane p, byte[] src, int off, int pw, int ph, int srcStride) {
-    java.nio.ByteBuffer b = p.getBuffer();
-    int rs = p.getRowStride(), ps = p.getPixelStride();
-    for (int row = 0; row < ph; row++) {
-      int srcPos = off + row * srcStride, dstRow = row * rs;
-      if (ps == 1) {
-        b.position(dstRow);
-        b.put(src, srcPos, Math.min(pw, b.limit() - dstRow));
-      } else {
-        for (int x = 0; x < pw; x++) b.put(dstRow + x * ps, src[srcPos + x]);
-      }
-    }
-  }
-
   /** A csd blob may be Annex-B already or an avcc-style chain of length-prefixed NALs. */
   private static byte[] annexB(byte[] d) {
     if (d.length == 0 || hasStartCode(d, 0)) return d;
@@ -309,41 +301,6 @@ final class RemoteStream {
     if (!hasStartCode(d, 0)) return false;
     int hdr = d[2] == 1 ? 3 : 4;
     return d.length > hdr && (d[hdr] & 0x1f) == 7;
-  }
-
-  /** ARGB bitmap → I420 (yuv420p). Encoders accept this exact packing via YUV420Flexible. */
-  static int toYuv420(Bitmap b, byte[] out) {
-    int w = b.getWidth(), h = b.getHeight();
-    int[] argb = new int[w * h];
-    b.getPixels(argb, 0, w, 0, 0, w, h);
-    int yLen = w * h, uLen = yLen / 4;
-    int yi = 0, ui = yLen, vi = yLen + uLen;
-    for (int y = 0; y < h; y += 2) {
-      int row = y * w, row2 = (y + 1) * w;
-      for (int x = 0; x < w; x += 2) {
-        int p00 = argb[row + x], p01 = argb[row + x + 1], p10 = argb[row2 + x], p11 = argb[row2 + x + 1];
-        int r00 = (p00 >> 16) & 255, g00 = (p00 >> 8) & 255, b00 = p00 & 255;
-        int r01 = (p01 >> 16) & 255, g01 = (p01 >> 8) & 255, b01 = p01 & 255;
-        int r10 = (p10 >> 16) & 255, g10 = (p10 >> 8) & 255, b10 = p10 & 255;
-        int r11 = (p11 >> 16) & 255, g11 = (p11 >> 8) & 255, b11 = p11 & 255;
-        out[row + x] = (byte) lum(r00, g00, b00);
-        out[row + x + 1] = (byte) lum(r01, g01, b01);
-        out[row2 + x] = (byte) lum(r10, g10, b10);
-        out[row2 + x + 1] = (byte) lum(r11, g11, b11);
-        int r = (r00 + r01 + r10 + r11) / 4, g = (g00 + g01 + g10 + g11) / 4, bb = (b00 + b01 + b10 + b11) / 4;
-        out[ui++] = (byte) clamp(128 + (-38 * r - 74 * g + 112 * bb) / 256);
-        out[vi++] = (byte) clamp(128 + (112 * r - 94 * g - 18 * bb) / 256);
-      }
-    }
-    return yLen + 2 * uLen;
-  }
-
-  private static int lum(int r, int g, int b) {
-    return clamp((66 * r + 129 * g + 25 * b) / 256 + 16);
-  }
-
-  private static int clamp(int v) {
-    return v < 0 ? 0 : Math.min(v, 255);
   }
 
   /**
