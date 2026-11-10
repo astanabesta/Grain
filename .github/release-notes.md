@@ -1,9 +1,16 @@
-## Grain Photo vVERSION — Crisp Golden Spiral + True Sony Level Gauge
+## Grain Photo vVERSION — Wi-Fi Remote Viewfinder (phone side)
 
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
 
-### What's new in v0.9.27 — redrawn from your reference images
+### What's new in v0.9.28 — watch your frame on the PC monitor
+
+1. **REMOTE VIEW** (MENU → SET UP): the phone streams the masked viewfinder frame — exactly what the sensor sees inside the film border — as H.264 over Wi-Fi (UDP 720p20, ~4 Mbps) to the companion **Grain Windows viewer**, plus a 10 Hz metadata sideband (ISO / shutter / aperture / EV, recipe name, framing-grid style, AF mode + focus point, roll & pitch, rotation, busy state). Tap the menu row once to enable; it shows the phone's Wi-Fi address and a 5-character token to type into the viewer.
+2. Keeps an eye on itself: while a viewer is connected the phone OSD shows a small **REC** tag inside the frame, the stream pauses cleanly during shots/bursts (no torn frames), and everything stops the moment you leave the app or flip the toggle off.
+
+The Windows app itself ships separately — this APK is the sender half.
+
+### Previously in v0.9.27 — crisp golden spiral + true Sony level gauge
 
 1. **Golden spiral, now bold**: the tiling and arc geometry are byte-verified against a real golden-spiral figure (cuts at 61.8%, eye winds to bottom-right), and every framing grid now draws **72% white with a dark drop shadow** instead of the old faint hairlines — readable on bright scenes.
 2. **The leveler is the Sony gauge now**: center stack of 5 squares tracks **pitch** (the active square fills; center square green when the camera axis is horizontal), the two side **arcs rotate with roll** carrying tick squares, with static bow-tie pointers at 3 and 9 o'clock as the zero reference. Level both axes → green lock.

@@ -131,6 +131,7 @@ public final class MainActivity extends ComponentActivity
   static final String[] DRIVES = DriveModes.DRIVES;
   private static final String[] VIEW_MODES = {"EYE SENSOR", "EVF ONLY", "LCD ONLY"};
   private static final String[] GRID_STYLES = {"Off", "Thirds", "Square", "Diag + square", "Golden ratio"};
+  private static final String[] AF_NAMES = {"SINGLE", "MULTI", "ZONE", "CENTER", "FACE"};
   private static final String[] EV_LABELS = {
     "−2", "−1⅔", "−1⅓", "−1", "−⅔", "−⅓", "0", "+⅓", "+⅔", "+1", "+1⅓", "+1⅔", "+2", "C"
   };
@@ -201,6 +202,10 @@ public final class MainActivity extends ComponentActivity
   private long lastUpdateCheckMs;
   private AppUpdater.Release availableUpdate, pendingInstallRelease;
   private File lastDownloadedUpdateApk;
+  /** Wi-Fi remote viewfinder sender (RemoteStream); OFF by default. */
+  private RemoteStream remote;
+  private String remoteToken = "";
+  private boolean remoteOn;
   /** Viewfinder framing grid: 0 Off, 1 Thirds, 2 Square, 3 Diag + Square (Sony-style). */
   private int gridStyle;
   private boolean keepFull = true,
@@ -2915,6 +2920,7 @@ public final class MainActivity extends ComponentActivity
     }
     if (sensors != null && gravity != null)
       sensors.registerListener(pitchListener, gravity, SensorManager.SENSOR_DELAY_GAME);
+    if (remoteOn && remote == null && RemoteStream.localIp() != null) startRemote();
     if (texture != null && texture.isAvailable()) openCamera();
     readBattery();
     main.removeCallbacks(histogramTask);
@@ -2952,6 +2958,8 @@ public final class MainActivity extends ComponentActivity
     }
     if (orientationListener != null) orientationListener.disable();
     if (sensors != null) sensors.unregisterListener(pitchListener);
+    stopRemote();
+    if (remoteOn) remote = null;
     main.removeCallbacks(histogramTask);
     main.removeCallbacks(peakingTask);
     main.removeCallbacks(startupUpdateTask);
@@ -4406,6 +4414,8 @@ public final class MainActivity extends ComponentActivity
     sounds = preferences.getBoolean("sounds", true);
     showHistogram = preferences.getBoolean("histogram", true);
     showLevel = preferences.getBoolean("level", true);
+    remoteOn = preferences.getBoolean("remoteOn", false);
+    remoteToken = preferences.getString("remoteToken", "");
     autoRotate = preferences.getBoolean("autoRotate", true);
     isoDial = preferences.getBoolean("isoDial", false);
     shutterNs = Math.max(0L, preferences.getLong("shutterNs", 0L));
@@ -4450,6 +4460,8 @@ public final class MainActivity extends ComponentActivity
             .putBoolean("sounds", sounds)
             .putBoolean("histogram", showHistogram)
             .putBoolean("level", showLevel)
+            .putBoolean("remoteOn", remoteOn)
+            .putString("remoteToken", remoteToken)
             .putBoolean("autoRotate", autoRotate)
             .putBoolean("isoDial", isoDial)
             .putLong("shutterNs", shutterNs)
@@ -4897,6 +4909,7 @@ public final class MainActivity extends ComponentActivity
     o.updateAvailable = availableUpdate != null && !availableUpdate.tagName.equals(skippedUpdateTag);
     o.aeLock = aeLock;
     o.gridStyle = gridStyle;
+    o.streaming = remote != null && remote.isLive();
     o.showHistogram = showHistogram;
     o.showLevel = showLevel;
     o.infoOff = dispMode == 1;
@@ -4922,6 +4935,71 @@ public final class MainActivity extends ComponentActivity
   }
 
   /** Electronic level, smoothed; NaN hides it (phone flat). */
+  /** Start/stop the Wi-Fi remote viewfinder sender (the grain-remote companion app connects). */
+  private void startRemote() {
+    if (remote != null) return;
+    if (remoteToken.isEmpty()) remoteToken = RemoteStream.newToken();
+    // stream the sensor buffer area; the Rust viewer masks to the framing ratio and rotates upright
+    int h = 720, w = Math.max(16, Math.round(h * sourceWidth / (float) sourceHeight / 16f) * 16);
+    remote =
+        new RemoteStream(
+            new RemoteStream.Source() {
+              @Override
+              public Bitmap grab(int w, int h) {
+                try {
+                  if (texture == null || !texture.isAvailable()) return null;
+                  return texture.getBitmap(w, h);
+                } catch (Throwable t) {
+                  return null;
+                }
+              }
+
+              @Override
+              public String metaJson() {
+                StringBuilder j = new StringBuilder(160);
+                j.append('{');
+                if (back != null) {
+                  j.append("\"iso\":\"").append(back.state.iso).append('\"');
+                  j.append(",\"ss\":\"").append(back.state.shutter).append('\"');
+                  j.append(",\"f\":\"").append(back.state.aperture).append('\"');
+                  j.append(",\"ev\":").append(String.format(Locale.US, "%.2f", back.state.exposure));
+                }
+                j.append(",\"recipe\":\"").append(Recipe.ALL[recipe].name.replace("\"", "'")).append('\"');
+                j.append(",\"grid\":").append(gridStyle);
+                j.append(",\"af\":\"").append(AF_NAMES[Math.min(afArea, AF_NAMES.length - 1)]).append('\"');
+                j.append(",\"afx\":").append(String.format(Locale.US, "%.3f", afX));
+                j.append(",\"afy\":").append(String.format(Locale.US, "%.3f", afY));
+                j.append(",\"roll\":").append(Float.isNaN(levelSmooth) ? "null" : String.format(Locale.US, "%.1f", levelSmooth));
+                j.append(",\"pitch\":").append(Float.isNaN(pitchSmooth) ? "null" : String.format(Locale.US, "%.1f", pitchSmooth));
+                j.append(",\"rot\":").append(uiRotation);
+                j.append(",\"shot\":").append(busy || saving ? 1 : 0);
+                return j.append('}').toString();
+              }
+
+              @Override
+              public boolean captureBusy() {
+                return busy || saving;
+              }
+            },
+            w,
+            h);
+    final String describe = RemoteStream.describe(RemoteStream.localIp(), remoteToken);
+    remote.start(
+        remoteToken,
+        () -> {
+          back.toast("REMOTE VIEW", "stream failed — stopped");
+          stopRemote();
+        });
+    back.toast("REMOTE VIEW ON", describe + " — type this in the Grain Windows app");
+    pushOsd();
+  }
+
+  private void stopRemote() {
+    if (remote != null) remote.stop();
+    remote = null;
+    pushOsd();
+  }
+
   private void level(float tilt) {
     if (back == null) return;
     if (Float.isNaN(tilt)) {
@@ -6568,6 +6646,17 @@ public final class MainActivity extends ComponentActivity
         }, false));
         items.add(new Item("FRAMING GRID", () -> GRID_STYLES[gridStyle], d -> {
           gridStyle = Math.floorMod(gridStyle + (d < 0 ? GRID_STYLES.length - 1 : 1), GRID_STYLES.length);
+          savePrefs();
+          pushOsd();
+        }, false));
+        items.add(new Item("REMOTE VIEW", () -> remoteOn ? RemoteStream.describe(RemoteStream.localIp(), remoteToken) : "Off", d -> {
+          remoteOn = !remoteOn;
+          if (remoteOn) {
+            if (RemoteStream.localIp() == null) {
+              remoteOn = false;
+              back.toast("REMOTE VIEW", "phone is not on Wi-Fi — join your PC's network first");
+            } else startRemote();
+          } else { stopRemote(); back.toast("REMOTE VIEW", "off"); }
           savePrefs();
           pushOsd();
         }, false));

@@ -93,6 +93,8 @@ final class CameraBack extends ViewGroup {
     int gridStyle;
     /** Camera-axis tilt in degrees (+ = looking down); NaN hides the pitch chevron. */
     float pitch = Float.NaN;
+    /** True while the Wi-Fi remote viewfinder has a viewer connected: draws the red REC pill. */
+    boolean streaming;
     /** True while a tripod super-resolution sequence is running: draws the phase guide. */
     boolean hiResGuide;
     /** The sub-pixel phase cells the frames have covered, as a bitmask over the 3x3 grid. */
@@ -2296,13 +2298,23 @@ final class CameraBack extends ViewGroup {
           cornerTicks(c, img, 11 * u);
           hiResGuide(c, img.left + 7 * u, img.centerY() - gs * 1.7f, o, gs);
         }
-        if (o.busy) {
-          float run = (now % 1400) / 1400f, seg = img.width() * .28f;
-          float sx = img.left - seg + (img.width() + seg) * run;
-          p.setColor(ORANGE);
-          c.drawRect(Math.max(img.left, sx), img.bottom - 1.8f * u, Math.min(img.right, sx + seg), img.bottom, p);
-          postInvalidateDelayed(40);
-        }
+      if (o.busy) {
+        float run = (now % 1400) / 1400f, seg = img.width() * .28f;
+        float sx = img.left - seg + (img.width() + seg) * run;
+        p.setColor(ORANGE);
+        c.drawRect(Math.max(img.left, sx), img.bottom - 1.8f * u, Math.min(img.right, sx + seg), img.bottom, p);
+        postInvalidateDelayed(40);
+      }
+      if (o.streaming) {
+        // red REC tag: a remote viewer is watching this frame over Wi-Fi
+        float ry = img.top + 8 * u, rx = img.left + 9 * u;
+        p.setStyle(Paint.Style.FILL);
+        p.setShadowLayer(1.2f * u, 0, 0, 0xa0000000);
+        p.setColor(0xffd8402e);
+        c.drawCircle(rx + 1.5f * u, ry - 2.2f * u, 1.5f * u, p);
+        p.clearShadowLayer();
+        tag(c, "REC", rx + 5 * u, ry, 6.5f * u, true, 0xfff4f1e8);
+      }
         c.restore();
         return;
       }
