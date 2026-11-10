@@ -3,7 +3,17 @@
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
 
-### What's new in v0.9.32 — the zero-copy remote viewfinder
+### What's new in v0.9.33 — golden guides, eye where you want it
+
+Three gifts for composition: the **golden spiral is fixed** — a paint-style slip made its arcs
+render as giant filled wedges that greyed out the preview; it now draws as a true
+stroke-only Fibonacci spiral of golden rectangles with connected quarter-circle arcs. **Golden
+grid** joins FRAMING GRID as its own guide (phi divisions on both axes) — one guide at a time,
+never two together. And the new **SPIRAL EYE** row lets you park the spiral's focal point in any
+of the four corners. The Sony-style dual-axis level gauge stays: fused gravity-sensor readings,
+five-square pitch stack, mirrored roll arcs with the active section filled, green when true.
+
+### Previously in v0.9.32 — the zero-copy remote viewfinder
 
 REMOTE VIEW rebuilt on the architecture Monect and scrcpy use: the screen is captured by
 MediaProjection and fed **straight into the hardware encoder's GPU surface** — no GL readback,

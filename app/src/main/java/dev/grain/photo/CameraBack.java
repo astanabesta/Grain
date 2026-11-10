@@ -89,8 +89,10 @@ final class CameraBack extends ViewGroup {
     final List<String> icons = new ArrayList<>();
     boolean isoAuto = true, aeLock, showHistogram = true, showLevel = true, busy, infoOff,
         manual, exposureWarn, faceActive, updateAvailable;
-    /** Framing grid style: 0 Off, 1 Thirds, 2 Square, 3 Diag + Square (Sony-style), 4 Golden ratio. */
+    /** Framing grid style: 0 Off, 1 Thirds, 2 Square, 3 Diag + Square (Sony-style), 4 Golden spiral, 5 Golden grid. */
     int gridStyle;
+    /** Golden spiral eye placement: 0 bottom-right, 1 bottom-left, 2 top-right, 3 top-left. */
+    int spiralEye;
     /** Camera-axis tilt in degrees (+ = looking down); NaN hides the pitch chevron. */
     float pitch = Float.NaN;
     /** True while the Wi-Fi remote viewfinder has a viewer connected: draws the red REC pill. */
@@ -2321,17 +2323,23 @@ final class CameraBack extends ViewGroup {
       float k = 1, fs = 8.4f * u, pad = 7 * u;
       int white = 0xfff4f1e8;
       if (o.gridStyle > 0 && img.width() > 0) {
+        // STROKE from the start: nothing here (spiral arcs, frames) is ever a filled surface
+        p.setStyle(Paint.Style.STROKE);
         p.setColor(0xb8ffffff);
         p.setStrokeWidth(Math.max(1, 1.0f * u));
         p.setShadowLayer(1.1f * u, 0, 0, 0xa0000000);
         if (o.gridStyle == 4) {
           // Golden ratio: the photographer's spiral — golden rectangles tiling inward with a
-          // quarter-circle arc in every square, winding to the eye at the frame's bottom-right.
+          // quarter-circle arc in every square, winding to the eye at the frame's bottom-right
+          // (mirrored for the other SPIRAL EYE corners).
           final float PHI = 1.61803398875f;
           float rw, rh;
           if (img.width() >= img.height()) { rw = img.width(); rh = rw / PHI; }
           else { rh = img.height(); rw = rh / PHI; }
           float rx = img.left + (img.width() - rw) * .5f, ry = img.top + (img.height() - rh) * .5f;
+          c.save();
+          if (o.spiralEye == 1 || o.spiralEye == 3) c.scale(-1, 1, rx + rw / 2f, ry + rh / 2f);
+          if (o.spiralEye >= 2) c.scale(1, -1, rx + rw / 2f, ry + rh / 2f);
           c.drawRect(rx, ry, rx + rw, ry + rh, p);
           float x = rx, y = ry, rectW = rw, rectH = rh;
           int side = rectW >= rectH ? 0 : 1;
@@ -2363,6 +2371,14 @@ final class CameraBack extends ViewGroup {
             }
             side = (side + 1) & 3;
           }
+          c.restore();
+        } else if (o.gridStyle == 5) {
+          // Golden grid: divide both axes at the golden cuts (38.2 % / 61.8 %). This is a guide
+          // of its own — never drawn together with the spiral.
+          c.drawLine(img.left + img.width() * .381966f, img.top, img.left + img.width() * .381966f, img.bottom, p);
+          c.drawLine(img.left + img.width() * .618034f, img.top, img.left + img.width() * .618034f, img.bottom, p);
+          c.drawLine(img.left, img.top + img.height() * .381966f, img.right, img.top + img.height() * .381966f, p);
+          c.drawLine(img.left, img.top + img.height() * .618034f, img.right, img.top + img.height() * .618034f, p);
         } else {
         int cols, rows;
         if (o.gridStyle == 1) {

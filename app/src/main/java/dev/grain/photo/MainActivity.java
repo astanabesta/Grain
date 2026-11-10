@@ -132,7 +132,8 @@ public final class MainActivity extends ComponentActivity
 
   static final String[] DRIVES = DriveModes.DRIVES;
   private static final String[] VIEW_MODES = {"EYE SENSOR", "EVF ONLY", "LCD ONLY"};
-  private static final String[] GRID_STYLES = {"Off", "Thirds", "Square", "Diag + square", "Golden ratio"};
+  private static final String[] GRID_STYLES = {"Off", "Thirds", "Square", "Diag + square", "Golden spiral", "Golden grid"};
+  private static final String[] SPIRAL_EYES = {"Bottom right", "Bottom left", "Top right", "Top left"};
   private static final String[] AF_NAMES = {"SINGLE", "MULTI", "ZONE", "CENTER", "FACE"};
   private static final String[] EV_LABELS = {
     "−2", "−1⅔", "−1⅓", "−1", "−⅔", "−⅓", "0", "+⅓", "+⅔", "+1", "+1⅓", "+1⅔", "+2", "C"
@@ -209,7 +210,7 @@ public final class MainActivity extends ComponentActivity
   private String remoteToken = "";
   private boolean remoteOn;
   /** Viewfinder framing grid: 0 Off, 1 Thirds, 2 Square, 3 Diag + Square (Sony-style). */
-  private int gridStyle;
+  private int gridStyle, spiralEye;
   private boolean keepFull = true,
       faceExposure = true,
       faceLandmarks = false,
@@ -1848,7 +1849,7 @@ public final class MainActivity extends ComponentActivity
     preferenceToggle(
         body,
         "Composition grid",
-        "A little help finding your frame. Set the style under SET UP (FRAMING GRID): thirds, square, or diagonal + square.",
+        "A little help finding your frame. Set the style under SET UP (FRAMING GRID): thirds, square, diagonal + square, golden spiral or golden grid. The spiral's focal corner lives just below it (SPIRAL EYE).",
         gridStyle != 0,
         v -> {
           gridStyle = v ? Math.max(1, gridStyle) : 0;
@@ -4380,6 +4381,7 @@ public final class MainActivity extends ComponentActivity
     gridStyle =
         Math.max(
             0, Math.min(GRID_STYLES.length - 1, preferences.getInt("gridStyle", preferences.getBoolean("grid", false) ? 1 : 0)));
+    spiralEye = Math.max(0, Math.min(SPIRAL_EYES.length - 1, preferences.getInt("spiralEye", 0)));
     keepFull = preferences.getBoolean("keepFull", true);
     larger = preferences.getBoolean("larger", false);
     faceExposure = preferences.getBoolean("faceExposure", true);
@@ -4435,7 +4437,7 @@ public final class MainActivity extends ComponentActivity
             .edit()
             .putInt("recipe", recipe)
             .putString("ratio", ratio)
-            .putInt("gridStyle", gridStyle)
+            .putInt("gridStyle", gridStyle).putInt("spiralEye", spiralEye)
             .remove("grid")
             .putBoolean("keepFull", keepFull)
             .putBoolean("larger", larger)
@@ -4911,6 +4913,7 @@ public final class MainActivity extends ComponentActivity
     o.updateAvailable = availableUpdate != null && !availableUpdate.tagName.equals(skippedUpdateTag);
     o.aeLock = aeLock;
     o.gridStyle = gridStyle;
+    o.spiralEye = spiralEye;
     o.streaming = remote != null && remote.isLive();
     o.showHistogram = showHistogram;
     o.showLevel = showLevel;
@@ -6664,6 +6667,12 @@ public final class MainActivity extends ComponentActivity
         }, false));
         items.add(new Item("FRAMING GRID", () -> GRID_STYLES[gridStyle], d -> {
           gridStyle = Math.floorMod(gridStyle + (d < 0 ? GRID_STYLES.length - 1 : 1), GRID_STYLES.length);
+          savePrefs();
+          pushOsd();
+        }, false));
+        items.add(new Item("SPIRAL EYE", () -> SPIRAL_EYES[spiralEye], d -> {
+          // which corner the golden spiral's focal point sits in (FRAMING GRID → Golden spiral)
+          spiralEye = Math.floorMod(spiralEye + (d < 0 ? SPIRAL_EYES.length - 1 : 1), SPIRAL_EYES.length);
           savePrefs();
           pushOsd();
         }, false));
