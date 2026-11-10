@@ -2309,8 +2309,9 @@ final class CameraBack extends ViewGroup {
       float k = 1, fs = 8.4f * u, pad = 7 * u;
       int white = 0xfff4f1e8;
       if (o.gridStyle > 0 && img.width() > 0) {
-        p.setColor(0x60ffffff);
-        p.setStrokeWidth(Math.max(1, .8f * u));
+        p.setColor(0xb8ffffff);
+        p.setStrokeWidth(Math.max(1, 1.0f * u));
+        p.setShadowLayer(1.1f * u, 0, 0, 0xa0000000);
         if (o.gridStyle == 4) {
           // Golden ratio: the photographer's spiral — golden rectangles tiling inward with a
           // quarter-circle arc in every square, winding to the eye at the frame's bottom-right.
@@ -2372,38 +2373,69 @@ final class CameraBack extends ViewGroup {
           c.drawLine(img.right, img.bottom, img.centerX(), img.centerY(), p);
         }
         }
+        p.clearShadowLayer();
       }
       float ax = img.left + o.afX * img.width(), ay = img.top + o.afY * img.height(), as = 16 * u * k;
       if (o.showLevel && !Float.isNaN(o.level) && !o.infoOff) {
-        // Sony-style dual-axis level: two short dashes straddling center rotate with roll; a
-        // chevron above/below center tracks pitch; all green + center dot when both are true.
+        // Sony dual-axis level gauge: center pitch stack (5 squares) + outer roll arcs with
+        // tick squares and static bow-tie pointers at 3/9 o'clock. Green when that axis is true.
         boolean rollOk = Math.abs(o.level) < 1;
         boolean pitchOk = !Float.isNaN(o.pitch) && Math.abs(o.pitch) < 1;
-        boolean level = rollOk && pitchOk;
-        float R0 = 12 * u, half = 7 * u;
-        c.save();
-        c.rotate(-o.level, img.centerX(), img.centerY());
-        p.setStrokeWidth(Math.max(1, 1.2f * u));
-        p.setColor(level ? GREEN : 0xd8ffffff);
-        p.setShadowLayer(1.2f * u, 0, 0, 0x90000000);
-        c.drawLine(img.centerX() - R0 - half, img.centerY(), img.centerX() - R0 + half, img.centerY(), p);
-        c.drawLine(img.centerX() + R0 - half, img.centerY(), img.centerX() + R0 + half, img.centerY(), p);
-        c.restore();
+        float cx = img.centerX(), cy = img.centerY();
+        int rollCol = rollOk ? GREEN : 0xf2ffffff;
+        int pitchCol = pitchOk ? GREEN : 0xf2ffffff;
+        p.setShadowLayer(1.1f * u, 0, 0, 0xa0000000);
+        // --- pitch: vertical stack of 5 hollow squares, the active one filled
         if (!Float.isNaN(o.pitch)) {
-          if (pitchOk && rollOk) {
-            p.setStyle(Paint.Style.FILL);
-            p.setColor(GREEN);
-            c.drawCircle(img.centerX(), img.centerY(), 1.7f * u, p);
-            p.setStyle(Paint.Style.STROKE);
-          } else {
-            p.setColor(pitchOk ? GREEN : 0xd8ffffff);
-            float dist = (7 + Math.min(30, Math.abs(o.pitch)) * .9f) * u;
-            float cy = img.centerY() + (o.pitch > 0 ? dist : -dist);
-            float hs = 2.8f * u, tip = 1.8f * u * (o.pitch > 0 ? -1 : 1);
-            c.drawLine(img.centerX() - hs, cy, img.centerX(), cy + tip, p);
-            c.drawLine(img.centerX() + hs, cy, img.centerX(), cy + tip, p);
+          float sq = 4.4f * u, st = sq + 1.6f * u;
+          int active = 2 + (int) Math.round(Math.max(-12, Math.min(12, o.pitch)) / 6.0);
+          active = Math.max(0, Math.min(4, active));
+          p.setStrokeWidth(Math.max(1, 1.0f * u));
+          p.setColor(pitchCol);
+          for (int i = 0; i < 5; i++) {
+            float top = cy + (i - 2) * st - sq / 2;
+            p.setStyle(i == active ? Paint.Style.FILL : Paint.Style.STROKE);
+            c.drawRect(cx - sq / 2, top, cx + sq / 2, top + sq, p);
+          }
+          // middle-row end dashes, like the Sony gauge frame
+          p.setStyle(Paint.Style.STROKE);
+          c.drawLine(cx - st * 2.2f, cy, cx - st * 1.2f, cy, p);
+          c.drawLine(cx + st * 1.2f, cy, cx + st * 2.2f, cy, p);
+        }
+        // --- roll: rotating parentheses + tick squares
+        float R = 26 * u, tk = 2.6f * u;
+        c.save();
+        c.rotate(-o.level, cx, cy);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(Math.max(1, 1.6f * u));
+        p.setColor(rollCol);
+        spiralOval.set(cx - R, cy - R, cx + R, cy + R);
+        c.drawArc(spiralOval, 142, 76, false, p);   // left "("
+        c.drawArc(spiralOval, -38, 76, false, p);   // right ")"
+        p.setStrokeWidth(Math.max(1, 1.0f * u));
+        for (double deg : new double[] {-27, 0, 27}) {
+          float rad = (float) Math.toRadians(deg);
+          for (int sgn : new int[] {-1, 1}) {
+            float px = cx + sgn * R * (float) Math.cos(rad), py = cy + R * (float) Math.sin(rad);
+            // squares stacked along the arc at its two ends and middle
+            c.drawRect(px - tk / 2, py - tk / 2, px + tk / 2, py + tk / 2, p);
           }
         }
+        c.restore();
+        // static bow-tie pointers at 3 and 9 o'clock
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(rollCol);
+        for (int sgn : new int[] {-1, 1}) {
+          float bx = cx + sgn * (R + 7 * u);
+          path.reset();
+          path.moveTo(bx, cy - 2.4f * u);
+          path.lineTo(bx + sgn * 2.6f * u, cy - 1.1f * u);
+          path.lineTo(bx + sgn * 2.6f * u, cy + 1.1f * u);
+          path.lineTo(bx, cy + 2.4f * u);
+          path.close();
+          c.drawPath(path, p);
+        }
+        p.setStyle(Paint.Style.STROKE);
         p.clearShadowLayer();
       }
       if (o.afArea == 1 && img.width() > 0) {

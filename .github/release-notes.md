@@ -1,4 +1,15 @@
-## Grain Photo vVERSION — The Real Golden Spiral + Compact Sony Level
+## Grain Photo vVERSION — Crisp Golden Spiral + True Sony Level Gauge
+
+- **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
+- **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
+
+### What's new in v0.9.27 — redrawn from your reference images
+
+1. **Golden spiral, now bold**: the tiling and arc geometry are byte-verified against a real golden-spiral figure (cuts at 61.8%, eye winds to bottom-right), and every framing grid now draws **72% white with a dark drop shadow** instead of the old faint hairlines — readable on bright scenes.
+2. **The leveler is the Sony gauge now**: center stack of 5 squares tracks **pitch** (the active square fills; center square green when the camera axis is horizontal), the two side **arcs rotate with roll** carrying tick squares, with static bow-tie pointers at 3 and 9 o'clock as the zero reference. Level both axes → green lock.
+
+### Previously in v0.9.26 — first spiral + compact level
+Spiral/leveler v1: replaced by this redrawn pair on your feedback.
 
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
