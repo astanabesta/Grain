@@ -1100,7 +1100,7 @@ public final class MainActivity extends ComponentActivity
           continue;
         rows.add(stepper(panel, setting, work, defaults, changed));
       }
-      rows.addAll(buildAppleEditor(panel, r, changed));
+      rows.addAll(buildAppleEditor(panel, r, work, defaults, changed));
     } else {
       for (TuningControl setting : TuningControl.fujifilm(r.fuji))
         rows.add(stepper(panel, setting, work, defaults, changed));
@@ -1121,16 +1121,25 @@ public final class MainActivity extends ComponentActivity
     extrasTitle.setGravity(Gravity.START);
     extrasTitle.setPadding(0, dp(14), 0, dp(4));
     panel.addView(extrasTitle, new LinearLayout.LayoutParams(-1, -2));
-    for (TuningControl setting : TuningControl.extras())
+    for (TuningControl setting : TuningControl.extras()) {
+      // iPhone looks carry Development inside the gallery editor (GRAIN group) — don't render it twice
+      if (r.fuji.apple() && setting.name.equals("Development")) continue;
       rows.add(stepper(panel, setting, work, defaults, changed));
+    }
     TextView extrasNote =
         paragraph(
-            "Development: First version develops like Grain v0.2.0 — colour noise reduction"
-                + " only, no sharpening at Sharpness −2 and the full grain, so the picture is"
-                + " grittier and more like film. Raising High ISO NR adds luminance noise"
-                + " reduction and Sharpness above −2 sharpens. Clean (v0.2.1 and later) removes"
-                + " more noise and sharpens. Reggie’s Portra and Reggie’s Superia start on First"
-                + " version, every other film on Clean.\n"
+            (apple
+                    ? "Development lives in the editor above (GRAIN): Clean is the published iPhone"
+                        + " look with its Smart-HDR smoothing; First version develops like Grain v0.2.0 —"
+                        + " the smoothing stages stay off, so hair, beard and fabric texture come through"
+                        + " grittier, like the Fuji films. The white balance, tone and colour of the"
+                        + " iPhone look stay exactly the same.\n"
+                    : "Development: First version develops like Grain v0.2.0 — colour noise reduction"
+                        + " only, no sharpening at Sharpness −2 and the full grain, so the picture is"
+                        + " grittier and more like film. Raising High ISO NR adds luminance noise"
+                        + " reduction and Sharpness above −2 sharpens. Clean (v0.2.1 and later) removes"
+                        + " more noise and sharpens. Reggie’s Portra and Reggie’s Superia start on First"
+                        + " version, every other film on Clean.\n")
                 + "No Fujifilm film simulation has halation or bloom, so both start Off. Halation: a"
                 + " red-orange glow around bright lights, like film without an anti-halation"
                 + " layer. Bloom: a soft glow spreading from highlights, like a diffusion filter."
@@ -1214,7 +1223,12 @@ public final class MainActivity extends ComponentActivity
    * The iPhone editor: gallery-style sliders (−100..+100, neutral 0, orange when changed) grouped
    * LIGHT / COLOR / DETAIL, plus the tone-curve editor. Returns the rows' refresh runnables.
    */
-  private ArrayList<Runnable> buildAppleEditor(LinearLayout panel, Recipe r, Runnable fujiChanged) {
+  private ArrayList<Runnable> buildAppleEditor(
+      LinearLayout panel,
+      Recipe r,
+      FujiRecipe.Tuning work,
+      FujiRecipe.Tuning defaults,
+      Runnable fujiChanged) {
     final ArrayList<Runnable> edits = new ArrayList<>();
     final AppleTune aw = tuning.appleEffective(r.fuji);
     final Runnable tuneChanged =
@@ -1244,7 +1258,57 @@ public final class MainActivity extends ComponentActivity
     edits.add(appleSlider(panel, "Sharpness", aw, t -> t.sharpness, (t, i) -> { t.sharpness = i; }, tuneChanged));
     edits.add(appleSlider(panel, "Noise reduction", aw, t -> t.noiseReduction, (t, i) -> { t.noiseReduction = i; }, tuneChanged));
     edits.add(appleSlider(panel, "Clarity", aw, t -> t.clarity, (t, i) -> { t.clarity = i; }, tuneChanged));
+    editorGroup(panel, "GRAIN");
+    edits.add(appleDevelopmentRow(panel, work, defaults, tuneChanged));
     return edits;
+  }
+
+  /**
+   * iPhone tuner row: how the RAW is developed — Clean (the published iPhone look, with its
+   * Smart-HDR smoothing stages) or First version (Grain v0.2.0's render: grittier, more texture,
+   * like the Fuji recipes default to). Same choice the Fuji films carry under GRAIN EXTRAS.
+   */
+  private Runnable appleDevelopmentRow(
+      LinearLayout panel,
+      final FujiRecipe.Tuning work,
+      final FujiRecipe.Tuning defaults,
+      final Runnable onChanged) {
+    final FujiRecipe.Development[] ways = FujiRecipe.Development.values();
+    LinearLayout line = row();
+    TextView key = text("Development", 10, INK);
+    key.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+    key.setContentDescription(
+        "Development. Clean is the iPhone look; First version is grittier with more texture. Long-press resets to the recipe default.");
+    final TextView[] chips = new TextView[ways.length];
+    LinearLayout seg = row();
+    final Runnable show =
+        () -> {
+          boolean diverged = work.development != defaults.development;
+          key.setTextColor(diverged ? ORANGE : INK);
+          for (int i = 0; i < ways.length; i++) {
+            boolean sel = work.development == ways[i];
+            chips[i].setTextColor(sel ? PAPER : INK);
+            chips[i].setBackground(sel ? bg(INK, 15, INK, 1) : bg(PAPER, 15, LINE, 1));
+          }
+        };
+    for (int i = 0; i < ways.length; i++) {
+      final int v = i;
+      chips[i] = button(ways[i].label, 10, INK, () -> { work.development = ways[v]; onChanged.run(); });
+      chips[i].setGravity(Gravity.CENTER);
+      chips[i].setContentDescription("Develop as " + ways[i].label);
+      seg.addView(chips[i], new LinearLayout.LayoutParams(0, dp(30), 1));
+    }
+    key.setOnLongClickListener(
+        v -> {
+          work.development = defaults.development;
+          onChanged.run();
+          return true;
+        });
+    line.addView(key, size(96, 32));
+    line.addView(seg, new LinearLayout.LayoutParams(0, dp(32), 1));
+    panel.addView(line);
+    show.run();
+    return show;
   }
 
   private void editorGroup(LinearLayout panel, String label) {

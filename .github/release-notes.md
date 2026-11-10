@@ -1,4 +1,19 @@
-## Grain Photo vVERSION — Frame Stack Now Actually Earns Its Noise Win
+## Grain Photo vVERSION — iPhone Looks Get the Development Switch
+
+- **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
+- **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
+
+### What's new in v0.9.22 — Development picker for iPhone recipes
+
+By request: the Fuji films' **Development (Grain)** choice now exists on every iPhone look too, inside the gallery editor under a new **GRAIN** section (right after DETAIL):
+
+- **Clean** (default — unchanged): the faithful iPhone Smart HDR development, including its smoothing stages.
+- **First version**: Grain v0.2.0's render path — smoothing stages off, hair/beard/fabric texture comes through grittier, the same way Reggie's Portra and the other films render. The look's white balance, tone and colour stay exactly as published; only the development stages differ.
+
+Nothing else moved: the full iPhone tuner (LIGHT / COLOR / DETAIL sliders + tone curve) is untouched, the TUNED badge works as before, long-press on the row resets to Clean, and the choice is saved per recipe and reported in the receipt as `Development (Grain): First version`.
+
+### Previously in v0.9.21 — frame stack now actually earns its noise win
+Measured-noise motion gate (fixes 43% phantom gating on lying HAL profiles) + tolerance in pair-difference sigma. Still-scene stacking gain now actually reaches the photo.
 
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
