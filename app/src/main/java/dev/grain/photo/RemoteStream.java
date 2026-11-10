@@ -18,7 +18,9 @@ import java.util.Locale;
  *
  * <ul>
  *   <li>client → phone {@code "GRV1 SUB <token>"} subscribes; wrong token is ignored. {@code
- *       "GRV1 BYE"} unsubscribes.
+ *       "GRV1 BYE"} unsubscribes. A broadcast {@code "GRV1 FIND"} always gets a unicast {@code
+ *       "GRV1 HERE <wifi-ip>"} answer, so the viewer can find the phone without anyone typing an
+ *       IP address.
  *   <li>phone → client video packets: 10-byte header {@code GRV f f f frameSeq(be32) chunkTot
  *       chunkIdx flags} + Annex-B payload chunk (≤1300 B). flags bit0 = keyframe.
  *   <li>phone → client metadata: {@code "GRM1 "}+JSON, ~10 Hz regardless of video.
@@ -114,6 +116,14 @@ final class RemoteStream {
           String msg = new String(hello.getData(), 0, hello.getLength(), "UTF-8").trim();
           if (msg.equals("GRV1 BYE")) {
             client = null;
+          } else if (msg.equals("GRV1 FIND")) {
+            // Monect-style zero-config: the viewer broadcasts this and we answer with our IP,
+            // so nobody has to read an address off the tiny menu row.
+            String ip = localIp();
+            if (ip != null) {
+              byte[] here = ("GRV1 HERE " + ip).getBytes("UTF-8");
+              sock.send(new DatagramPacket(here, here.length, hello.getAddress(), hello.getPort()));
+            }
           } else if (msg.startsWith(HELLO + "SUB ")) {
             if (token.isEmpty() || msg.substring((HELLO + "SUB ").length()).trim().equals(token)) {
               client = new InetSocketAddress(hello.getAddress(), hello.getPort());
@@ -275,21 +285,43 @@ final class RemoteStream {
     return v < 0 ? 0 : Math.min(v, 255);
   }
 
-  /** This device's LAN IPv4 (for the SET UP readout); null when offline. */
+  /**
+   * This device's LAN IPv4 (for the SET UP readout); null when offline. Prefers a Wi-Fi-looking
+   * interface — with mobile data on, a naive scan happily returns the cellular address (or a
+   * CGNAT 100.64.x.x address) that a PC on the home network can never reach.
+   */
   static String localIp() {
+    String fallback = null;
     try {
       java.util.Enumeration<java.net.NetworkInterface> ifs = java.net.NetworkInterface.getNetworkInterfaces();
       while (ifs != null && ifs.hasMoreElements()) {
         java.net.NetworkInterface iface = ifs.nextElement();
+        if (!iface.isUp() || iface.isLoopback()) continue;
+        String name = iface.getName().toLowerCase(Locale.US);
+        boolean wifi = name.startsWith("wlan") || name.contains("wifi") || name.startsWith("ap");
+        boolean cellular = name.startsWith("rmnet") || name.startsWith("ccmni") || name.startsWith("pdp");
         java.util.Enumeration<java.net.InetAddress> addrs = iface.getInetAddresses();
         while (addrs.hasMoreElements()) {
           java.net.InetAddress a = addrs.nextElement();
-          if (!a.isLoopbackAddress() && a instanceof java.net.Inet4Address) return a.getHostAddress();
+          if (a.isLoopbackAddress() || !(a instanceof java.net.Inet4Address)) continue;
+          String ip = a.getHostAddress();
+          if (ip == null) continue;
+          // skip CGNAT 100.64.0.0/10 (carrier-grade NAT): unroutable from home PCs
+          if (ip.startsWith("100.")) {
+            try {
+              int b = Integer.parseInt(ip.substring(4, ip.indexOf('.', 4)));
+              if (b >= 64 && b <= 127) continue;
+            } catch (Throwable ignored) {
+            }
+          }
+          if (wifi) return ip;             // best answer: a Wi-Fi address
+          if (fallback == null && !cellular) fallback = ip;
+          if (fallback == null) fallback = ip; // better than nothing
         }
       }
     } catch (Throwable ignored) {
     }
-    return null;
+    return fallback;
   }
 
   /** A short human-typeable stream token. */

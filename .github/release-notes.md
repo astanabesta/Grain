@@ -3,7 +3,13 @@
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
 
-### What's new in v0.9.29 — remote stream robustness
+### What's new in v0.9.30 — find the phone like Monect does
+
+1. **Auto-discovery**: the phone now answers the viewer's `GRV1 FIND` broadcast with its Wi-Fi address — the new `grain-remote` v0.2 just asks for the 5-letter token, no IP typing. (Grab the new viewer build where you got the old one.)
+2. **The right IP, always**: the REMOTE VIEW row previously showed the phone's *first* IPv4 — with mobile data on that could be the cellular or a 100.64.x.x carrier address a PC can never reach. It now prefers the Wi-Fi interface and skips cellular/CGNAT ranges entirely.
+3. Works the same whether the PC is on Wi-Fi or **plugged into the router with a cable** — same LAN either way; only a router with "AP isolation"/guest network enabled can still block it.
+
+### Previously in v0.9.29 — remote stream robustness
 
 Every keyframe now carries its SPS/PPS headers (Annex-B, normalized even if this phone's encoder
 only handshakes them once or in avcc form). Without this the Windows viewer could stay black on
