@@ -111,7 +111,7 @@ public final class MainActivity extends ComponentActivity
 
   static final String[] DRIVES = DriveModes.DRIVES;
   private static final String[] VIEW_MODES = {"EYE SENSOR", "EVF ONLY", "LCD ONLY"};
-  private static final String[] GRID_STYLES = {"Off", "Thirds", "Square", "Diag + square"};
+  private static final String[] GRID_STYLES = {"Off", "Thirds", "Square", "Diag + square", "Golden ratio"};
   private static final String[] EV_LABELS = {
     "−2", "−1⅔", "−1⅓", "−1", "−⅔", "−⅓", "0", "+⅓", "+⅔", "+1", "+1⅓", "+1⅔", "+2", "C"
   };
@@ -4343,7 +4343,7 @@ public final class MainActivity extends ComponentActivity
     ratio = Framing.ratio(preferences.getString("ratio", "3:4"));
     gridStyle =
         Math.max(
-            0, Math.min(3, preferences.getInt("gridStyle", preferences.getBoolean("grid", false) ? 1 : 0)));
+            0, Math.min(GRID_STYLES.length - 1, preferences.getInt("gridStyle", preferences.getBoolean("grid", false) ? 1 : 0)));
     keepFull = preferences.getBoolean("keepFull", true);
     larger = preferences.getBoolean("larger", false);
     faceExposure = preferences.getBoolean("faceExposure", true);

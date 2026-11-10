@@ -89,7 +89,7 @@ final class CameraBack extends ViewGroup {
     final List<String> icons = new ArrayList<>();
     boolean isoAuto = true, aeLock, showHistogram = true, showLevel = true, busy, infoOff,
         manual, exposureWarn, faceActive, updateAvailable;
-    /** Framing grid style: 0 Off, 1 Thirds, 2 Square, 3 Diag + Square (Sony-style). */
+    /** Framing grid style: 0 Off, 1 Thirds, 2 Square, 3 Diag + Square (Sony-style), 4 Golden ratio. */
     int gridStyle;
     /** True while a tripod super-resolution sequence is running: draws the phase guide. */
     boolean hiResGuide;
@@ -2308,6 +2308,15 @@ final class CameraBack extends ViewGroup {
       if (o.gridStyle > 0 && img.width() > 0) {
         p.setColor(0x60ffffff);
         p.setStrokeWidth(Math.max(1, .8f * u));
+        if (o.gridStyle == 4) {
+          // Golden ratio: the phi cuts (38.2% / 61.8%) on both axes
+          final float phiLo = 0.381966f, phiHi = 0.618034f;
+          c.drawLine(img.left + img.width() * phiLo, img.top, img.left + img.width() * phiLo, img.bottom, p);
+          c.drawLine(img.left + img.width() * phiHi, img.top, img.left + img.width() * phiHi, img.bottom, p);
+          c.drawLine(img.left, img.top + img.height() * phiLo, img.right, img.top + img.height() * phiLo, p);
+          c.drawLine(img.left, img.top + img.height() * phiHi, img.right, img.top + img.height() * phiHi, p);
+          c.drawCircle(img.centerX(), img.centerY(), 1.2f * u, p);
+        } else {
         int cols, rows;
         if (o.gridStyle == 1) {
           cols = 3;
@@ -2327,6 +2336,7 @@ final class CameraBack extends ViewGroup {
           c.drawLine(img.right, img.top, img.centerX(), img.centerY(), p);
           c.drawLine(img.left, img.bottom, img.centerX(), img.centerY(), p);
           c.drawLine(img.right, img.bottom, img.centerX(), img.centerY(), p);
+        }
         }
       }
       float ax = img.left + o.afX * img.width(), ay = img.top + o.afY * img.height(), as = 16 * u * k;

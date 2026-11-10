@@ -1,4 +1,14 @@
-## Grain Photo vVERSION — Sony-Style Framing Grids
+## Grain Photo vVERSION — Golden Ratio Grid Joins the Ladder
+
+- **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
+- **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
+
+### What's new in v0.9.24 — phi grid
+
+**FRAMING GRID** gains a fifth style: **Golden ratio** — the φ cuts (38.2% / 61.8%) on both axes with a center dot. The cycle is now Off → Thirds → Square → Diag + Square → Golden ratio.
+
+### Previously in v0.9.23 — Sony-style framing grids
+Grid styles: Off / Thirds / Square (square cells) / Diag + Square (corner-to-center diagonals).
 
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
