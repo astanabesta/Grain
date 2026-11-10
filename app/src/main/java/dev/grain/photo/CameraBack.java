@@ -2412,6 +2412,8 @@ final class CameraBack extends ViewGroup {
         boolean rollOk = Math.abs(o.level) < 1;
         boolean pitchOk = !Float.isNaN(o.pitch) && Math.abs(o.pitch) < 1;
         float cx = img.centerX(), cy = img.centerY();
+        c.save();
+        c.scale(1.22f, 1.22f, cx, cy); // the gauge reads small on big screens: a touch bigger
         int rollCol = rollOk ? GREEN : 0xf2ffffff;
         int pitchCol = pitchOk ? GREEN : 0xf2ffffff;
         p.setShadowLayer(1.1f * u, 0, 0, 0xa0000000);
@@ -2503,6 +2505,7 @@ final class CameraBack extends ViewGroup {
         c.restore();
         p.setStrokeWidth(Math.max(1, 1.0f * u));
         p.clearShadowLayer();
+        c.restore(); // gauge scale
       }
       if (o.afArea == 1 && img.width() > 0) {
         // MULTI: the grid the lens searches, drawn where the AF region actually is.

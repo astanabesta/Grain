@@ -3,7 +3,12 @@
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
 
-### What's new in v0.9.34 — the level gauge, drawn like the Sony reference
+### What's new in v0.9.35 — a bigger level gauge
+
+The Sony-style level gauge grew ~20 % — easier to read at a glance on large screens, same
+proportions and behavior.
+
+### Previously in v0.9.34 — the level gauge, drawn like the Sony reference
 
 Re-measured the dual-axis electronic level against the Sony Alpha reference and redrew it to
 match: the pitch stack is now five squares with the **middle three larger** and the active cell
