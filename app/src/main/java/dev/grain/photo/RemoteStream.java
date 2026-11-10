@@ -59,6 +59,7 @@ final class RemoteStream {
   private MediaCodec codec;
   private long frameSeq;
   private byte[] csd; // Annex-B SPS+PPS, prepended at every keyframe that lacks them
+  private Boolean imagePath; // null = undecided; true = fill via getInputImage, false = bytes
 
   RemoteStream(Source source, int width, int height) {
     this.source = source;
@@ -148,8 +149,27 @@ final class RemoteStream {
         int n = toYuv420(frame, yuv);
         int inIdx = codec.dequeueInputBuffer(5000);
         if (inIdx < 0) continue;
-        codec.getInputBuffer(inIdx).clear();
-        codec.getInputBuffer(inIdx).put(yuv, 0, n);
+        // Feed via getInputImage (honest per-plane strides) — a byte-buffer write to a
+        // "flexible YUV" encoder is ambiguous and MediaTek reads it as NV12, smearing chroma.
+        boolean wrote = false;
+        if (imagePath != Boolean.FALSE) {
+          try {
+            android.media.Image image = codec.getInputImage(inIdx);
+            if (image != null && image.getPlanes() != null && image.getPlanes().length == 3) {
+              putPlanes(image, yuv, width, height);
+              wrote = true;
+              imagePath = Boolean.TRUE;
+            }
+          } catch (Throwable t) {
+            imagePath = Boolean.FALSE;
+          }
+        }
+        if (!wrote) {
+          java.nio.ByteBuffer ib = codec.getInputBuffer(inIdx);
+          if (ib == null) continue;
+          ib.clear();
+          ib.put(yuv, 0, n);
+        }
         codec.queueInputBuffer(inIdx, 0, n, now * 1000, 0);
         int outIdx;
         while ((outIdx = codec.dequeueOutputBuffer(info, 0)) != MediaCodec.INFO_TRY_AGAIN_LATER) {
@@ -234,13 +254,54 @@ final class RemoteStream {
         && (d[off + 2] == 1 || (d[off + 2] == 0 && d[off + 3] == 1));
   }
 
-  /** A csd buffer may arrive as a bare NAL (avcc style); normalize to Annex-B with a start code. */
+  /**
+   * Write an I420 byte array (Y then U then V, dense) into an encoder input Image, honoring each
+   * plane's real rowStride/pixelStride. Handles both planar (ps=1) and semi-planar (ps=2).
+   */
+  private static void putPlanes(android.media.Image image, byte[] yuv, int w, int h) {
+    int yLen = w * h, uLen = yLen / 4;
+    writePlane(image.getPlanes()[0], yuv, 0, w, h, w);
+    writePlane(image.getPlanes()[1], yuv, yLen, w / 2, h / 2, w / 2);
+    writePlane(image.getPlanes()[2], yuv, yLen + uLen, w / 2, h / 2, w / 2);
+  }
+
+  private static void writePlane(
+      android.media.Image.Plane p, byte[] src, int off, int pw, int ph, int srcStride) {
+    java.nio.ByteBuffer b = p.getBuffer();
+    int rs = p.getRowStride(), ps = p.getPixelStride();
+    for (int row = 0; row < ph; row++) {
+      int srcPos = off + row * srcStride, dstRow = row * rs;
+      if (ps == 1) {
+        b.position(dstRow);
+        b.put(src, srcPos, Math.min(pw, b.limit() - dstRow));
+      } else {
+        for (int x = 0; x < pw; x++) b.put(dstRow + x * ps, src[srcPos + x]);
+      }
+    }
+  }
+
+  /** A csd blob may be Annex-B already or an avcc-style chain of length-prefixed NALs. */
   private static byte[] annexB(byte[] d) {
     if (d.length == 0 || hasStartCode(d, 0)) return d;
-    byte[] out = new byte[d.length + 4];
-    out[2] = 0; out[3] = 1; // "00 00 00 01"
-    System.arraycopy(d, 0, out, 4, d.length);
-    return out;
+    // avcc chain: while (bytes) { be32 length, NAL } — parse strictly; fall back to single NAL.
+    java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(d.length + 8);
+    int off = 0, n = 0;
+    while (off + 4 <= d.length) {
+      int len =
+          ((d[off] & 0xff) << 24) | ((d[off + 1] & 0xff) << 16) | ((d[off + 2] & 0xff) << 8)
+              | (d[off + 3] & 0xff);
+      if (len <= 0 || len > d.length - off - 4) break;
+      out.write(0); out.write(0); out.write(0); out.write(1);
+      out.write(d, off + 4, len);
+      off += 4 + len;
+      n++;
+    }
+    if (n > 0 && off == d.length) return out.toByteArray();
+    // last resort: treat the whole blob as one bare NAL
+    byte[] single = new byte[d.length + 4];
+    single[2] = 0; single[3] = 1; // "00 00 00 01"
+    System.arraycopy(d, 0, single, 4, d.length);
+    return single;
   }
 
   /** True when the bytestream's first NAL is an SPS (type 7). */
