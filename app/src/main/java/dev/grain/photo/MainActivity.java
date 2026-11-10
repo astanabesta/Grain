@@ -7,6 +7,10 @@ import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
 import android.graphics.*;
 import android.graphics.drawable.GradientDrawable;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.media.MediaActionSound;
 import android.net.Uri;
 import android.os.*;
@@ -66,7 +70,22 @@ public final class MainActivity extends ComponentActivity
   private long shutterNs;
   private boolean evf, powerOn = true, aeLock, isoDial, evCustom, sounds = true, showHistogram = true,
       showLevel = true, autoRotate = true, halfPressed, halfClosedOverlay, neutralHeld;
-  private float afX = .5f, afY = .5f, levelSmooth = Float.NaN;
+  private float afX = .5f, afY = .5f, levelSmooth = Float.NaN, pitchSmooth = Float.NaN;
+  /** Camera-axis tilt (front/back) for the Sony-style level: + means looking down, from gravity z. */
+  private SensorManager sensors;
+  private Sensor gravity;
+  private final SensorEventListener pitchListener =
+      new SensorEventListener() {
+        @Override
+        public void onSensorChanged(SensorEvent e) {
+          float z = e.values[2], m = (float) Math.sqrt(e.values[0] * e.values[0] + e.values[1] * e.values[1] + z * z);
+          if (m < 1) return;
+          pitch(Math.max(-1, Math.min(1, z / m)));
+        }
+
+        @Override
+        public void onAccuracyChanged(Sensor s, int accuracy) {}
+      };
   private long[] shutterValues = SHUTTER_NS;
   private int[] isoValues = ISO_STEPS;
   private Recipe[] dialFilms = new Recipe[0];
@@ -2890,6 +2909,12 @@ public final class MainActivity extends ComponentActivity
     settlePreview();
     if (orientationListener != null && orientationListener.canDetectOrientation())
       orientationListener.enable();
+    if (sensors == null) {
+      sensors = (SensorManager) getSystemService(SENSOR_SERVICE);
+      if (sensors != null) gravity = sensors.getDefaultSensor(Sensor.TYPE_GRAVITY);
+    }
+    if (sensors != null && gravity != null)
+      sensors.registerListener(pitchListener, gravity, SensorManager.SENSOR_DELAY_GAME);
     if (texture != null && texture.isAvailable()) openCamera();
     readBattery();
     main.removeCallbacks(histogramTask);
@@ -2926,6 +2951,7 @@ public final class MainActivity extends ComponentActivity
       return;
     }
     if (orientationListener != null) orientationListener.disable();
+    if (sensors != null) sensors.unregisterListener(pitchListener);
     main.removeCallbacks(histogramTask);
     main.removeCallbacks(peakingTask);
     main.removeCallbacks(startupUpdateTask);
@@ -4884,11 +4910,24 @@ public final class MainActivity extends ComponentActivity
     back.refresh();
   }
 
+  /** Camera-axis pitch (front/back tilt) in degrees, smoothed; feeds the Sony-style chevron. */
+  private void pitch(float sine) {
+    if (back == null) return;
+    float degrees = (float) Math.toDegrees(Math.asin(sine));
+    pitchSmooth = Float.isNaN(pitchSmooth) ? degrees : pitchSmooth + (degrees - pitchSmooth) * .35f;
+    if (Float.isNaN(back.state.pitch) || Math.abs(pitchSmooth - back.state.pitch) >= .2f) {
+      back.state.pitch = pitchSmooth;
+      if (showLevel) back.refresh();
+    }
+  }
+
   /** Electronic level, smoothed; NaN hides it (phone flat). */
   private void level(float tilt) {
     if (back == null) return;
     if (Float.isNaN(tilt)) {
       levelSmooth = Float.NaN;
+      pitchSmooth = Float.NaN;
+      back.state.pitch = Float.NaN;
       if (!Float.isNaN(back.state.level)) {
         back.state.level = Float.NaN;
         back.refresh();

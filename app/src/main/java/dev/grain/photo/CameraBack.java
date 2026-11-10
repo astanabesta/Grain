@@ -91,6 +91,8 @@ final class CameraBack extends ViewGroup {
         manual, exposureWarn, faceActive, updateAvailable;
     /** Framing grid style: 0 Off, 1 Thirds, 2 Square, 3 Diag + Square (Sony-style), 4 Golden ratio. */
     int gridStyle;
+    /** Camera-axis tilt in degrees (+ = looking down); NaN hides the pitch chevron. */
+    float pitch = Float.NaN;
     /** True while a tripod super-resolution sequence is running: draws the phase guide. */
     boolean hiResGuide;
     /** The sub-pixel phase cells the frames have covered, as a bitmask over the 3x3 grid. */
@@ -2341,7 +2343,9 @@ final class CameraBack extends ViewGroup {
       }
       float ax = img.left + o.afX * img.width(), ay = img.top + o.afY * img.height(), as = 16 * u * k;
       if (o.showLevel && !Float.isNaN(o.level) && !o.infoOff) {
-        boolean level = Math.abs(o.level) < 1;
+        boolean rollOk = Math.abs(o.level) < 1;
+        boolean pitchOk = !Float.isNaN(o.pitch) && Math.abs(o.pitch) < 1;
+        boolean level = rollOk && pitchOk; // Sony-style: green only when both axes are level
         float len = Math.min(img.width(), img.height()) * .32f, gap = as + 6 * u;
         c.save();
         c.rotate(-o.level, img.centerX(), img.centerY());
@@ -2352,6 +2356,26 @@ final class CameraBack extends ViewGroup {
         c.drawLine(img.centerX() + gap, img.centerY(), img.centerX() + len, img.centerY(), p);
         p.clearShadowLayer();
         c.restore();
+        if (!Float.isNaN(o.pitch)) {
+          // Pitch chevron: sits on the side the camera tilts toward, converging on center; a
+          // green dot when the camera axis is truly horizontal.
+          p.setStrokeWidth(Math.max(1, 1.2f * u));
+          p.setShadowLayer(1.2f * u, 0, 0, 0x90000000);
+          if (pitchOk && rollOk) {
+            p.setStyle(Paint.Style.FILL);
+            p.setColor(GREEN);
+            c.drawCircle(img.centerX(), img.centerY(), 1.6f * u, p);
+          } else {
+            p.setColor(pitchOk ? GREEN : 0xd8ffffff);
+            float dist = (5 + Math.min(30, Math.abs(o.pitch)) * 1.1f) * u;
+            float cy = img.centerY() + (o.pitch > 0 ? dist : -dist);
+            float hs = 4 * u, tip = 2.4f * u * (o.pitch > 0 ? -1 : 1);
+            c.drawLine(img.centerX() - hs, cy, img.centerX(), cy + tip, p);
+            c.drawLine(img.centerX() + hs, cy, img.centerX(), cy + tip, p);
+          }
+          p.clearShadowLayer();
+          p.setStyle(Paint.Style.STROKE);
+        }
       }
       if (o.afArea == 1 && img.width() > 0) {
         // MULTI: the grid the lens searches, drawn where the AF region actually is.

@@ -1,4 +1,14 @@
-## Grain Photo vVERSION — Golden Ratio Grid Joins the Ladder
+## Grain Photo vVERSION — Sony-Style Dual-Axis Level
+
+- **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
+- **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
+
+### What's new in v0.9.25 — the leveler knows pitch now
+
+The electronic level (SET UP → ELECTRONIC LEVEL) gains the Sony-style second axis: a **pitch chevron** riding the frame's vertical center, fed by the gravity sensor. It sits on the side the camera is tilting toward and slides toward center as you level out; roll and pitch both true → everything snaps **green** with a center dot, just like the camera in that reel.
+
+### Previously in v0.9.24 — golden-ratio grid
+FRAMING GRID cycle: Off → Thirds → Square → Diag + Square → **Golden ratio** (φ cuts at 38.2%/61.8% + center dot). If the fifth style doesn't show for you, make sure the update actually installed (this release's APP UPDATE carries it).
 
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
