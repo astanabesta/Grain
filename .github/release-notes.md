@@ -1,4 +1,14 @@
-## Grain Photo vVERSION — iPhone Looks Get the Development Switch
+## Grain Photo vVERSION — Sony-Style Framing Grids
+
+- **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
+- **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
+
+### What's new in v0.9.23 — four grid styles
+
+**SET UP → FRAMING GRID** now cycles: **Off → Thirds → Square → Diag + Square**, matching Sony's grid-line choices (Square uses true square cells across your aspect, Diag + Square adds the corner-to-center diagonals that make tilted frames instantly readable). The little Composition-grid toggle in preferences stays as the on/off shortcut and remembers your chosen style; anyone who had the grid on lands on Thirds automatically.
+
+### Previously in v0.9.22 — Development picker for iPhone recipes
+Every iPhone look gains the Fuji films' **Development (Grain)** switch (Clean / First version) in the gallery editor's new GRAIN section: Apple tone and colour as published, smoothing stages optional — First version renders grittier texture in hair, beard and fabric.
 
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).

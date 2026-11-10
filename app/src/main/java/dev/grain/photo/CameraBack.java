@@ -87,8 +87,10 @@ final class CameraBack extends ViewGroup {
         aperture = "", iso = "", drive = "", zoom = "", status = "", countdown = "", toastTitle,
         toastSub, magLabel = "";
     final List<String> icons = new ArrayList<>();
-    boolean isoAuto = true, aeLock, grid, showHistogram = true, showLevel = true, busy, infoOff,
+    boolean isoAuto = true, aeLock, showHistogram = true, showLevel = true, busy, infoOff,
         manual, exposureWarn, faceActive, updateAvailable;
+    /** Framing grid style: 0 Off, 1 Thirds, 2 Square, 3 Diag + Square (Sony-style). */
+    int gridStyle;
     /** True while a tripod super-resolution sequence is running: draws the phase guide. */
     boolean hiResGuide;
     /** The sub-pixel phase cells the frames have covered, as a bitmask over the 3x3 grid. */
@@ -2303,12 +2305,28 @@ final class CameraBack extends ViewGroup {
       }
       float k = 1, fs = 8.4f * u, pad = 7 * u;
       int white = 0xfff4f1e8;
-      if (o.grid && img.width() > 0) {
+      if (o.gridStyle > 0 && img.width() > 0) {
         p.setColor(0x60ffffff);
         p.setStrokeWidth(Math.max(1, .8f * u));
-        for (int n = 1; n < 3; n++) {
-          c.drawLine(img.left + img.width() * n / 3, img.top, img.left + img.width() * n / 3, img.bottom, p);
-          c.drawLine(img.left, img.top + img.height() * n / 3, img.right, img.top + img.height() * n / 3, p);
+        int cols, rows;
+        if (o.gridStyle == 1) {
+          cols = 3;
+          rows = 3;
+        } else {
+          // Square grid (Sony): square cells, 4 rows, as many columns as the aspect allows
+          rows = 4;
+          cols = Math.max(2, Math.round(rows * img.width() / (float) img.height()));
+        }
+        for (int n = 1; n < cols; n++)
+          c.drawLine(img.left + img.width() * n / cols, img.top, img.left + img.width() * n / cols, img.bottom, p);
+        for (int n = 1; n < rows; n++)
+          c.drawLine(img.left, img.top + img.height() * n / rows, img.right, img.top + img.height() * n / rows, p);
+        if (o.gridStyle == 3) {
+          // Diag + Square: each corner runs to the center
+          c.drawLine(img.left, img.top, img.centerX(), img.centerY(), p);
+          c.drawLine(img.right, img.top, img.centerX(), img.centerY(), p);
+          c.drawLine(img.left, img.bottom, img.centerX(), img.centerY(), p);
+          c.drawLine(img.right, img.bottom, img.centerX(), img.centerY(), p);
         }
       }
       float ax = img.left + o.afX * img.width(), ay = img.top + o.afY * img.height(), as = 16 * u * k;

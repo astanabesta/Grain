@@ -111,6 +111,7 @@ public final class MainActivity extends ComponentActivity
 
   static final String[] DRIVES = DriveModes.DRIVES;
   private static final String[] VIEW_MODES = {"EYE SENSOR", "EVF ONLY", "LCD ONLY"};
+  private static final String[] GRID_STYLES = {"Off", "Thirds", "Square", "Diag + square"};
   private static final String[] EV_LABELS = {
     "−2", "−1⅔", "−1⅓", "−1", "−⅔", "−⅓", "0", "+⅓", "+⅔", "+1", "+1⅓", "+1⅔", "+2", "C"
   };
@@ -181,8 +182,9 @@ public final class MainActivity extends ComponentActivity
   private long lastUpdateCheckMs;
   private AppUpdater.Release availableUpdate, pendingInstallRelease;
   private File lastDownloadedUpdateApk;
-  private boolean grid,
-      keepFull = true,
+  /** Viewfinder framing grid: 0 Off, 1 Thirds, 2 Square, 3 Diag + Square (Sony-style). */
+  private int gridStyle;
+  private boolean keepFull = true,
       faceExposure = true,
       faceLandmarks = false,
       stackOff = false,
@@ -1820,10 +1822,10 @@ public final class MainActivity extends ComponentActivity
     preferenceToggle(
         body,
         "Composition grid",
-        "A little help finding your frame.",
-        grid,
+        "A little help finding your frame. Set the style under SET UP (FRAMING GRID): thirds, square, or diagonal + square.",
+        gridStyle != 0,
         v -> {
-          grid = v;
+          gridStyle = v ? Math.max(1, gridStyle) : 0;
           savePrefs();
           pushOsd();
         });
@@ -1973,7 +1975,7 @@ public final class MainActivity extends ComponentActivity
               magnifier = FocusMath.MAG_4X_HOLD;
               bktFramesIndex = 1;
               bktStepMode = FocusMath.BKT_STEP_MEDIUM;
-              grid = false;
+              gridStyle = 0;
               keepFull = true;
               larger = false;
               faceExposure = true;
@@ -4339,7 +4341,9 @@ public final class MainActivity extends ComponentActivity
       strengths[i] = Math.max(0, Math.min(100, preferences.getInt("strength" + i, 80)));
     keepRawFiles = preferences.getBoolean("keepRawFiles", true);
     ratio = Framing.ratio(preferences.getString("ratio", "3:4"));
-    grid = preferences.getBoolean("grid", false);
+    gridStyle =
+        Math.max(
+            0, Math.min(3, preferences.getInt("gridStyle", preferences.getBoolean("grid", false) ? 1 : 0)));
     keepFull = preferences.getBoolean("keepFull", true);
     larger = preferences.getBoolean("larger", false);
     faceExposure = preferences.getBoolean("faceExposure", true);
@@ -4393,7 +4397,8 @@ public final class MainActivity extends ComponentActivity
             .edit()
             .putInt("recipe", recipe)
             .putString("ratio", ratio)
-            .putBoolean("grid", grid)
+            .putInt("gridStyle", gridStyle)
+            .remove("grid")
             .putBoolean("keepFull", keepFull)
             .putBoolean("larger", larger)
             .putBoolean("faceExposure", faceExposure)
@@ -4865,7 +4870,7 @@ public final class MainActivity extends ComponentActivity
     o.zoom = zoom > 1.04 ? String.format(Locale.US, "%.1f×", zoom) : "";
     o.updateAvailable = availableUpdate != null && !availableUpdate.tagName.equals(skippedUpdateTag);
     o.aeLock = aeLock;
-    o.grid = grid;
+    o.gridStyle = gridStyle;
     o.showHistogram = showHistogram;
     o.showLevel = showLevel;
     o.infoOff = dispMode == 1;
@@ -6522,8 +6527,8 @@ public final class MainActivity extends ComponentActivity
           savePrefs();
           pushOsd();
         }, false));
-        items.add(new Item("FRAMING GRID", () -> onOff(grid), d -> {
-          grid = !grid;
+        items.add(new Item("FRAMING GRID", () -> GRID_STYLES[gridStyle], d -> {
+          gridStyle = Math.floorMod(gridStyle + (d < 0 ? GRID_STYLES.length - 1 : 1), GRID_STYLES.length);
           savePrefs();
           pushOsd();
         }, false));
