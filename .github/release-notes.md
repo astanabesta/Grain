@@ -3,7 +3,18 @@
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
 
-### What's new in v0.9.35 — a bigger level gauge
+### What's new in v0.9.36 — the gallery that stops sulking
+
+Photos, playback and saving shared one background worker, so a wall of gallery thumbnail decodes
+could stand in line ahead of everything else: empty gallery cards, a photo that took forever to
+appear, a Save that seemed to do nothing — and a PLAY button that quietly waited its turn until
+the app was restarted. Now playback and the photos list run on their own priority worker,
+pictures you already flipped past are never decoded at all, queued gallery thumbnails cancel
+themselves the moment you leave the page, tapping PLAY during a save tells you to hold on a
+second instead of ignoring you, and a batch save that partially failed says how many failed
+instead of pretending all went well.
+
+### Previously in v0.9.35 — a bigger level gauge
 
 The Sony-style level gauge grew ~20 % — easier to read at a glance on large screens, same
 proportions and behavior.

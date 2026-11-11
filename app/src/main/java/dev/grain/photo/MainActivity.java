@@ -55,6 +55,12 @@ public final class MainActivity extends ComponentActivity
       LINE = 0xffd6ddca;
   private final Handler main = new Handler(Looper.getMainLooper());
   private final ExecutorService files = Executors.newSingleThreadExecutor();
+  /** UI-critical file jobs (playback open/detail image) so bulk gallery decodes never block PLAY. */
+  private final ExecutorService filesUi = Executors.newSingleThreadExecutor();
+  /** Bumped whenever the gallery/detail view is rebuilt or closed: stale queued decodes skip. */
+  private volatile int galleryStamp;
+  /** Bumped on every showPlayed: a stale play decode never blocks the current photo. */
+  private volatile int playStamp;
   private final ExecutorService network = Executors.newSingleThreadExecutor();
   private FrameLayout root, frame, ui;
   /** The camera back (dials, screen, buttons); turned with the phone inside {@link #ui}. */
@@ -3135,6 +3141,7 @@ public final class MainActivity extends ComponentActivity
   }
 
   private void closePanel() {
+    galleryStamp++;
     gallerySelectMode = false;
     gallerySelectedIds.clear();
     setDarkSystemBars(false);
@@ -3709,6 +3716,7 @@ public final class MainActivity extends ComponentActivity
   }
 
   private void showGallery() {
+    galleryStamp++;
     if (busy) {
       message("Still saving your moment…");
       return;
@@ -3983,6 +3991,7 @@ public final class MainActivity extends ComponentActivity
   }
 
   private void showPhoto(PhotoStore.Photo photo) {
+    galleryStamp++;
     openPanel(
         "A moment, kept.",
         photo.metadata.optString("ratio")
@@ -4102,22 +4111,27 @@ public final class MainActivity extends ComponentActivity
     files.execute(
         () -> {
           int saved = 0;
+          int failed = 0;
           for (PhotoStore.Photo p : targets) {
             try {
               store.export(p, false);
               saved++;
             } catch (Exception ignored) {
+              failed++;
             }
           }
           final int done = saved;
+          final int failedN = failed;
           runOnUiThread(
               () -> {
                 if (isDestroyed()) return;
-                if (done > 0) {
+                if (done > 0 && failedN == 0) {
                   message(
                       done == 1
                           ? "Saved to device gallery."
                           : "Saved " + done + " photos to device gallery.");
+                } else if (done > 0) {
+                  message("Saved " + done + " of " + (done + failedN) + " — " + failedN + " failed.");
                 } else {
                   message("Could not export selected photos.");
                 }
@@ -4361,12 +4375,17 @@ public final class MainActivity extends ComponentActivity
   }
 
   private void loadImage(ImageView image, File file, int max) {
+    final int stamp = galleryStamp;
     files.execute(
         () -> {
+          // Skipped instantly when the user left this gallery page — keeps the queue from piling
+          // up behind a pile of thumbnails nobody is looking at.
+          if (stamp != galleryStamp || !image.isAttachedToWindow()) return;
           Bitmap bitmap = store.thumbnail(file, max);
           runOnUiThread(
               () -> {
-                if (!isDestroyed() && image.isAttachedToWindow()) image.setImageBitmap(bitmap);
+                if (!isDestroyed() && stamp == galleryStamp && image.isAttachedToWindow())
+                  image.setImageBitmap(bitmap);
                 else if (bitmap != null) bitmap.recycle();
               });
         });
@@ -6086,6 +6105,7 @@ public final class MainActivity extends ComponentActivity
   }
 
   private void closeOverlays() {
+    playStamp++;
     if (back != null) back.hideOverlay();
     mode = "camera";
     syncWindowColorMode();
@@ -6839,8 +6859,11 @@ public final class MainActivity extends ComponentActivity
   // ───────────────────────────── playback ─────────────────────────────
 
   private void openPlayback() {
-    if (busy || counting) return;
-    files.execute(
+    if (busy || counting) {
+      back.toast("ONE MOMENT", "still saving — photos open once the moment is kept");
+      return;
+    }
+    filesUi.execute(
         () -> {
           List<PhotoStore.Photo> list = store.list();
           runOnUiThread(
@@ -7026,12 +7049,15 @@ public final class MainActivity extends ComponentActivity
     playPanY = 0f;
     playImage.setImageDrawable(null);
     final ImageView targetView = playImage;
-    files.execute(
+    final int stamp = ++playStamp;
+    filesUi.execute(
         () -> {
+          if (stamp != playStamp) return; // already flipped past: don't decode a photo nobody sees
           Bitmap bitmap = store.thumbnail(p.image, 3200);
           runOnUiThread(
               () -> {
-                if (!isDestroyed() && targetView == playImage && targetView.isAttachedToWindow()) {
+                if (!isDestroyed() && stamp == playStamp
+                    && targetView == playImage && targetView.isAttachedToWindow()) {
                   targetView.setImageBitmap(bitmap);
                   applyPlayMatrix();
                 } else if (bitmap != null) {
