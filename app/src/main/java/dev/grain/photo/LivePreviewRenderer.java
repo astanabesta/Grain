@@ -75,6 +75,16 @@ final class LivePreviewRenderer implements GLSurfaceView.Renderer {
           + "  } else fragColor = c;\n"
           + "}\n";
 
+  /**
+   * Texture coordinates for the four destination corners (TL, TR, BR, BL). HWUI draws a
+   * SurfaceTexture layer with the UV quad Rect(0, 1, 1, 0) — in GL convention (0,0) is the
+   * BOTTOM-left corner, (0,1) the top-left. Grafika and WebRTC's SurfaceTexture quads use exactly
+   * this mapping. Binding (0,0) to the top-left corner (the obvious Android 2D habit) mirrors /
+   * rotates the whole preview relative to TextureView: a 90°-rotated rear stream turns sideways,
+   * and a mirrored front stream turns fully upside down. These must match the framework exactly.
+   */
+  static final float[] QUAD_UV = {0f, 1f, 1f, 1f, 1f, 0f, 0f, 0f};
+
   private final GLSurfaceView view;
   private final Callback callback;
 
@@ -100,7 +110,7 @@ final class LivePreviewRenderer implements GLSurfaceView.Renderer {
     this.view = view;
     this.callback = callback;
     quadUv = ByteBuffer.allocateDirect(8 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer();
-    quadUv.put(new float[] {0, 0, 1, 0, 1, 1, 0, 1}).position(0);
+    quadUv.put(QUAD_UV).position(0);
   }
 
   /** Swallow any GLThread exception and ask the host to degrade to the TextureView path. */
@@ -246,8 +256,8 @@ final class LivePreviewRenderer implements GLSurfaceView.Renderer {
   private void drawScene(int vw, int vh) {
     GLES30.glViewport(0, 0, Math.max(1, vw), Math.max(1, vh));
     GLES30.glUseProgram(program);
-    // NDC corners from view-space dst (dst is in pixels of the ORIGINAL view; for readback the
-    // framebuffer maps 1:1 over the same area, so just normalize)
+    // dst is in pixels of the original view; NDC is derived from that view, so the quad keeps
+    // the same relative placement/scaling even when rendering into the smaller readback FBO.
     FloatBuffer vb = corners.asFloatBuffer();
     vb.clear();
     for (int i = 0; i < 8; i += 2) {

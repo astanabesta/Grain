@@ -3,7 +3,18 @@
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
 
-### What's new in v0.9.39 — fixes the Xiaomi startup crash
+### What's new in v0.9.40 — the viewfinder is the right way up again
+
+Portrait preview came out upside down with left/right motion reversed, and didn't match the saved
+photo. Cause: the GPU quad bound texture coordinate (0,0) to the **top-left** corner, but Android's
+SurfaceTexture/TextureView uses GL convention where (0,0) is **bottom-left** (HWUI draws the layer
+with UV quad Rect(0,1,1,0)). That flipped the sampled image — a 90°-rotated rear stream turned
+sideways, and a mirrored front stream turned a full 180°. The GL quad now uses the exact framework
+mapping, so the GPU viewfinder samples the same texels as the classic TextureView path: right way
+up, correct motion, and the same framing as the photo. A new test compares GL sampling against the
+TextureView transform at every display rotation and zoom, so this cannot regress.
+
+### Previously in v0.9.39 — fixes the Xiaomi startup crash
 
 A crash report from a Xiaomi (Android 16) showed the exact cause: `S0032: no default precision
 defined for variable 'uLut'`. GLSL ES 3.0 gives `sampler3D` no default precision in fragment
