@@ -3,7 +3,15 @@
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
 
-### What's new in v0.9.37 — the viewfinder shows the film, live
+### What's new in v0.9.38 — hotfix: the freeze is gone
+
+v0.9.37's GPU readback let the histogram, focus peaking and magnifier ask the GPU for pixels
+directly — and those all run on the UI thread, so the whole app could stall and die. Preview
+readback is now a small cached frame the GPU refreshes in the background while tools are asking;
+callers always get an instant snapshot instead of waiting on the graphics pipeline. Same live look,
+no freezes.
+
+### Previously in v0.9.37 — the viewfinder shows the film, live
 
 Before, RAW film recipes only revealed their true look after the shot — the preview carried the
 exposure and white balance, but the film's colour science, tone curve and grain character only

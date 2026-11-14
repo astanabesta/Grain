@@ -9,8 +9,6 @@ import android.util.Log;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
@@ -125,31 +123,27 @@ final class LivePreviewRenderer implements GLSurfaceView.Renderer {
   }
 
   /**
-   * Synchronously read back the on-screen preview at the requested size (must not be called on the
-   * GL thread, obviously). Returns null when the preview is unavailable or times out.
+   * Snapshot of the on-screen preview at the requested size, from a cache the GL thread refreshes
+   * while consumers are asking. NEVER blocks: returns null until the first refresh lands (~150 ms
+   * after someone starts asking), then serves the latest frame with a CPU scale. Blocking a caller
+   * for GPU pixels is what killed v0.9.37 (ANRs: histogram/peaking/magnifier call on the UI thread).
    */
-  Bitmap readPixels(final int w, final int h) {
-    if (w <= 0 || h <= 0 || !surfaceLive) return null;
-    final Bitmap[] out = new Bitmap[1];
-    final CountDownLatch latch = new CountDownLatch(1);
-    view.queueEvent(
-        () -> {
-          try {
-            out[0] = readPixelsOnGl(w, h);
-          } catch (Throwable t) {
-            Log.w(TAG, "readback failed", t);
-          } finally {
-            latch.countDown();
-          }
-        });
-    try {
-      latch.await(400, TimeUnit.MILLISECONDS);
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      return null;
-    }
-    return out[0];
+  Bitmap readPixels(int w, int h) {
+    if (w <= 0 || h <= 0) return null;
+    lastReadRequestMs = android.os.SystemClock.uptimeMillis();
+    int[] px = cachePixels;
+    if (px == null || !surfaceLive) return null;
+    Bitmap src = Bitmap.createBitmap(px, cacheW, cacheH, Bitmap.Config.ARGB_8888);
+    if (src.getWidth() == w && src.getHeight() == h) return src;
+    return Bitmap.createScaledBitmap(src, w, h, true);
   }
+
+  // readhead cache: magnifier-size so focus tools stay sharp; histogram/peaking downscale cheaply
+  private static final int CACHE_W = 540, CACHE_H = 720;
+  private static final int CACHE_STRIDE = 6; // refresh every Nth frame (~5 Hz at 30 fps)
+  private volatile int[] cachePixels;
+  private volatile int cacheW, cacheH;
+  private volatile long lastReadRequestMs;
 
   // ── GL side ───────────────────────────────────────────────────────
 
@@ -188,7 +182,11 @@ final class LivePreviewRenderer implements GLSurfaceView.Renderer {
     }
     if (pendingLut != null || pendingSize == 0) uploadLut();
     drawScene(viewW, viewH);
+    long now = android.os.SystemClock.uptimeMillis();
+    if (now - lastReadRequestMs < 2500 && ++refreshCounter % CACHE_STRIDE == 0) refreshCache();
   }
+
+  private int refreshCounter;
 
   /** Draws the scene (OES sample → optional LUT) into the current framebuffer of view size vw×vh. */
   private void drawScene(int vw, int vh) {
@@ -251,7 +249,20 @@ final class LivePreviewRenderer implements GLSurfaceView.Renderer {
     pendingSize = -1;
   }
 
-  private Bitmap readPixelsOnGl(int w, int h) {
+  private void refreshCache() {
+    try {
+      int[] px = renderToPixels(CACHE_W, CACHE_H);
+      if (px != null) {
+        cachePixels = px;
+        cacheW = CACHE_W;
+        cacheH = CACHE_H;
+      }
+    } catch (Throwable t) {
+      Log.w(TAG, "readback cache refresh failed", t);
+    }
+  }
+
+  private int[] renderToPixels(int w, int h) {
     if (fbo == -1 || fboW != w || fboH != h) {
       if (fbo != -1) {
         GLES30.glDeleteFramebuffers(1, new int[] {fbo}, 0);
@@ -287,7 +298,7 @@ final class LivePreviewRenderer implements GLSurfaceView.Renderer {
             0xff000000 | ((px[o] & 0xff) << 16) | ((px[o + 1] & 0xff) << 8) | (px[o + 2] & 0xff);
       }
     }
-    return Bitmap.createBitmap(argb, w, h, Bitmap.Config.ARGB_8888);
+    return argb;
   }
 
   void releaseSurface() {
