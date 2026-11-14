@@ -20,6 +20,7 @@ import android.provider.Settings;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.util.TypedValue;
+import android.opengl.GLSurfaceView;
 import android.view.*;
 import android.widget.*;
 import androidx.activity.ComponentActivity;
@@ -31,6 +32,7 @@ import dev.grain.photo.develop.CubeLut;
 import dev.grain.photo.develop.FujiRecipe;
 import dev.grain.photo.develop.HiResMerger;
 import dev.grain.photo.develop.LutPreview;
+import dev.grain.photo.develop.LiveLook;
 import dev.grain.photo.develop.RawFrame;
 import dev.grain.photo.develop.TuningControl;
 import java.io.File;
@@ -66,7 +68,15 @@ public final class MainActivity extends ComponentActivity
   /** The camera back (dials, screen, buttons); turned with the phone inside {@link #ui}. */
   private CameraBack back;
   private LinearLayout panel;
-  private TextureView texture;
+  /** False when the GPU viewfinder failed to init: the app runs on a legacy TextureView. */
+  private boolean useGl;
+  private TextureView fallbackTexture;
+  private GLSurfaceView glView;
+  private LivePreviewRenderer previewRenderer;
+  /** The camera-facing side of the GL viewfinder (implements GrainCamera's texture seam). */
+  private GrainCamera.PreviewSurface preview;
+  /** Last recipe key baked into the live look LUT, to avoid rebaking on every OSD refresh. */
+  private String liveLookKey = "";
   /** Status line: never shown itself, the camera's screen shows it while working. */
   private TextView status;
   /** The camera back's shutter button (shows the self-timer count). */
@@ -366,11 +376,121 @@ public final class MainActivity extends ComponentActivity
             uri -> {
               if (uri != null) importLuts(uri);
             });
-    build();
     getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
       @Override public void handleOnBackPressed() { navigateBack(); }
     });
-    camera = new GrainCamera(this, texture, this);
+    // GPU viewfinder first (live recipe look); any failure falls back to a plain TextureView —
+    // the feature degrades gracefully instead of taking the camera down.
+    try {
+      glView = new GLSurfaceView(this);
+      glView.setEGLContextClientVersion(3);
+      previewRenderer =
+          new LivePreviewRenderer(
+              glView,
+              new LivePreviewRenderer.Callback() {
+                @Override
+                public void surfaceReady(SurfaceTexture s) {
+                  runOnUiThread(() -> openCamera());
+                }
+
+                @Override
+                public void surfaceGone() {
+                  runOnUiThread(() -> { ready = false; if (camera != null) camera.close(); });
+                }
+
+                @Override
+                public void sizeChanged(int w, int h) {
+                  runOnUiThread(() -> { if (camera != null) camera.updateTransform(zoom); });
+                }
+              });
+      glView.setRenderer(previewRenderer);
+      useGl = true;
+      preview =
+          new GrainCamera.PreviewSurface() {
+            @Override
+            public SurfaceTexture getSurfaceTexture() {
+              return previewRenderer.surface();
+            }
+
+            @Override
+            public boolean isAvailable() {
+              return previewRenderer.isLive();
+            }
+
+            @Override
+            public int getWidth() {
+              return glView.getWidth();
+            }
+
+            @Override
+            public int getHeight() {
+              return glView.getHeight();
+            }
+
+            @Override
+            public void setCorners(float[] dst, int w, int h) {
+              previewRenderer.setCorners(dst, w, h);
+            }
+          };
+    } catch (Throwable glBroken) {
+      android.util.Log.w("Grain", "GL viewfinder unavailable, falling back to TextureView", glBroken);
+      useGl = false;
+      fallbackTexture = new TextureView(this);
+      fallbackTexture.setSurfaceTextureListener(
+          new TextureView.SurfaceTextureListener() {
+            @Override
+            public void onSurfaceTextureAvailable(SurfaceTexture s, int w, int h) {
+              openCamera();
+            }
+
+            @Override
+            public void onSurfaceTextureSizeChanged(SurfaceTexture s, int w, int h) {
+              camera.updateTransform(zoom);
+            }
+
+            @Override
+            public boolean onSurfaceTextureDestroyed(SurfaceTexture s) {
+              ready = false;
+              camera.close();
+              return true;
+            }
+
+            @Override
+            public void onSurfaceTextureUpdated(SurfaceTexture s) {}
+          });
+      preview =
+          new GrainCamera.PreviewSurface() {
+            @Override
+            public SurfaceTexture getSurfaceTexture() {
+              return fallbackTexture.getSurfaceTexture();
+            }
+
+            @Override
+            public boolean isAvailable() {
+              return fallbackTexture.isAvailable();
+            }
+
+            @Override
+            public int getWidth() {
+              return fallbackTexture.getWidth();
+            }
+
+            @Override
+            public int getHeight() {
+              return fallbackTexture.getHeight();
+            }
+
+            @Override
+            public void setCorners(float[] dst, int w, int h) {
+              if (dst == null || dst.length < 8) return;
+              Matrix m = new Matrix();
+              m.setPolyToPoly(new float[] {0, 0, w, 0, w, h, 0, h}, 0, dst, 0, 4);
+              fallbackTexture.setTransform(m);
+            }
+          };
+    }
+    build(); // needs glView/fallbackTexture, so this runs after the preview stack init
+    camera = new GrainCamera(this, preview, this);
     camera.setFaceDetection(faceExposure);
     camera.setStackOff(stackOff);
     camera.setFaceLandmarks(faceLandmarks);
@@ -405,30 +525,9 @@ public final class MainActivity extends ComponentActivity
           }
         };
     applyRawFilesPreference();
-    texture.setSurfaceTextureListener(
-        new TextureView.SurfaceTextureListener() {
-          @Override
-          public void onSurfaceTextureAvailable(SurfaceTexture s, int w, int h) {
-            openCamera();
-          }
-
-          @Override
-          public void onSurfaceTextureSizeChanged(SurfaceTexture s, int w, int h) {
-            camera.updateTransform(zoom);
-          }
-
-          @Override
-          public boolean onSurfaceTextureDestroyed(SurfaceTexture s) {
-            ready = false;
-            camera.close();
-            return true;
-          }
-
-          @Override
-          public void onSurfaceTextureUpdated(SurfaceTexture s) {}
-        });
     updateLabels();
     updateThumb();
+    syncLiveLook();
     if (!preferences.getBoolean("onboardingDone", false)) {
       showOnboarding(0);
     }
@@ -468,8 +567,7 @@ public final class MainActivity extends ComponentActivity
     // The preview sits in screen coordinates (never rotated) exactly under the camera back's screen.
     frame = new FrameLayout(this);
     frame.setBackgroundColor(0xff000000);
-    texture = new TextureView(this);
-    frame.addView(texture, new FrameLayout.LayoutParams(-1, -1));
+    frame.addView(useGl ? glView : fallbackTexture, new FrameLayout.LayoutParams(-1, -1));
     root.addView(frame, new FrameLayout.LayoutParams(0, 0, Gravity.TOP | Gravity.START));
     ui = new FrameLayout(this);
     root.addView(ui, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
@@ -740,6 +838,7 @@ public final class MainActivity extends ComponentActivity
     savePrefs();
     updateLabels();
     camera.update(snapshot());
+    syncLiveLook();
     Recipe r = Recipe.ALL[id];
       String sub =
         r.raw
@@ -968,6 +1067,7 @@ public final class MainActivity extends ComponentActivity
               if (current.raw) {
                 boolean wasTuned = tuning.tuned(current);
                 tuning.reset(current);
+                syncLiveLook();
                 fillRecipePanel(recipePanel, current, dialog);
                 updateLabels();
                 message(
@@ -1119,6 +1219,7 @@ public final class MainActivity extends ComponentActivity
     Runnable changed =
         () -> {
           tuning.save(r, work);
+          syncLiveLook();
           showBadge.run();
           updateLabels();
           for (Runnable shown : rows) shown.run();
@@ -1808,6 +1909,7 @@ public final class MainActivity extends ComponentActivity
             runOnUiThread(
                 () -> {
                   lutPreviews.clear();
+                  syncLiveLook();
                   buildFilmRow();
                   updateLabels();
                   String fuji =
@@ -2867,7 +2969,7 @@ public final class MainActivity extends ComponentActivity
 
   private void openCamera() {
     if ("onboarding".equals(page)) return;
-    if (!resumed || !powerOn || !texture.isAvailable() || camera == null) return;
+    if (!resumed || !powerOn || !preview.isAvailable() || camera == null) return;
     if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
       if (!permissionAsked) {
         permissionAsked = true;
@@ -2911,6 +3013,7 @@ public final class MainActivity extends ComponentActivity
   @Override
   protected void onResume() {
     super.onResume();
+    if (glView != null) glView.onResume();
     resumed = true;
     if (startupFailed) {
       if (preferences == null) preferences = getSharedPreferences("grain", MODE_PRIVATE);
@@ -2930,7 +3033,7 @@ public final class MainActivity extends ComponentActivity
     if (sensors != null && gravity != null)
       sensors.registerListener(pitchListener, gravity, SensorManager.SENSOR_DELAY_GAME);
     if (remoteOn && remote == null && RemoteStream.localIp() != null) startRemote();
-    if (texture != null && texture.isAvailable()) openCamera();
+    if (preview != null && preview.isAvailable()) openCamera();
     readBattery();
     main.removeCallbacks(histogramTask);
     main.postDelayed(histogramTask, 500);
@@ -2993,6 +3096,7 @@ public final class MainActivity extends ComponentActivity
       camera.close();
     }
     ready = false;
+    if (glView != null) glView.onPause();
     if (busy && !saving) {
       busy = false;
       shutter.setText("◉");
@@ -3157,7 +3261,7 @@ public final class MainActivity extends ComponentActivity
   private void closeOnboarding() {
     preferences.edit().putBoolean("onboardingDone", true).apply();
     closePanel();
-    if (resumed && texture != null && texture.isAvailable()) openCamera();
+    if (resumed && preview.isAvailable()) openCamera();
   }
 
   /**
@@ -5083,8 +5187,7 @@ public final class MainActivity extends ComponentActivity
               || !powerOn
               || back == null
               || !"camera".equals(mode)
-              || texture == null
-              || !texture.isAvailable()) return;
+              || !preview.isAvailable()) return;
           if (histogramBitmap == null) {
             histogramBitmap = Bitmap.createBitmap(48, 64, Bitmap.Config.ARGB_8888);
             histogramPixels = new int[48 * 64];
@@ -5121,15 +5224,18 @@ public final class MainActivity extends ComponentActivity
   private Bitmap readPreview(Bitmap target) {
     lastReadFailed = false;
     try {
-      if (texture == null || target == null) return null;
+      if (target == null) return null;
       if (!PreviewMath.canReadBack(
           SystemClock.uptimeMillis(),
           previewSettleUntil,
-          texture.isAvailable(),
-          texture.getWidth(),
-          texture.getHeight()))
+          preview.isAvailable(),
+          preview.getWidth(),
+          preview.getHeight()))
         return null;
-      Bitmap b = texture.getBitmap(target);
+      Bitmap b =
+          useGl
+              ? previewRenderer.readPixels(target.getWidth(), target.getHeight())
+              : fallbackTexture.getBitmap(target);
       if (b == null) return null;
       if (!PreviewMath.fitsTarget(b.getWidth(), b.getHeight(), target.getWidth(), target.getHeight()))
         return null;
@@ -5170,8 +5276,8 @@ public final class MainActivity extends ComponentActivity
         public void run() {
           if (!resumed) return;
           main.postDelayed(this, 140);
-          if (!peaking || !ready || !powerOn || back == null || texture == null
-              || !texture.isAvailable() || !("camera".equals(mode)) || dispMode == 1) {
+          if (!peaking || !ready || !powerOn || back == null || !preview.isAvailable()
+              || !("camera".equals(mode)) || dispMode == 1) {
             if (back != null && back.state.peak != null) {
               back.state.peak = null;
               back.refresh();
@@ -5294,7 +5400,7 @@ public final class MainActivity extends ComponentActivity
           }
           magCanvas.drawColor(0xff101110);
           int factor = FocusMath.magFactor(magnifier);
-          if (texture != null && texture.isAvailable() && frame != null && frame.getWidth() > 0 && frame.getHeight() > 0) {
+          if (preview.isAvailable() && frame != null && frame.getWidth() > 0 && frame.getHeight() > 0) {
             if (magSource == null) {
               magSource = Bitmap.createBitmap(MAG_SRC_W, MAG_SRC_H, Bitmap.Config.ARGB_8888);
             }
@@ -5314,11 +5420,14 @@ public final class MainActivity extends ComponentActivity
               RectF imgRect = back.screenRect();
               float patchScreen = Math.max(48f, Math.min(imgRect.width(), imgRect.height()) * .42f);
               float zoomScale = factor * (MAG_OUT / patchScreen);
-              texture.getTransform(magTexMatrix);
               magMatrix.reset();
               magMatrix.postScale(
                   frame.getWidth() / (float) MAG_SRC_W,
                   frame.getHeight() / (float) MAG_SRC_H);
+              if (!useGl && fallbackTexture != null) {
+                fallbackTexture.getTransform(magTexMatrix);
+                magMatrix.postConcat(magTexMatrix);
+              }
               magMatrix.postConcat(magTexMatrix);
               magMatrix.postTranslate(-fx, -fy);
               magMatrix.postRotate(-uiRotation);
@@ -6426,6 +6535,7 @@ public final class MainActivity extends ComponentActivity
     }
     c.set(t, c.at(t) + (delta > 0 ? 1 : -1));
     tuning.save(r, t);
+    syncLiveLook();
     camera.update(snapshot());
     updateLabels();
   }
@@ -6438,6 +6548,7 @@ public final class MainActivity extends ComponentActivity
     if (!kelvin.enabled(t)) return;
     kelvin.set(t, kelvin.at(t) + delta);
     tuning.save(r, t);
+    syncLiveLook();
     camera.update(snapshot());
     updateLabels();
   }
@@ -6854,6 +6965,37 @@ public final class MainActivity extends ComponentActivity
     if (item.opens) return;
     item.change.accept(steps < 0 ? -1 : 1);
     refreshMenu();
+  }
+
+  /**
+   * Bakes the current recipe's full output look (the same transform the RAW developer applies,
+   * including your per-film tuning) into a 3D LUT for the GPU viewfinder. Plain ISP recipes and
+   * unavailable LUT files fall back to the straight feed — same as the preview showed before.
+   */
+  private void syncLiveLook() {
+    if (previewRenderer == null || luts == null) return;
+    Recipe r = Recipe.ALL[recipe];
+    if (r.fuji == null) {
+      liveLookKey = "isp-" + r.id;
+      previewRenderer.setLut(null, 0);
+      return;
+    }
+    final FujiRecipe fuji = tuning.effective(r); // tuned settings, exactly like capture
+    final String savedTuning = preferences.getString(RecipeTuning.key(r), ""); // rebake on retune
+    final String key = fuji.key + "@" + (savedTuning == null ? "" : savedTuning);
+    if (key.equals(liveLookKey)) return;
+    liveLookKey = key;
+    filesUi.execute(
+        () -> {
+          try {
+            CubeLut lut = fuji.apple() ? null : luts.load(fuji.filmSimulation);
+            LiveLook.Look look =
+                LiveLook.bake(lut, (fuji.apple() || fuji.sensorCalibrated()) ? fuji : null);
+            previewRenderer.setLut(look.rgb, look.size);
+          } catch (Exception e) {
+            previewRenderer.setLut(null, 0); // missing LUT: straight feed, like before
+          }
+        });
   }
 
   // ───────────────────────────── playback ─────────────────────────────

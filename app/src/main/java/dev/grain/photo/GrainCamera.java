@@ -196,8 +196,26 @@ public final class GrainCamera {
     }
   }
 
+  /**
+   * Where the camera preview goes. Implemented by the GL viewfinder (a LivePreviewRenderer glue
+   * around a GLSurfaceView): exposes the camera-facing SurfaceTexture, view size, and receives the
+   * crop/zoom mapping as four destination corners in view pixels (TextureView.setTransform's job).
+   */
+  public interface PreviewSurface {
+    SurfaceTexture getSurfaceTexture();
+
+    boolean isAvailable();
+
+    int getWidth();
+
+    int getHeight();
+
+    /** 4 destination corners of the view rectangle in view pixels (TL,TR,BR,BL as x,y pairs). */
+    void setCorners(float[] dst, int viewW, int viewH);
+  }
+
   private final Activity activity;
-  private final TextureView texture;
+  private final PreviewSurface texture;
   private final Listener listener;
   private final CameraManager manager;
   private final Handler main = new Handler(Looper.getMainLooper());
@@ -397,7 +415,7 @@ public final class GrainCamera {
         }
       };
 
-  public GrainCamera(Activity activity, TextureView texture, Listener listener) {
+  public GrainCamera(Activity activity, PreviewSurface texture, Listener listener) {
     this.activity = activity;
     this.texture = texture;
     this.listener = listener;
@@ -1827,12 +1845,11 @@ public final class GrainCamera {
     if (previewSize == null || chars == null
         || texture.getWidth() == 0 || texture.getHeight() == 0) return;
     int width=texture.getWidth(),height=texture.getHeight();
-    // TextureView already handles SENSOR_ORIENTATION. JPEG orientation is a different pipeline.
-    float[] source={0,0,width,0,width,height,0,height};
+    // The GL viewfinder already handles SENSOR_ORIENTATION. JPEG orientation is a different pipeline.
+    // The GL viewfinder handles SENSOR_ORIENTATION. JPEG orientation is a different pipeline.
     float[] destination=PreviewMath.destinationCorners(width,height,previewSize.getWidth(),
         previewSize.getHeight(),sensorRotation,displayDegrees(),zoom);
-    Matrix transform=new Matrix();transform.setPolyToPoly(source,0,destination,0,4);
-    texture.setTransform(transform);
+    texture.setCorners(destination, width, height);
   }
 
   private int displayDegrees() {
@@ -2164,7 +2181,7 @@ public final class GrainCamera {
             .put("sdk", Build.VERSION.SDK_INT)
             .put("cameraId", cameraId)
             .put("sensorOrientation", sensorRotation)
-            .put("previewOrientationStrategy", "TextureView sensor correction + display-only transform v2")
+            .put("previewOrientationStrategy", "GLSurfaceView sensor correction + corner-mapped crop/zoom v3")
             .put("displayDegrees", displayDegrees())
             .put("selectedJpeg", jpegSize.toString())
             .put("preview", previewSize.toString())

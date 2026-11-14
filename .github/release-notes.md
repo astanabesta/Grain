@@ -3,7 +3,20 @@
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
 
-### What's new in v0.9.36 — the gallery that stops sulking
+### What's new in v0.9.37 — the viewfinder shows the film, live
+
+Before, RAW film recipes only revealed their true look after the shot — the preview carried the
+exposure and white balance, but the film's colour science, tone curve and grain character only
+arrived at develop time. Now the viewfinder **is** the output: the camera feed runs through the
+GPU, and every pixel passes through the exact transform the develop pipeline will apply — tone
+model, film LUT, sensor calibration, Apple's Smart HDR path, *your* per-film tuning — baked once
+per recipe into a 3D look-up table. One texture fetch per pixel: the GPU barely notices (a video
+player works harder), so no, it's not too much pressure — it's how every serious filter camera
+works. Plain ISP looks (Daylight, Coast, Golden, Afterhours) keep showing the phone-does-it-live
+feed they always showed. If a device can't do GL ES 3, Grain quietly falls back to the old
+preview instead of going dark.
+
+### Previously in v0.9.36 — the gallery that stops sulking
 
 Photos, playback and saving shared one background worker, so a wall of gallery thumbnail decodes
 could stand in line ahead of everything else: empty gallery cards, a photo that took forever to
