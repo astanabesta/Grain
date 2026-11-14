@@ -35,6 +35,12 @@ final class LivePreviewRenderer implements GLSurfaceView.Renderer {
 
     /** View size changed. */
     void sizeChanged(int w, int h);
+
+    /**
+     * Anything on GLThread went wrong (shader compile, driver quirk, context loss). The host must
+     * switch to the TextureView preview: an exception escaping GLThread kills the whole process.
+     */
+    void glFailed(Throwable error);
   }
 
   private static final String TAG = "GrainPreview";
@@ -47,12 +53,15 @@ final class LivePreviewRenderer implements GLSurfaceView.Renderer {
           + "out vec2 vUV;\n"
           + "void main(){ vUV = (uTexMatrix * vec4(aUV, 0.0, 1.0)).xy; gl_Position = vec4(aPos, 0.0, 1.0); }\n";
 
-  private static final String FRAGMENT =
+  // Package-private so a JVM test can guard against the missing-precision regression.
+  static final String FRAGMENT =
       "#version 300 es\n"
           + "#extension GL_OES_EGL_image_external_essl3 : require\n"
-          + "precision mediump float;\n"
-          + "uniform samplerExternalOES uTex;\n"
-          + "uniform sampler3D uLut;\n"
+          + "precision highp float;\n"
+          // GLSL ES 3.0 defines no default precision for sampler3D in the fragment language:
+          // an unqualified uniform fails to compile on strict drivers. Never drop these qualifiers.
+          + "uniform highp samplerExternalOES uTex;\n"
+          + "uniform highp sampler3D uLut;\n"
           + "uniform float uLutSize;\n" // < .5 → straight passthrough
           + "in vec2 vUV;\n"
           + "out vec4 fragColor;\n"
@@ -73,6 +82,7 @@ final class LivePreviewRenderer implements GLSurfaceView.Renderer {
   private int oesTex, lutTex;
   private volatile SurfaceTexture surface;
   private volatile boolean surfaceLive; // GL is up and the camera-facing SurfaceTexture exists
+  private volatile boolean broken; // a GLThread failure happened; never touch GL again
   private final float[] texMatrix = new float[16];
   private final FloatBuffer quadUv;
   private ByteBuffer corners = ByteBuffer.allocateDirect(8 * 4).order(ByteOrder.nativeOrder());
@@ -93,6 +103,36 @@ final class LivePreviewRenderer implements GLSurfaceView.Renderer {
     quadUv.put(new float[] {0, 0, 1, 0, 1, 1, 0, 1}).position(0);
   }
 
+  /** Swallow any GLThread exception and ask the host to degrade to the TextureView path. */
+  private synchronized void fail(Throwable error) {
+    if (broken) return;
+    broken = true;
+    surfaceLive = false;
+    Log.e(TAG, "GL viewfinder failed; requesting TextureView fallback", error);
+    try {
+      callback.glFailed(error);
+    } catch (Throwable ignored) {
+      // the host must not become the crash either
+    }
+  }
+
+  /** Every GLThread task is wrapped: an uncaught exception there is a process-level crash. */
+  private void queue(Runnable work) {
+    try {
+      view.queueEvent(
+          () -> {
+            if (broken) return;
+            try {
+              work.run();
+            } catch (Throwable t) {
+              fail(t);
+            }
+          });
+    } catch (Throwable t) {
+      fail(t);
+    }
+  }
+
   /** The camera-facing surface, while the GL surface is alive; null otherwise. */
   SurfaceTexture surface() {
     return surfaceLive ? surface : null;
@@ -104,7 +144,7 @@ final class LivePreviewRenderer implements GLSurfaceView.Renderer {
 
   /** Screen rect the preview should cover (view coordinates, 0..1); mirrors TextureView's transform math. */
   void setCorners(float[] dstViewSpace, int vw, int vh) {
-    view.queueEvent(
+    queue(
         () -> {
           if (dstViewSpace == null || dstViewSpace.length < 8) return;
           dstCorners = dstViewSpace;
@@ -115,7 +155,7 @@ final class LivePreviewRenderer implements GLSurfaceView.Renderer {
 
   /** Queue a new baked look LUT (RGB8, n³ entries); null clears the look (passthrough). */
   void setLut(byte[] rgb, int size) {
-    view.queueEvent(
+    queue(
         () -> {
           pendingLut = rgb;
           pendingSize = size;
@@ -129,7 +169,7 @@ final class LivePreviewRenderer implements GLSurfaceView.Renderer {
    * for GPU pixels is what killed v0.9.37 (ANRs: histogram/peaking/magnifier call on the UI thread).
    */
   Bitmap readPixels(int w, int h) {
-    if (w <= 0 || h <= 0) return null;
+    if (w <= 0 || h <= 0 || broken) return null;
     lastReadRequestMs = android.os.SystemClock.uptimeMillis();
     int[] px = cachePixels;
     if (px == null || !surfaceLive) return null;
@@ -149,6 +189,8 @@ final class LivePreviewRenderer implements GLSurfaceView.Renderer {
 
   @Override
   public void onSurfaceCreated(GL10 gl, EGLConfig config) {
+    if (broken) return;
+    try {
     GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1);
     program = buildProgram();
     oesTex = genTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES);
@@ -164,26 +206,38 @@ final class LivePreviewRenderer implements GLSurfaceView.Renderer {
     lutTex = genTexture(GLES30.GL_TEXTURE_3D);
     if (pendingLut != null && pendingSize > 0) uploadLut();
     callback.surfaceReady(surface);
+    } catch (Throwable t) {
+      fail(t);
+    }
   }
 
   @Override
   public void onSurfaceChanged(GL10 gl, int w, int h) {
-    callback.sizeChanged(w, h);
+    if (broken) return;
+    try {
+      callback.sizeChanged(w, h);
+    } catch (Throwable t) {
+      fail(t);
+    }
   }
 
   @Override
   public void onDrawFrame(GL10 gl) {
-    if (!surfaceLive) return;
+    if (broken || !surfaceLive) return;
     try {
-      surface.updateTexImage();
-      surface.getTransformMatrix(texMatrix);
+      try {
+        surface.updateTexImage();
+        surface.getTransformMatrix(texMatrix);
+      } catch (Throwable t) {
+        return; // no frame yet
+      }
+      if (pendingLut != null || pendingSize == 0) uploadLut();
+      drawScene(viewW, viewH);
+      long now = android.os.SystemClock.uptimeMillis();
+      if (now - lastReadRequestMs < 2500 && ++refreshCounter % CACHE_STRIDE == 0) refreshCache();
     } catch (Throwable t) {
-      return; // no frame yet
+      fail(t);
     }
-    if (pendingLut != null || pendingSize == 0) uploadLut();
-    drawScene(viewW, viewH);
-    long now = android.os.SystemClock.uptimeMillis();
-    if (now - lastReadRequestMs < 2500 && ++refreshCounter % CACHE_STRIDE == 0) refreshCache();
   }
 
   private int refreshCounter;
@@ -302,7 +356,7 @@ final class LivePreviewRenderer implements GLSurfaceView.Renderer {
   }
 
   void releaseSurface() {
-    view.queueEvent(
+    queue(
         () -> {
           if (surface != null) {
             try {
@@ -333,7 +387,11 @@ final class LivePreviewRenderer implements GLSurfaceView.Renderer {
     GLES30.glCompileShader(s);
     int[] ok = new int[1];
     GLES30.glGetShaderiv(s, GLES30.GL_COMPILE_STATUS, ok, 0);
-    if (ok[0] == 0) throw new RuntimeException("shader: " + GLES30.glGetShaderInfoLog(s));
+    if (ok[0] == 0) {
+      String why = GLES30.glGetShaderInfoLog(s);
+      GLES30.glDeleteShader(s);
+      throw new RuntimeException("shader: " + why);
+    }
     return s;
   }
 

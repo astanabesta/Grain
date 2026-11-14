@@ -69,12 +69,13 @@ public final class MainActivity extends ComponentActivity
   private CameraBack back;
   private LinearLayout panel;
   /** False when the GPU viewfinder failed to init: the app runs on a legacy TextureView. */
-  private boolean useGl;
-  private TextureView fallbackTexture;
+  boolean useGl;
+  TextureView fallbackTexture;
   private GLSurfaceView glView;
   private LivePreviewRenderer previewRenderer;
   /** The camera-facing side of the GL viewfinder (implements GrainCamera's texture seam). */
-  private GrainCamera.PreviewSurface preview;
+  private volatile GrainCamera.PreviewSurface previewTarget;
+  GrainCamera.PreviewSurface preview;
   /** Last recipe key baked into the live look LUT, to avoid rebaking on every OSD refresh. */
   private String liveLookKey = "";
   /** Status line: never shown itself, the camera's screen shows it while working. */
@@ -379,8 +380,45 @@ public final class MainActivity extends ComponentActivity
     getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
       @Override public void handleOnBackPressed() { navigateBack(); }
     });
-    // GPU viewfinder first (live recipe look); any failure falls back to a plain TextureView —
-    // the feature degrades gracefully instead of taking the camera down.
+    // GrainCamera holds one PreviewSurface for its whole life; the delegate can be swapped to a
+    // TextureView at runtime if GLThread reports a driver/shader failure (which otherwise kills
+    // the whole process, since it happens off the UI thread where our setup try/catch can't see it).
+    preview =
+        new GrainCamera.PreviewSurface() {
+          private GrainCamera.PreviewSurface target() {
+            return previewTarget;
+          }
+
+          @Override
+          public SurfaceTexture getSurfaceTexture() {
+            GrainCamera.PreviewSurface t = target();
+            return t == null ? null : t.getSurfaceTexture();
+          }
+
+          @Override
+          public boolean isAvailable() {
+            GrainCamera.PreviewSurface t = target();
+            return t != null && t.isAvailable();
+          }
+
+          @Override
+          public int getWidth() {
+            GrainCamera.PreviewSurface t = target();
+            return t == null ? 0 : t.getWidth();
+          }
+
+          @Override
+          public int getHeight() {
+            GrainCamera.PreviewSurface t = target();
+            return t == null ? 0 : t.getHeight();
+          }
+
+          @Override
+          public void setCorners(float[] dst, int w, int h) {
+            GrainCamera.PreviewSurface t = target();
+            if (t != null) t.setCorners(dst, w, h);
+          }
+        };
     try {
       glView = new GLSurfaceView(this);
       glView.setEGLContextClientVersion(3);
@@ -390,22 +428,38 @@ public final class MainActivity extends ComponentActivity
               new LivePreviewRenderer.Callback() {
                 @Override
                 public void surfaceReady(SurfaceTexture s) {
-                  runOnUiThread(() -> openCamera());
+                  runOnUiThread(
+                      () -> {
+                        if (useGl) openCamera();
+                      });
                 }
 
                 @Override
                 public void surfaceGone() {
-                  runOnUiThread(() -> { ready = false; if (camera != null) camera.close(); });
+                  runOnUiThread(
+                      () -> {
+                        if (!useGl) return;
+                        ready = false;
+                        if (camera != null) camera.close();
+                      });
                 }
 
                 @Override
                 public void sizeChanged(int w, int h) {
-                  runOnUiThread(() -> { if (camera != null) camera.updateTransform(zoom); });
+                  runOnUiThread(
+                      () -> {
+                        if (useGl && camera != null) camera.updateTransform(zoom);
+                      });
+                }
+
+                @Override
+                public void glFailed(Throwable error) {
+                  runOnUiThread(() -> handleGlFailure(error));
                 }
               });
       glView.setRenderer(previewRenderer);
       useGl = true;
-      preview =
+      previewTarget =
           new GrainCamera.PreviewSurface() {
             @Override
             public SurfaceTexture getSurfaceTexture() {
@@ -435,59 +489,9 @@ public final class MainActivity extends ComponentActivity
     } catch (Throwable glBroken) {
       android.util.Log.w("Grain", "GL viewfinder unavailable, falling back to TextureView", glBroken);
       useGl = false;
-      fallbackTexture = new TextureView(this);
-      fallbackTexture.setSurfaceTextureListener(
-          new TextureView.SurfaceTextureListener() {
-            @Override
-            public void onSurfaceTextureAvailable(SurfaceTexture s, int w, int h) {
-              openCamera();
-            }
-
-            @Override
-            public void onSurfaceTextureSizeChanged(SurfaceTexture s, int w, int h) {
-              camera.updateTransform(zoom);
-            }
-
-            @Override
-            public boolean onSurfaceTextureDestroyed(SurfaceTexture s) {
-              ready = false;
-              camera.close();
-              return true;
-            }
-
-            @Override
-            public void onSurfaceTextureUpdated(SurfaceTexture s) {}
-          });
-      preview =
-          new GrainCamera.PreviewSurface() {
-            @Override
-            public SurfaceTexture getSurfaceTexture() {
-              return fallbackTexture.getSurfaceTexture();
-            }
-
-            @Override
-            public boolean isAvailable() {
-              return fallbackTexture.isAvailable();
-            }
-
-            @Override
-            public int getWidth() {
-              return fallbackTexture.getWidth();
-            }
-
-            @Override
-            public int getHeight() {
-              return fallbackTexture.getHeight();
-            }
-
-            @Override
-            public void setCorners(float[] dst, int w, int h) {
-              if (dst == null || dst.length < 8) return;
-              Matrix m = new Matrix();
-              m.setPolyToPoly(new float[] {0, 0, w, 0, w, h, 0, h}, 0, dst, 0, 4);
-              fallbackTexture.setTransform(m);
-            }
-          };
+      glView = null;
+      previewRenderer = null;
+      previewTarget = buildFallbackPreview();
     }
     build(); // needs glView/fallbackTexture, so this runs after the preview stack init
     camera = new GrainCamera(this, preview, this);
@@ -531,6 +535,96 @@ public final class MainActivity extends ComponentActivity
     if (!preferences.getBoolean("onboardingDone", false)) {
       showOnboarding(0);
     }
+  }
+
+  /** The plain TextureView preview: used when GL is missing or fails later on GLThread. */
+  private GrainCamera.PreviewSurface buildFallbackPreview() {
+    fallbackTexture = new TextureView(this);
+    fallbackTexture.setSurfaceTextureListener(
+        new TextureView.SurfaceTextureListener() {
+          @Override
+          public void onSurfaceTextureAvailable(SurfaceTexture s, int w, int h) {
+            openCamera();
+          }
+
+          @Override
+          public void onSurfaceTextureSizeChanged(SurfaceTexture s, int w, int h) {
+            if (camera != null) camera.updateTransform(zoom);
+          }
+
+          @Override
+          public boolean onSurfaceTextureDestroyed(SurfaceTexture s) {
+            ready = false;
+            if (camera != null) camera.close();
+            return true;
+          }
+
+          @Override
+          public void onSurfaceTextureUpdated(SurfaceTexture s) {}
+        });
+    return new GrainCamera.PreviewSurface() {
+      @Override
+      public SurfaceTexture getSurfaceTexture() {
+        return fallbackTexture.getSurfaceTexture();
+      }
+
+      @Override
+      public boolean isAvailable() {
+        return fallbackTexture.isAvailable();
+      }
+
+      @Override
+      public int getWidth() {
+        return fallbackTexture.getWidth();
+      }
+
+      @Override
+      public int getHeight() {
+        return fallbackTexture.getHeight();
+      }
+
+      @Override
+      public void setCorners(float[] dst, int w, int h) {
+        if (dst == null || dst.length < 8) return;
+        Matrix m = new Matrix();
+        m.setPolyToPoly(new float[] {0, 0, w, 0, w, h, 0, h}, 0, dst, 0, 4);
+        fallbackTexture.setTransform(m);
+      }
+    };
+  }
+
+  /**
+   * A GLThread failure must never become an uncaught exception: swap the camera onto a TextureView
+   * in place. The live film look is lost on such a GPU, but the camera keeps shooting.
+   */
+  void handleGlFailure(Throwable error) {
+    if (!useGl) return;
+    if (Looper.myLooper() != Looper.getMainLooper()) {
+      runOnUiThread(() -> handleGlFailure(error));
+      return;
+    }
+    android.util.Log.w("Grain", "GL viewfinder failed on GLThread; switching to TextureView", error);
+    useGl = false;
+    try {
+      // Stop the (now broken) GL thread from drawing another frame.
+      if (glView != null) glView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
+    } catch (Throwable ignored) {
+    }
+    previewTarget = buildFallbackPreview();
+    if (frame != null) {
+      try {
+        frame.addView(fallbackTexture, new FrameLayout.LayoutParams(-1, -1));
+      } catch (Throwable ignored) {
+      }
+    } // otherwise build() adds it, since useGl is now false
+    if (camera != null) {
+      ready = false;
+      try {
+        camera.close();
+      } catch (Throwable ignored) {
+      }
+    }
+    if (fallbackTexture.isAvailable()) openCamera();
   }
 
   private void build() {
@@ -3013,7 +3107,7 @@ public final class MainActivity extends ComponentActivity
   @Override
   protected void onResume() {
     super.onResume();
-    if (glView != null) glView.onResume();
+    if (glView != null && useGl) glView.onResume();
     resumed = true;
     if (startupFailed) {
       if (preferences == null) preferences = getSharedPreferences("grain", MODE_PRIVATE);
@@ -3096,7 +3190,7 @@ public final class MainActivity extends ComponentActivity
       camera.close();
     }
     ready = false;
-    if (glView != null) glView.onPause();
+    if (glView != null && useGl) glView.onPause();
     if (busy && !saving) {
       busy = false;
       shutter.setText("◉");
@@ -5234,8 +5328,10 @@ public final class MainActivity extends ComponentActivity
         return null;
       Bitmap b =
           useGl
-              ? previewRenderer.readPixels(target.getWidth(), target.getHeight())
-              : fallbackTexture.getBitmap(target);
+              ? (previewRenderer == null
+                  ? null
+                  : previewRenderer.readPixels(target.getWidth(), target.getHeight()))
+              : (fallbackTexture == null ? null : fallbackTexture.getBitmap(target));
       if (b == null) return null;
       if (!PreviewMath.fitsTarget(b.getWidth(), b.getHeight(), target.getWidth(), target.getHeight()))
         return null;
@@ -5428,7 +5524,6 @@ public final class MainActivity extends ComponentActivity
                 fallbackTexture.getTransform(magTexMatrix);
                 magMatrix.postConcat(magTexMatrix);
               }
-              magMatrix.postConcat(magTexMatrix);
               magMatrix.postTranslate(-fx, -fy);
               magMatrix.postRotate(-uiRotation);
               magMatrix.postScale(zoomScale, zoomScale);
@@ -6973,7 +7068,7 @@ public final class MainActivity extends ComponentActivity
    * unavailable LUT files fall back to the straight feed — same as the preview showed before.
    */
   private void syncLiveLook() {
-    if (previewRenderer == null || luts == null) return;
+    if (!useGl || previewRenderer == null || luts == null) return;
     Recipe r = Recipe.ALL[recipe];
     if (r.fuji == null) {
       liveLookKey = "isp-" + r.id;

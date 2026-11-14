@@ -3,7 +3,17 @@
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
 
-### What's new in v0.9.38 — hotfix: the freeze is gone
+### What's new in v0.9.39 — fixes the Xiaomi startup crash
+
+A crash report from a Xiaomi (Android 16) showed the exact cause: `S0032: no default precision
+defined for variable 'uLut'`. GLSL ES 3.0 gives `sampler3D` no default precision in fragment
+shaders, so the live-look shader failed to compile on strict drivers — and because shader
+compilation happens on GLThread, it took the app down at startup. Both samplers are now explicitly
+precision-qualified. On top of that, *any* future GL-thread failure now degrades to the classic
+TextureView viewfinder instead of crashing: the camera keeps shooting, only the live film look is
+lost on such a GPU.
+
+### Previously in v0.9.38 — hotfix: the freeze is gone
 
 v0.9.37's GPU readback let the histogram, focus peaking and magnifier ask the GPU for pixels
 directly — and those all run on the UI thread, so the whole app could stall and die. Preview
