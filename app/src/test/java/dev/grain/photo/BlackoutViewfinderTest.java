@@ -201,7 +201,7 @@ public class BlackoutViewfinderTest {
     MainActivity activity = controller.get();
     assertFalse("MainActivity must not fail startup", activity.startupFailed);
 
-    // Cycle around the full 8-stop DRIVE dial (including HI-RES 1/2/3) and back to SINGLE.
+    // Cycle around the full 10-stop DRIVE dial (including HI-RES 1/2/3) and back to SINGLE.
     for (int i = 0; i < MainActivity.DRIVES.length; i++) {
       activity.key(CameraBack.K_DRIVE, 0);
     }

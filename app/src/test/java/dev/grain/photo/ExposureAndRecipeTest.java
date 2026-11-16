@@ -425,7 +425,7 @@ public class ExposureAndRecipeTest {
 
   @Test
   public void driveModeHelpersCoverEveryDialStopWithoutRecursing() {
-    assertEquals(8, DriveModes.DRIVES.length);
+    assertEquals(10, DriveModes.DRIVES.length);
     for (int d = 0; d < DriveModes.DRIVES.length; d++) {
       boolean hiRes = DriveModes.isHiRes(d);
       boolean expectedHiRes =

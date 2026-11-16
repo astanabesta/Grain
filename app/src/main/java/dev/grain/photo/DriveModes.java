@@ -14,7 +14,9 @@ public final class DriveModes {
       DRIVE_FOCUS_BKT = 4,
       DRIVE_HIRES_36 = 5,
       DRIVE_HIRES_48 = 6,
-      DRIVE_HIRES_112 = 7;
+      DRIVE_HIRES_112 = 7,
+      DRIVE_MERGE_DETAIL = 8,
+      DRIVE_MERGE_PANO = 9;
 
   public static final String[] DRIVES = {
     "SINGLE",
@@ -24,10 +26,30 @@ public final class DriveModes {
     "FOCUS BKT",
     "HI-RES 1 36MP",
     "HI-RES 2 48MP",
-    "HI-RES 3 112MP"
+    "HI-RES 3 112MP",
+    "MERGE DETAIL",
+    "MERGE PANO"
   };
 
   private DriveModes() {}
+
+  /** True for the two MERGE modes (capture all frames first, develop once). */
+  public static boolean isMerge(int drive) {
+    return drive == DRIVE_MERGE_DETAIL || drive == DRIVE_MERGE_PANO;
+  }
+
+  public static boolean isMergeDetail(int drive) {
+    return drive == DRIVE_MERGE_DETAIL;
+  }
+
+  /** Frames in a merge set. */
+  public static int mergeFramesFor(int drive) {
+    return 4;
+  }
+
+  public static String mergeLabel(int drive) {
+    return drive == DRIVE_MERGE_PANO ? "MERGE PANO" : "MERGE DETAIL";
+  }
 
   /** True for the tripod super-resolution drive modes. */
   public static boolean isHiRes(int drive) {

@@ -12,6 +12,7 @@ import android.os.*;
 import android.util.*;
 import android.view.*;
 import dev.grain.photo.develop.FujiRecipe;
+import dev.grain.photo.develop.MergeMerger;
 import dev.grain.photo.develop.RawDeveloper;
 import dev.grain.photo.develop.RawFrame;
 import dev.grain.photo.develop.RawStack;
@@ -262,6 +263,26 @@ public final class GrainCamera {
   private int pendingStackFrames = 1;
   private float pendingStackGate = 0f, pendingStackShift = 0f;
   private Runnable burstSalvage;
+  /** MERGE DETAIL: fire all frames in one captureBurst and super-res them instead of noise-stacking. */
+  private volatile boolean mergeDetailBurst, suppressDng;
+  private int mergeDetailFrames = 4;
+  private long mergeDetailTargetPixels = 36_000_000L;
+  private double mergeDetailMaxScale = 2.0;
+  private boolean pendingMergeDetail;
+  private String mergeDetailShifts = "";
+
+  /** Enables/disables the fast MERGE DETAIL burst for the next capture. */
+  public void setMergeDetailBurst(boolean on, int frames, long targetPixels, double maxScale) {
+    mergeDetailBurst = on;
+    mergeDetailFrames = frames;
+    mergeDetailTargetPixels = targetPixels;
+    mergeDetailMaxScale = maxScale;
+  }
+
+  /** MERGE modes deliver one JPEG; no per-frame or reference DNG is written while this is on. */
+  public void setSuppressDng(boolean on) {
+    suppressDng = on;
+  }
 
   public void setStackMode(int mode) {
     stackMode = mode == STACK_OFF ? STACK_OFF : STACK_AUTO;
@@ -1331,6 +1352,7 @@ public final class GrainCamera {
           pendingBytes = null;
           pendingResult = null;
           pendingWantsRaw = wantsRaw;
+          pendingMergeDetail = mergeDetailBurst && wantsRaw;
           int token = generation;
           boolean manualActive =
               manualSensor && (snapshot.shutterNs > 0 || snapshot.iso > 0);
@@ -1536,6 +1558,45 @@ public final class GrainCamera {
       // In that degraded case the metadata frame is a same-burst sibling of the JPEG — same AE,
       // ~50 ms apart; still honest evidence, and the shot can never stall.
       pendingImageTime = lastTs;
+      if (pendingMergeDetail && ts.size() > 1) {
+        // MERGE DETAIL fires four RAW frames in one captureBurst. Fold them into the super-res
+        // accumulator one at a time instead of copying four full 36/48 MP short[] planes onto the
+        // Java heap; the burst Images are closed as soon as their pixels have been splatted.
+        MergeMerger.DetailAccumulator acc = null;
+        for (int i = 0; i < ts.size(); i++) {
+          Long tf = ts.get(i);
+          Image im = burstImages.get(tf);
+          short[] plane = RawSupport.planeShorts(im);
+          TotalCaptureResult frResult = burstResults.get(tf);
+          if (frResult == null) frResult = refResult;
+          RawFrame fr =
+              RawSupport.frame(
+                  plane, rawSize.getWidth(), rawSize.getHeight(), chars, frResult);
+          if (acc == null)
+            acc =
+                new MergeMerger.DetailAccumulator(
+                    fr, mergeDetailTargetPixels, mergeDetailMaxScale);
+          else acc.add(fr);
+          if (i > 0) {
+            im.close(); // frame 1 stays open as the DNG/reference Image
+            burstImages.remove(tf); // avoid a second close in clearPending()
+          }
+        }
+        MergeMerger.Result mr = acc.finish();
+        RawFrame stacked = mr.frame;
+        stacked.stackCount = mr.framesUsed;
+        pendingStackFrames = mr.framesUsed;
+        pendingStackGate = 0f;
+        pendingStackShift = 0f;
+        mergeDetailShifts = mr.shifts;
+        pendingStack = stacked;
+        pendingResult = lastResult;
+        pendingRaw = refImg; // DNG pixels = reference frame
+        pendingRawTime = ts.get(0);
+        burstImages.clear();
+        tryFinish();
+        return;
+      }
       java.util.List<short[]> planes = new java.util.ArrayList<>(ts.size());
       for (Long t : ts) planes.add(RawSupport.planeShorts(burstImages.get(t)));
       for (int i = 1; i < ts.size(); i++) burstImages.get(ts.get(i)).close();
@@ -1543,6 +1604,7 @@ public final class GrainCamera {
       if (ts.size() == 1) {
         // single-frame salvage: only viable when the lone raw frame is the last request's frame,
         // i.e. the one that also produced the JPEG (the plain path requires matching timestamps)
+        if (pendingMergeDetail) pendingMergeDetail = false; // a burst that lost 3 frames is not a merge
         if (!ts.get(0).equals(lastTs)) {
           refImg.close();
           burstImages.clear();
@@ -1560,17 +1622,20 @@ public final class GrainCamera {
       // noise so badly that the 2.4-sigma motion gate fires on mostly-static pixels and silently
       // discards the stacking gain (device evidence, v0.9.20: 43% gated on a still scene at ISO
       // 5834; output at noise parity with the single-frame shot).
-      double[] gateNoise = RawDeveloper.stackGateNoise(refMeta);
-      double nS = gateNoise[0], nO = gateNoise[1];
-      float black = (refMeta.black[0] + refMeta.black[1] + refMeta.black[2] + refMeta.black[3]) / 4f;
-      RawStack.Out merged =
-          RawStack.merge(planes, rawSize.getWidth(), rawSize.getHeight(), rawSize.getWidth(), black, refMeta.white, nS, nO);
-      RawFrame stacked = RawStack.withData(refMeta, merged.data);
-      stacked.stackCount = merged.framesUsed;
+      RawFrame stacked;
+      {
+        double[] gateNoise = RawDeveloper.stackGateNoise(refMeta);
+        double nS = gateNoise[0], nO = gateNoise[1];
+        float black = (refMeta.black[0] + refMeta.black[1] + refMeta.black[2] + refMeta.black[3]) / 4f;
+        RawStack.Out merged =
+            RawStack.merge(planes, rawSize.getWidth(), rawSize.getHeight(), rawSize.getWidth(), black, refMeta.white, nS, nO);
+        stacked = RawStack.withData(refMeta, merged.data);
+        stacked.stackCount = merged.framesUsed;
+        pendingStackFrames = merged.framesUsed;
+        pendingStackGate = merged.gatedFraction;
+        pendingStackShift = merged.meanShift;
+      }
       pendingStack = stacked;
-      pendingStackFrames = merged.framesUsed;
-      pendingStackGate = merged.gatedFraction;
-      pendingStackShift = merged.meanShift;
       pendingResult = lastResult;
       pendingRaw = refImg; // DNG pixels = reference frame
       pendingRawTime = ts.get(0);
@@ -1593,6 +1658,10 @@ public final class GrainCamera {
                   "Photo capture timed out. No success was reported; retry the shot.");
           },
           12000);
+      if (pendingMergeDetail) {
+        submitBurst(snapshot, mergeDetailFrames);
+        return;
+      }
       int stackFrames = wantStackFrames(snapshot, wantsRaw);
       if (stackFrames > 1) {
         submitBurst(snapshot, stackFrames);
@@ -1691,7 +1760,7 @@ public final class GrainCamera {
             } catch (RuntimeException ignored) {
             }
           }
-          File dir = dngDirectory;
+          File dir = suppressDng ? null : dngDirectory;
           if (dir != null) {
             dng = new File(dir, "capture-" + timestamp + ".dng");
             try {
@@ -1703,7 +1772,7 @@ public final class GrainCamera {
               receipt.put("dngWarning", "DNG not written: " + e.getMessage());
             }
           }
-          if (pendingStackFrames > 1)
+          if (pendingStackFrames > 1 && !suppressDng)
             receipt.put(
                 "dngNote",
                 "DNG holds reference frame 1; the photo was developed from a stack of "
@@ -1713,6 +1782,11 @@ public final class GrainCamera {
         } finally {
           raw.close();
         }
+        if (pendingMergeDetail) {
+          receipt.put("mergeMode", "detail");
+          receipt.put("mergeFrames", pendingStackFrames);
+          receipt.put("mergeShifts", mergeDetailShifts);
+        }
         receipt
             .put("raw", true)
             .put("sourceFormat", "Camera2 RAW_SENSOR developed on device; phone ISP JPEG kept as reference")
@@ -1721,7 +1795,8 @@ public final class GrainCamera {
             .put("stackMeanShiftPx", Math.round(pendingStackShift * 10f) / 10f)
             .put("rawSize", frame.width + "x" + frame.height);
         RawCapture capture =
-            new RawCapture(frame, bytes, dng, orientation, (orientation + extraRotation()) % 360);
+            new RawCapture(frame, suppressDng ? null : bytes, dng, orientation,
+                (orientation + extraRotation()) % 360);
         clearPending();
         main.post(() -> listener.capturedRaw(capture, snap, receipt));
         return;
@@ -1766,6 +1841,8 @@ public final class GrainCamera {
     burstWanted = 0;
     pendingStack = null;
     pendingStackFrames = 1;
+    pendingMergeDetail = false;
+    mergeDetailShifts = "";
     for (Image im : burstImages.values()) im.close();
     burstImages.clear();
     burstResults.clear();

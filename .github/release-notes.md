@@ -3,7 +3,44 @@
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
 
-### What's new in v0.9.40 — the viewfinder is the right way up again
+### What's new in v0.9.41 — MERGE: stitch or super-res, developed once
+
+Two new stops on the DRIVE dial, both following the same rule: **capture 4 undeveloped linear RAW
+frames first, then process once at the end**. No film simulation, tone curve or grain is applied per
+frame — the recipe runs a single time on the merged frame, so blending happens in linear light and
+grain is laid down once.
+
+- **MERGE DETAIL** — handheld. The camera's `captureBurst` fires four RAW frames at sensor cadence
+  and the existing sub-pixel super-resolution accumulator folds them into one higher-detail frame.
+  No tripod, no OIS vibration, and no merge work between shutters. Hand jitter supplies the
+  sub-pixel phases; the motion gate degrades locally to the reference frame instead of ghosting a
+  moving subject. Total capture time is now bounded mostly by exposure time, not by four 36 MP
+  merges.
+- **MERGE PANO** — guided 4-shot sweep. Hold level and pan slowly in one direction; frames are
+  registered by a coarse-to-fine translation search, snapped to even raw pixels so the Bayer phase
+  stays intact, then folded into one wider canvas with feathered seams and a ghost gate. The canvas
+  keeps the full horizontal union and the vertical strip every frame covers, so there are no holes
+  and no boundary warp. **v1 is translation-only**: pan straight rather than rotating the phone.
+- **Memory-safe at 36/48 MP.** DETAIL folds each burst frame into the super-resolution accumulator
+  as it is read. PANO spools each undeveloped linear RAW to a private cache file and reads back only
+  the row strips the stitch needs — four full-resolution sensor frames are never stacked on the Java
+  heap. The spool carries the HAL calibration metadata and is deleted on success, failure or cancel.
+- Tripod **HI-RES 36/48/112 is unchanged**; it still uses its settle timer and OIS sub-pixel shifts.
+  Use MERGE DETAIL when the subject might move.
+- Output for both MERGE modes is **one finished JPEG**; no per-frame or reference DNG is written and
+  no new re-editable file format is introduced.
+
+New `MergeMerger` and `MergeFrameStore` are pure Java and covered by JVM tests: known-pan recovery,
+full canvas coverage, seam-free overlap, moving-subject rejection, dropping unregisterable frames,
+4-frame super-resolution, spool metadata/pixel round-trip, and byte-identical PANO output from file
+sources. A `DriveModes` test pins the new stops and their zero-length settle timer.
+
+Not in this release: **merging existing DNGs from the gallery** (needs a DNG/TIFF reader plus
+calibration metadata — a separate subsystem), homography/rotation correction for PANO, and boundary
+warp. If a HAL delivers fewer than four frames in the rapid burst, DETAIL merges the frames that
+did arrive (or falls back to a single-frame capture if only one arrives).
+
+### Previously in v0.9.40 — the viewfinder is the right way up again
 
 Portrait preview came out upside down with left/right motion reversed, and didn't match the saved
 photo. Cause: the GPU quad bound texture coordinate (0,0) to the **top-left** corner, but Android's

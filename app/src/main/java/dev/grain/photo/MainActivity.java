@@ -33,6 +33,8 @@ import dev.grain.photo.develop.FujiRecipe;
 import dev.grain.photo.develop.HiResMerger;
 import dev.grain.photo.develop.LutPreview;
 import dev.grain.photo.develop.LiveLook;
+import dev.grain.photo.develop.MergeFrameStore;
+import dev.grain.photo.develop.MergeMerger;
 import dev.grain.photo.develop.RawFrame;
 import dev.grain.photo.develop.TuningControl;
 import java.io.File;
@@ -145,7 +147,9 @@ public final class MainActivity extends ComponentActivity
       DRIVE_FOCUS_BKT = DriveModes.DRIVE_FOCUS_BKT,
       DRIVE_HIRES_36 = DriveModes.DRIVE_HIRES_36,
       DRIVE_HIRES_48 = DriveModes.DRIVE_HIRES_48,
-      DRIVE_HIRES_112 = DriveModes.DRIVE_HIRES_112;
+      DRIVE_HIRES_112 = DriveModes.DRIVE_HIRES_112,
+      DRIVE_MERGE_DETAIL = DriveModes.DRIVE_MERGE_DETAIL,
+      DRIVE_MERGE_PANO = DriveModes.DRIVE_MERGE_PANO;
 
   static final String[] DRIVES = DriveModes.DRIVES;
   private static final String[] VIEW_MODES = {"EYE SENSOR", "EVF ONLY", "LCD ONLY"};
@@ -216,6 +220,13 @@ public final class MainActivity extends ComponentActivity
   private HiResMerger.Accumulator hiResAccumulator;
   private File hiResAnchorDng;
   private byte[] hiResAnchorPhoneJpeg;
+  /** MERGE drive-mode state (DETAIL burst / PANO guided sweep). */
+  private boolean mergeActive, mergeSavedAeLock, mergeDetailShot;
+  private int mergeStep, mergeMode, mergeOrientationDegrees, mergeUprightDegrees;
+  /** Private cache spool for guided PANO's undeveloped RAW frames; deleted on finish or cancel. */
+  private File mergeSpoolDir;
+  private final List<File> mergeFrameFiles = new java.util.concurrent.CopyOnWriteArrayList<>();
+  private long mergeStartNs;
   /** In-app update state. */
   private boolean notifyUpdates = true, updateDownloading, updateFallbackTried;
   private String skippedUpdateTag = "", startupNotifiedTag = "";
@@ -2368,6 +2379,13 @@ public final class MainActivity extends ComponentActivity
       }
       back.toast("FOCUS BKT", "manual focus distance unavailable · single frame");
     }
+    if (isMerge(drive)) {
+      if (r.raw && camera.rawAvailable()) {
+        startMerge(drive);
+        return;
+      }
+      back.toast(DriveModes.mergeLabel(drive), "merge develops from sensor RAW · shooting single frame");
+    }
     if (isHiRes(drive)) {
       if (r.raw && camera.rawAvailable()) {
         hiResActive = true;
@@ -2431,7 +2449,6 @@ public final class MainActivity extends ComponentActivity
       shutter.setText("◉");
       shutter.setContentDescription("Take photo");
     }
-    pushOsd();
   }
 
   /**
@@ -2605,6 +2622,7 @@ public final class MainActivity extends ComponentActivity
       focusBracketStep = 0;
       if (camera != null) camera.clearBracket();
     }
+    if (mergeActive || mergeDetailShot) resetMerge();
     if (hiResActive) {
       hiResActive = false;
       hiResStep = 0;
@@ -2633,6 +2651,85 @@ public final class MainActivity extends ComponentActivity
   @Override
   public void status(String text) {
     status.setText(text);
+  }
+
+  /**
+   * Starts a MERGE set. CAPTURE is deliberately dumb and fast: N linear RAW frames, AE held, no
+   * simulation, no alignment, no merge and no DNG between shutters. Everything happens once, after
+   * the last frame, in a single background job — the same rule the RAW developer already follows.
+   */
+  private void startMerge(int drive) {
+    mergeMode = drive;
+    mergeStep = 0;
+    mergeFrameFiles.clear();
+    MergeFrameStore.deleteDir(mergeSpoolDir);
+    mergeSpoolDir = new File(getCacheDir(), "merge-" + System.nanoTime());
+    mergeOrientationDegrees = 0;
+    mergeUprightDegrees = 0;
+    mergeStartNs = System.nanoTime();
+    mergeSavedAeLock = aeLock;
+    camera.setSuppressDng(true); // one finished JPEG; no per-frame or reference DNG
+    camera.setAeLock(true);
+    camera.update(snapshot());
+    if (DriveModes.isMergeDetail(drive)) {
+      // Fastest path: the camera's existing captureBurst fires all four RAW frames at sensor
+      // cadence and GrainCamera assembles them before capturedRaw() is even called.
+      mergeDetailShot = true;
+      camera.setMergeDetailBurst(
+          true,
+          DriveModes.mergeFramesFor(drive),
+          hiResTargetPixelsFor(DRIVE_HIRES_36),
+          hiResMaxScale(DRIVE_HIRES_36));
+      status.setText("MERGE DETAIL · 4 RAW frames in one burst · developing once…");
+      playShutterSound();
+      camera.capture(snapshot());
+      return;
+    }
+    mergeActive = true;
+    pushOsd();
+    fireMergeFrame();
+  }
+
+  /** One guided PANO shutter; the next is armed as soon as this capture completes. */
+  private void fireMergeFrame() {
+    if (!busy || !mergeActive || !resumed || !powerOn || camera == null) {
+      resetMerge();
+      return;
+    }
+    int total = DriveModes.mergeFramesFor(mergeMode);
+    back.state.countdown = (mergeStep + 1) + "/" + total;
+    pushOsd();
+    status.setText(
+        "MERGE PANO "
+            + (mergeStep + 1)
+            + "/"
+            + total
+            + " · pan slowly in one direction, keep the phone level");
+    playShutterSound();
+    camera.capture(snapshot());
+  }
+
+  /** Restores the camera and UI after a MERGE set (success, failure or cancellation). */
+  private void resetMerge() {
+    mergeActive = false;
+    mergeDetailShot = false;
+    mergeStep = 0;
+    mergeFrameFiles.clear();
+    MergeFrameStore.deleteDir(mergeSpoolDir);
+    mergeSpoolDir = null;
+    if (camera != null) {
+      camera.setSuppressDng(false);
+      camera.setMergeDetailBurst(false, 4, 0, 2.0);
+      camera.setAeLock(mergeSavedAeLock);
+    }
+    if (back != null) back.state.countdown = "";
+    saving = false;
+    busy = false;
+    if (shutter != null) {
+      shutter.setText("◉");
+      shutter.setContentDescription("Take photo");
+    }
+    pushOsd();
   }
 
   @Override
@@ -2746,6 +2843,155 @@ public final class MainActivity extends ComponentActivity
         manual != null && manual.has("developEv")
             ? (float) Math.max(-4, Math.min(4, manual.optDouble("developEv")))
             : settings.ev;
+    // MERGE DETAIL arrives as ONE RawCapture (GrainCamera already merged the burst in linear
+    // Bayer space). Restore the one-shot camera flags; the ordinary single-develop path below
+    // applies the film look exactly once, to the merged frame.
+    if (mergeDetailShot) {
+      mergeDetailShot = false;
+      camera.setSuppressDng(false);
+      camera.setMergeDetailBurst(false, 4, 0, 2.0);
+      camera.setAeLock(mergeSavedAeLock);
+      mergeFrameFiles.clear();
+      MergeFrameStore.deleteDir(mergeSpoolDir);
+      mergeSpoolDir = null;
+      status.setText("MERGE DETAIL · developing 4 merged RAWs · " + filmName + "…");
+    }
+
+    // MERGE PANO: guided sweep. Each shutter only spools one undeveloped linear RAW frame to the
+    // private cache; the stitch and the single develop pass both run after the last one. Four full
+    // 36/48 MP frames are never stacked on the Java heap.
+    if (mergeActive) {
+      final int mStep = mergeStep;
+      final int total = DriveModes.mergeFramesFor(mergeMode);
+      if (capture.dng != null && capture.dng.exists()) capture.dng.delete();
+      final File spool = mergeSpoolDir;
+      final GrainCamera.RawCapture mergeCapture = capture;
+      final GrainCamera.Snapshot mergeSettings = settings;
+      final JSONObject mergeReceipt = receipt;
+      final long started = mergeStartNs;
+      final FujiRecipe mergeFilm = film;
+      final boolean mergeTuned = tuned;
+      final String mergeFilmName = filmName;
+      final float mergeEv = developEv;
+      final boolean mergeFaces = meterFaces;
+      status.setText("MERGE PANO " + (mStep + 1) + "/" + total + " · saving linear RAW…");
+      files.execute(
+          () -> {
+            try {
+              if (spool == null) throw new IllegalStateException("Merge spool missing");
+              File file = MergeFrameStore.write(spool, mStep, mergeCapture.frame);
+              mergeFrameFiles.add(file);
+              if (mStep == 0) {
+                mergeOrientationDegrees = mergeCapture.orientationDegrees;
+                mergeUprightDegrees = mergeCapture.uprightDegrees;
+              }
+              if (mStep < total - 1) {
+                runOnUiThread(
+                    () -> {
+                      if (isDestroyed() || !mergeActive || !resumed || !powerOn) {
+                        resetMerge();
+                        return;
+                      }
+                      mergeStep++;
+                      saving = false;
+                      status.setText(
+                          "MERGE PANO " + (mStep + 1) + "/" + total + " · frame kept, pan on…");
+                      main.postDelayed(this::fireMergeFrame, 260);
+                    });
+                return;
+              }
+              final List<File> allFiles = new ArrayList<>(mergeFrameFiles);
+              final int orientation = mergeOrientationDegrees;
+              final int upright = mergeUprightDegrees;
+              runOnUiThread(
+                  () ->
+                      status.setText(
+                          "MERGE PANO · stitching "
+                              + allFiles.size()
+                              + " RAWs & developing "
+                              + mergeFilmName
+                              + "…"));
+              List<MergeFrameStore.Reader> readers = new ArrayList<>(allFiles.size());
+              try {
+                for (File f : allFiles) readers.add(MergeFrameStore.open(f));
+                MergeMerger.Result mr = MergeMerger.panoSources(readers);
+                RawFrame merged = mr.frame;
+                GrainCamera.RawCapture mergedCapture =
+                    new GrainCamera.RawCapture(merged, null, null, orientation, upright);
+                CubeLut lut = mergeFilm.apple() ? null : luts.load(mergeFilm.filmSimulation);
+                long devStart = System.nanoTime();
+                RawDevelopment.Output out =
+                    RawDevelopment.develop(
+                        this,
+                        mergedCapture,
+                        mergeFilm,
+                        mergeTuned,
+                        tuning.appleEffective(mergeFilm),
+                        lut,
+                        mergeEv,
+                        merged.exposureNs ^ System.nanoTime(),
+                        mergeFaces,
+                        true);
+                mergeReceipt.put("mergeMode", "pano");
+                mergeReceipt.put("mergeFrames", mr.framesUsed);
+                mergeReceipt.put("mergeShifts", mr.shifts);
+                mergeReceipt.put("mergeGatedPct", Math.round(mr.gatedFraction * 1000f) / 10f);
+                mergeReceipt.put("mergeMs", (System.nanoTime() - started) / 1_000_000L);
+                mergeReceipt.put(
+                    "development", out.stats.put("totalMs", (System.nanoTime() - devStart) / 1_000_000L));
+                PhotoStore.Photo saved;
+                try {
+                  saved =
+                      store.saveFile(
+                          out.jpegFile,
+                          mergeSettings.ratio,
+                          mergeSettings.zoom,
+                          mergeSettings.keepFull,
+                          mergeReceipt,
+                          null,
+                          null);
+                } finally {
+                  if (out.jpegFile.exists()) out.jpegFile.delete();
+                }
+                final PhotoStore.Photo done = saved;
+                runOnUiThread(
+                    () -> {
+                      if (isDestroyed()) return;
+                      resetMerge();
+                      status.setText(
+                          done.metadata.optInt("width")
+                              + " × "
+                              + done.metadata.optInt("height")
+                              + " · "
+                              + mergeFilmName
+                              + " · "
+                              + mr.framesUsed
+                              + " frames stitched");
+                      updateThumb();
+                      syncMagnifier();
+                      message(
+                          "MERGE PANO saved (" + mr.framesUsed + " RAWs · " + mergeFilmName + ")");
+                    });
+              } finally {
+                for (MergeFrameStore.Reader reader : readers) reader.close();
+                MergeFrameStore.deleteDir(spool);
+              }
+            } catch (Throwable e) {
+              String why =
+                  e instanceof OutOfMemoryError ? "not enough memory" : String.valueOf(e.getMessage());
+              MergeFrameStore.deleteDir(spool);
+              runOnUiThread(
+                  () -> {
+                    resetMerge();
+                    status.setText("Merge failed · camera still ready");
+                    syncMagnifier();
+                    message("MERGE PANO failed: " + why);
+                  });
+            }
+          });
+      return;
+    }
+
     if (hiResActive) {
       final int hStep = hiResStep;
       final int hFrames = hiResFramesFor(hiResMode);
@@ -3184,6 +3430,7 @@ public final class MainActivity extends ComponentActivity
       hiResStep = 0;
       hiResAccumulator = null;
     }
+    if (mergeActive || mergeDetailShot) resetMerge();
     if (camera != null) {
       camera.clearBracket();
       camera.neutralPreview(false);
@@ -5977,6 +6224,10 @@ public final class MainActivity extends ComponentActivity
   }
 
   /** True for the tripod super-resolution drive modes. */
+  static boolean isMerge(int drive) {
+    return DriveModes.isMerge(drive);
+  }
+
   static boolean isHiRes(int drive) {
     return DriveModes.isHiRes(drive);
   }
@@ -6050,7 +6301,11 @@ public final class MainActivity extends ComponentActivity
                     + " focus planes · "
                     + FocusMath.BKT_STEP_NAMES[bktStepMode].toLowerCase(Locale.ROOT)
                     + " step"
-                : isHiRes(drive)
+                : isMerge(drive)
+                    ? (DriveModes.isMergeDetail(drive)
+                        ? "4 RAW frames in one burst · handheld detail merge"
+                        : "4-frame guided pan · stitched into one wider photo")
+                    : isHiRes(drive)
                     ? driveTimerSeconds(drive)
                         + "s tripod settle · merges "
                         + hiResFramesFor(drive)
