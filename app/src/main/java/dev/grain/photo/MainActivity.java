@@ -74,6 +74,8 @@ public final class MainActivity extends ComponentActivity
   boolean useGl;
   TextureView fallbackTexture;
   private GLSurfaceView glView;
+  /** Last camera-facing SurfaceTexture from the GL surface; a change means a new surface. */
+  private SurfaceTexture lastGlSurface;
   private LivePreviewRenderer previewRenderer;
   /** The camera-facing side of the GL viewfinder (implements GrainCamera's texture seam). */
   private volatile GrainCamera.PreviewSurface previewTarget;
@@ -441,7 +443,15 @@ public final class MainActivity extends ComponentActivity
                 public void surfaceReady(SurfaceTexture s) {
                   runOnUiThread(
                       () -> {
-                        if (useGl) openCamera();
+                        if (!useGl) return;
+                        if (s != lastGlSurface) {
+                          lastGlSurface = s;
+                          // A recreated GL surface means a new SurfaceTexture; any camera
+                          // session is still bound to the released old one (black preview),
+                          // so close it before reopening on the fresh surface.
+                          if (camera != null) camera.close();
+                        }
+                        openCamera();
                       });
                 }
 
@@ -469,6 +479,24 @@ public final class MainActivity extends ComponentActivity
                 }
               });
       glView.setRenderer(previewRenderer);
+      glView.getHolder()
+          .addCallback(
+              new SurfaceHolder.Callback() {
+                @Override
+                public void surfaceCreated(SurfaceHolder h) {}
+
+                @Override
+                public void surfaceChanged(SurfaceHolder h, int format, int w, int hgt) {}
+
+                @Override
+                public void surfaceDestroyed(SurfaceHolder h) {
+                  // Activity stopped (recents/home): the GL surface and its camera texture
+                  // are gone. Mark dead now so onResume never opens the camera on the stale
+                  // SurfaceTexture; onSurfaceCreated -> surfaceReady reopens it on return.
+                  previewRenderer.markSurfaceDead();
+                  ready = false;
+                }
+              });
       useGl = true;
       previewTarget =
           new GrainCamera.PreviewSurface() {
@@ -3373,7 +3401,16 @@ public final class MainActivity extends ComponentActivity
     if (sensors != null && gravity != null)
       sensors.registerListener(pitchListener, gravity, SensorManager.SENSOR_DELAY_GAME);
     if (remoteOn && remote == null && RemoteStream.localIp() != null) startRemote();
-    if (preview != null && preview.isAvailable()) openCamera();
+    if (useGl) {
+      // The GL surface may still be dead/stale here; surfaceReady() opens the camera when
+      // onSurfaceCreated recreates it. This delayed check covers the case where the surface
+      // survived pause (no recreation, no surfaceReady): reopen if still not ready.
+      main.postDelayed(
+          () -> {
+            if (resumed && !ready && preview != null && preview.isAvailable()) openCamera();
+          },
+          800);
+    } else if (preview != null && preview.isAvailable()) openCamera();
     readBattery();
     main.removeCallbacks(histogramTask);
     main.postDelayed(histogramTask, 500);

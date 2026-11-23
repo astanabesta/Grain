@@ -152,6 +152,18 @@ final class LivePreviewRenderer implements GLSurfaceView.Renderer {
     return surfaceLive;
   }
 
+  /**
+   * The view's surface was destroyed (activity stopped, e.g. via recents). The camera-facing
+   * SurfaceTexture is dead even though {@link #onSurfaceCreated} has not run again yet: report
+   * not-live (and drop the stale readback cache) so callers never open the camera on the released
+   * texture. The next {@code onSurfaceCreated} creates a fresh one and notifies via {@code
+   * surfaceReady}.
+   */
+  void markSurfaceDead() {
+    surfaceLive = false;
+    cachePixels = null;
+  }
+
   /** Screen rect the preview should cover (view coordinates, 0..1); mirrors TextureView's transform math. */
   void setCorners(float[] dstViewSpace, int vw, int vh) {
     queue(

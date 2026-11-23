@@ -125,6 +125,55 @@ public class ExposureAndRecipeTest {
   }
 
   @Test
+  public void noirAndAuraMatchGrainOriginalSettings() {
+    FujiRecipe noir = FujiRecipe.NOIR;
+    assertEquals("noir", noir.key);
+    assertEquals("Noir", noir.name);
+    assertEquals("ACROS", noir.filmSimulation);
+    assertTrue(noir.monochrome());
+    assertEquals(FujiRecipe.DynamicRange.DR400, noir.dynamicRange);
+    assertEquals(1.0, noir.highlight, 1e-6);
+    assertEquals(2.0, noir.shadow, 1e-6);
+    assertEquals(1, noir.sharpness);
+    assertEquals(-4, noir.noiseReduction);
+    assertEquals(4, noir.clarity);
+    assertEquals(2, noir.grainRoughness);
+    assertTrue(noir.grainLarge);
+    assertEquals(2, noir.monoFilter); // +R
+    assertEquals(-2.0f, Recipe.rawCaptureBias(noir), 1e-5f);
+
+    FujiRecipe aura = FujiRecipe.AURA;
+    assertEquals("aura", aura.key);
+    assertEquals("Aura", aura.name);
+    assertEquals("CLASSIC-CHROME", aura.filmSimulation);
+    assertFalse(aura.monochrome());
+    assertEquals(FujiRecipe.DynamicRange.AUTO, aura.dynamicRange);
+    assertEquals(-2.0, aura.highlight, 1e-6);
+    assertEquals(-1.0, aura.shadow, 1e-6);
+    assertEquals(1, aura.color);
+    assertEquals(-2, aura.sharpness);
+    assertEquals(-4, aura.noiseReduction);
+    assertEquals(-2, aura.clarity);
+    assertEquals(1, aura.grainRoughness);
+    assertFalse(aura.grainLarge);
+    assertEquals(4, aura.halation);
+    assertEquals(5, aura.bloom);
+    assertEquals(-1f / 3, Recipe.rawCaptureBias(aura), 1e-5f);
+
+    assertSame(FujiRecipe.NOIR, Recipe.ALL[33].fuji);
+    assertSame(FujiRecipe.AURA, Recipe.ALL[34].fuji);
+    assertEquals(33, findRecipe("noir").id);
+    assertEquals(34, findRecipe("aura").id);
+    int noirIdx = -1, auraIdx = -1;
+    for (int i = 0; i < Recipe.DISPLAY_ORDER.length; i++) {
+      Recipe item = Recipe.DISPLAY_ORDER[i];
+      if (item.fuji == FujiRecipe.NOIR) noirIdx = i;
+      if (item.fuji == FujiRecipe.AURA) auraIdx = i;
+    }
+    assertTrue("Noir and Aura appear in the film list, Noir first", noirIdx >= 0 && auraIdx == noirIdx + 1);
+  }
+
+  @Test
   public void exposurePlanCoversProgramShutterIsoAndManualModes() {
     double neutral = 16_000_000.0 * 100.0; // 1/60s @ ISO 100
     assertNull(ExposureMath.planStill(0, 0, 0, 0, neutral, 10_000L, 1_000_000_000L, 50, 6400));

@@ -139,7 +139,7 @@ public class AppleRenderTest {
 
   @Test
   public void allFiveIphoneProfilesRegisterCleanlyAndDevelopWithoutLut() throws Exception {
-    assertEquals(33, Recipe.ALL.length);
+    assertEquals(35, Recipe.ALL.length);
     assertEquals("iphone-16-standard", Recipe.ALL[28].fuji.key);
     assertEquals("iphone-16-natural-rose", Recipe.ALL[29].fuji.key);
     assertEquals("iphone-16-rich-contrast", Recipe.ALL[30].fuji.key);

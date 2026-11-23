@@ -3,7 +3,21 @@
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
 
-### What's new in v0.9.41 — MERGE: stitch or super-res, developed once
+### What's new in v0.9.42 — Noir + Aura recipes, and the black preview on return is fixed
+
+- **Noir** — Grain's original high-contrast black and white: Acros with the +R filter, DR400
+  headroom, crushed blacks, bright highlights and heavy large grain. Developed from RAW with
+  Fujifilm's official Acros LUT.
+- **Aura** — Grain's original soft dreamy glow: Classic Chrome at low contrast with pastel colour,
+  gentle detail, and halation + bloom spreading highlight light like a diffusion filter. Developed
+  from RAW with Fujifilm's official Classic Chrome LUT.
+- **Black preview when returning from recents is fixed.** Going to the background destroyed the GL
+  surface, but on return the camera reopened on the stale, released SurfaceTexture and then refused
+  to reopen (it thought it was already open) — black screen until the tab was closed. The GL surface
+  is now marked dead when destroyed, the camera only opens on the fresh surface, and a delayed
+  fallback covers the case where the surface survived pause.
+
+### Previously in v0.9.41 — MERGE: stitch or super-res, developed once
 
 Two new stops on the DRIVE dial, both following the same rule: **capture 4 undeveloped linear RAW
 frames first, then process once at the end**. No film simulation, tone curve or grain is applied per

@@ -698,6 +698,50 @@ public final class FujiRecipe {
           .exposure("0 to +1/3 EV")
           .build();
 
+  /**
+   * Noir: Grain's original high-contrast black and white. Acros with the +R filter for dark skies,
+   * DR400 headroom for bright highlights, strong clarity and heavy large grain.
+   */
+  public static final FujiRecipe NOIR =
+      new Builder("noir", "Noir", "Grain", "an original Grain recipe", "ACROS", "Acros")
+          .dynamicRange(DynamicRange.DR400)
+          .whiteBalance(WhiteBalance.AUTO, 0, 0)
+          .tone(1, 2)
+          .detail(1, -4, 4)
+          .grain(2, true)
+          .colorChrome(2, 0)
+          .filter(2)
+          .build();
+
+  /**
+   * Aura: Grain's original soft dreamy glow. Classic Chrome at low contrast with pastel colour,
+   * gentle detail and halation + bloom spreading highlight light like a diffusion filter.
+   */
+  public static final FujiRecipe AURA =
+      new FujiRecipe(
+          "aura",
+          "Aura",
+          "Grain",
+          "an original Grain recipe",
+          "CLASSIC-CHROME",
+          "Classic Chrome",
+          DynamicRange.AUTO,
+          -2,
+          -1,
+          1,
+          -2,
+          -4,
+          -2,
+          1,
+          false,
+          1,
+          0,
+          "Daylight",
+          2,
+          -3,
+          4,
+          5);
+
   /** True when this recipe uses Grain's phone-sensor-to-emulsion tone and perceptual colour model. */
   public boolean sensorCalibrated() {
     return "kodak-800-v3".equals(key) || "leica-x".equals(key) || "cinestill-800t".equals(key);
@@ -705,7 +749,9 @@ public final class FujiRecipe {
 
   /**
    * The published recipes Grain develops, in the order the film list shows them (Reggie's two
-   * first). Ids are assigned in Recipe and never change.
+   * first). Ids are assigned in Recipe and never change. Grain's own originals ({@link #NOIR},
+   * {@link #AURA}) are deliberately not here: they are not published recipes, and Recipe's display
+   * order still lists them right after these.
    */
   public static final FujiRecipe[] PUBLISHED = {
     REGGIES_PORTRA, REGGIES_SUPERIA, KODAK_GOLD_200, BRIGHT_KODAK, KODAK_800_V3, LEICA_X,

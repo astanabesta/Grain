@@ -63,7 +63,7 @@ public final class Recipe {
       "Reggie Ballesteros’ published Fujifilm recipe: Classic Negative, moodier, grainier and more"
           + " contrasty than his Portra, made for rich skin tones in directional light."
     };
-    Recipe[] all = new Recipe[fixed.length + sims.length + recipes.length + 9];
+    Recipe[] all = new Recipe[fixed.length + sims.length + recipes.length + 11];
     System.arraycopy(fixed, 0, all, 0, fixed.length);
     for (int i = 0; i < sims.length; i++) {
       int id = fixed.length + i;
@@ -169,6 +169,24 @@ public final class Recipe {
             "Apple’s classic iPhone XS Max (A12 Smart HDR) warm signature: golden-honey white"
                 + " balance, velvety warm-peach skin, lush vibrant green & cobalt-sky backgrounds,"
                 + " creamy highlight roll-off and crisp natural detail, with Ultra HDR.",
+            false);
+    int noirId = appleXsMaxId + 1;
+    all[noirId] =
+        new Recipe(
+            noirId,
+            FujiRecipe.NOIR,
+            "Grain's original noir: high-contrast Acros black and white with crushed blacks,"
+                + " bright highlights and heavy grain, developed from this phone's RAW with"
+                + " Fujifilm's official Acros LUT.",
+            false);
+    int auraId = noirId + 1;
+    all[auraId] =
+        new Recipe(
+            auraId,
+            FujiRecipe.AURA,
+            "Grain's original aura: soft, low-contrast pastel colour with a gentle halation"
+                + " and bloom glow around highlights, developed from this phone's RAW with"
+                + " Fujifilm's official Classic Chrome LUT.",
             false);
     return all;
   }
