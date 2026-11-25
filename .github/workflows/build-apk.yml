@@ -80,19 +80,19 @@ jobs:
           rel="org/robolectric/android-all-instrumented"
           m2="$HOME/.m2/repository/org/robolectric/android-all-instrumented"
           mirrors=(
-            "https://repo1.maven.org/maven2"
             "https://repo.maven.apache.org/maven2"
             "https://maven-central.storage-download.googleapis.com/maven2"
+            "https://repo1.maven.org/maven2"
           )
           fetch() { # $1 = relative path under the mirror, $2 = destination, $3 = min size (0 = any)
             local relpath="$1" dst="$2" minsz="$3" base attempt
             [ -s "$dst" ] && [ "$(stat -c %s "$dst")" -ge "$minsz" ] && return 0
             for base in "${mirrors[@]}"; do
-              for attempt in 1 2 3; do
+              for attempt in 1 2; do
                 # --speed-* aborts a stalled trickle; --max-time caps a whole attempt
-                if curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
-                    --connect-timeout 20 --max-time 180 \
-                    --speed-limit 51200 --speed-time 20 \
+                if curl -fsSL --retry 2 --retry-delay 2 --retry-all-errors \
+                    --connect-timeout 15 --max-time 90 \
+                    --speed-limit 51200 --speed-time 15 \
                     -o "$dst.part" "$base/$relpath"; then
                   if [ "$minsz" -gt 0 ] && [ "$(stat -c %s "$dst.part")" -lt "$minsz" ]; then
                     echo "truncated from $base/$relpath — retrying"
@@ -101,7 +101,7 @@ jobs:
                     return 0
                   fi
                 fi
-                sleep $((attempt * 3))
+                sleep 3
               done
             done
             rm -f "$dst.part"

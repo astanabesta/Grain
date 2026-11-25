@@ -48,6 +48,10 @@ android {
                     test.exclude '**/CameraBackScreensTest*'
                     test.maxHeapSize = '448m' // small-CI boxes: default fork + main JVM OOMs
                 }
+                // Robolectric's default host (repo1.maven.org) has been unreliable from CI
+                // runners; repo.maven.apache.org serves the same artifacts — it's what Gradle
+                // itself resolves from, proven working on every run.
+                test.systemProperty 'robolectric.dependency.repo.url', 'https://repo.maven.apache.org/maven2'
             }
         }
     }
