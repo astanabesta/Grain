@@ -3,7 +3,20 @@
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
 
-### What's new in v0.9.43 — Noir gets its own look: maximum-contrast Acros
+### What's new in v0.9.44 — smooth gallery swipe
+
+- **The photo viewer finally swipes like a gallery should.** The old viewer held a single image:
+  a fling cleared the screen to **black**, decoded the next photo, then popped it in — your finger
+  never moved anything. It is now a drag-follow pager: the photo sticks to your finger, the
+  neighbour slides in from the edge, and a flick throws it with momentum.
+- **No more black frames.** Neighbours are pre-decoded while you settle, and stepping to the next
+  photo rotates the already-decoded pages instead of re-decoding, so the incoming photo is on
+  screen the moment the swipe starts.
+- **Edge rubber-band** on the first/last photo, **tap the side zones** to step prev/next, and a
+  **filmstrip** under the photo — tap a thumbnail to jump; it follows your swipes.
+- Unchanged: pinch zoom, double-tap zoom, DISP receipt, DRIVE delete, lever browse.
+
+### Previously in v0.9.43 — Noir gets its own look: maximum-contrast Acros
 
 - **Noir is retuned so it no longer reads as a Tri-X twin.** The first Noir shipped with a tone
   curve one step away from Kodak Tri-X 400 — and slightly *flatter* in the shadows — so on neutral

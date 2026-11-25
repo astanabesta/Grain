@@ -123,6 +123,25 @@ public final class MainActivity extends ComponentActivity
   private int qIndex, menuTab, menuIndex, playIndex;
   private final List<PhotoStore.Photo> playList = new ArrayList<>();
   private ImageView playImage;
+  /**
+   * Three-window pager: the current photo plus its neighbours, dragged as one track. Neighbours are
+   * pre-decoded (fit-size previews) so a swipe never shows a black frame; the current slot upgrades
+   * to the full-resolution decode when it lands.
+   */
+  private ImageView playImagePrev, playImageNext;
+  private final Bitmap[] playBmp = new Bitmap[3]; // 0 prev, 1 current, 2 next
+  private final File[] playFile = new File[3];
+  private final boolean[] playFull = new boolean[3];
+  private int playShownIndex = -1; // photo index whose window is built (-1 = nothing yet)
+  private float playDragX; // track offset from rest, px (0 at rest)
+  private boolean playDragging;
+  private float playDragStartX, playDragBase;
+  private VelocityTracker playVel;
+  private android.animation.ValueAnimator playSettle;
+  private HorizontalScrollView playStripScroll;
+  private LinearLayout playStrip;
+  private int playStripAnchor = -1;
+  private volatile int playStripStamp;
   private TextView playInfo, playReceipt;
   private float playZoom = 1f, playPanX = 0f, playPanY = 0f;
   private final Matrix playMatrix = new Matrix();
@@ -6602,6 +6621,14 @@ public final class MainActivity extends ComponentActivity
 
   private void closeOverlays() {
     playStamp++;
+    playStripStamp++;
+    cancelPlaySettle();
+    if (playVel != null) {
+      playVel.recycle();
+      playVel = null;
+    }
+    playDragging = false;
+    resetPlayWindow();
     if (back != null) back.hideOverlay();
     mode = "camera";
     syncWindowColorMode();
@@ -6614,6 +6641,10 @@ public final class MainActivity extends ComponentActivity
     menuTabs = null;
     menuScroll = null;
     playImage = null;
+    playImagePrev = null;
+    playImageNext = null;
+    playStrip = null;
+    playStripScroll = null;
     playInfo = null;
     playReceipt = null;
     playZoom = 1f;
@@ -7408,6 +7439,7 @@ public final class MainActivity extends ComponentActivity
                 playZoom = 1f;
                 playPanX = 0f;
                 playPanY = 0f;
+                resetPlayWindow();
                 mode = "play";
                 syncWindowColorMode();
                 back.showOverlay(buildPlayback());
@@ -7463,9 +7495,21 @@ public final class MainActivity extends ComponentActivity
   private View buildPlayback() {
     FrameLayout box = new FrameLayout(this);
     box.setBackgroundColor(0xff000000);
+    // Neighbour pages first so the current photo draws on top while the track moves.
+    playImagePrev = new ImageView(this);
+    playImagePrev.setScaleType(ImageView.ScaleType.FIT_CENTER);
+    playImageNext = new ImageView(this);
+    playImageNext.setScaleType(ImageView.ScaleType.FIT_CENTER);
+    box.addView(playImagePrev, new FrameLayout.LayoutParams(-1, -1));
+    box.addView(playImageNext, new FrameLayout.LayoutParams(-1, -1));
     playImage = new ImageView(this);
     playImage.setScaleType(ImageView.ScaleType.MATRIX);
-    playImage.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> applyPlayMatrix());
+    // Re-laid-out mid-drag (insets/split): keep the matrix AND the track in place.
+    playImage.addOnLayoutChangeListener(
+        (v, l, t, r, b, ol, ot, or, ob) -> {
+          applyPlayMatrix();
+          renderPager();
+        });
     box.addView(playImage, new FrameLayout.LayoutParams(-1, -1));
     playInfo = text("", 8.5f, 0xfff4f1e8);
     playInfo.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
@@ -7476,12 +7520,23 @@ public final class MainActivity extends ComponentActivity
     box.addView(playInfo, new FrameLayout.LayoutParams(-1, dp(24), Gravity.TOP));
     TextView hint =
         text(
-            "LEVER BROWSE · COMMAND ZOOM · DISP RECEIPT · DRIVE DEL · OK MORE · Q ALL",
+            "DRAG · FLING · COMMAND ZOOM · DISP RECEIPT · DRIVE DEL · OK MORE · Q ALL",
             6.5f,
             0xffc9c4b8);
     hint.setBackgroundColor(0x99000000);
     hint.setSingleLine(true);
     box.addView(hint, new FrameLayout.LayoutParams(-1, dp(18), Gravity.BOTTOM));
+    // Filmstrip: a windowed row of thumbs around the current photo; tap to jump.
+    playStripScroll = new HorizontalScrollView(this);
+    playStripScroll.setHorizontalScrollBarEnabled(false);
+    playStripScroll.setBackgroundColor(0xcc000000);
+    playStrip = new LinearLayout(this);
+    playStrip.setOrientation(LinearLayout.HORIZONTAL);
+    playStrip.setGravity(Gravity.CENTER_VERTICAL);
+    playStripScroll.addView(playStrip, new ViewGroup.LayoutParams(-2, -2));
+    FrameLayout.LayoutParams stripLp = new FrameLayout.LayoutParams(-1, dp(44), Gravity.BOTTOM);
+    stripLp.bottomMargin = dp(18); // sits on the hint bar
+    box.addView(playStripScroll, stripLp);
     playReceipt = text("", 8.5f, 0xfff4f1e8);
     playReceipt.setGravity(Gravity.START | Gravity.TOP);
     playReceipt.setPadding(dp(10), dp(8), dp(10), dp(8));
@@ -7521,17 +7576,23 @@ public final class MainActivity extends ComponentActivity
                 return false;
               }
 
-              @Override
-              public boolean onFling(MotionEvent a, MotionEvent b, float vx, float vy) {
-                if (playZoom <= 1.01f && Math.abs(vx) > Math.abs(vy)) {
-                  browse(vx < 0 ? 1 : -1);
-                  return true;
-                }
-                return false;
-              }
+              // No onFling override: horizontal swipes belong to the pager drag wired below
+              // (a GestureDetector fling would double-step the page). The lever still browse()s.
 
               @Override
               public boolean onSingleTapConfirmed(MotionEvent e) {
+                // Side zones page; the centre keeps DISP (receipt).
+                int w = playImage != null ? playImage.getWidth() : 0;
+                if (playZoom <= 1.01f && w > 0 && !playDragging) {
+                  if (e.getX() < w * 0.18f) {
+                    browse(-1);
+                    return true;
+                  }
+                  if (e.getX() > w * 0.82f) {
+                    browse(1);
+                    return true;
+                  }
+                }
                 dispKey();
                 return true;
               }
@@ -7558,12 +7619,55 @@ public final class MainActivity extends ComponentActivity
             });
     box.setOnTouchListener(
         (v, e) -> {
-          if (v.getParent() != null && playZoom > 1.01f) {
+          int act = e.getActionMasked();
+          boolean fit = playZoom <= 1.01f;
+          if (v.getParent() != null && (playZoom > 1.01f || playDragging)) {
             v.getParent().requestDisallowInterceptTouchEvent(true);
           }
-          pinchDetector.onTouchEvent(e);
+          if (fit) {
+            switch (act) {
+              case MotionEvent.ACTION_DOWN:
+                cancelPlaySettle(); // grab mid-animation exactly where it is
+                playDragging = false;
+                playDragStartX = e.getX();
+                playDragBase = playDragX;
+                if (playVel == null) playVel = VelocityTracker.obtain();
+                playVel.clear();
+                playVel.addMovement(e);
+                break;
+              case MotionEvent.ACTION_MOVE:
+                if (playVel != null) playVel.addMovement(e);
+                if (e.getPointerCount() > 1 && playDragging) {
+                  // Second finger mid-drag: hand the gesture over to pinch-zoom.
+                  playDragging = false;
+                  animatePlayTo(playIndex);
+                  break;
+                }
+                float dx = e.getX() - playDragStartX;
+                if (!playDragging
+                    && Math.abs(dx) > ViewConfiguration.get(this).getScaledTouchSlop()) {
+                  playDragging = true;
+                  cancelPlaySettle();
+                  playDragBase = playDragX;
+                }
+                if (playDragging) setTrackPos(rubberPlay(playDragBase + dx));
+                break;
+              default:
+                if (playVel != null) playVel.addMovement(e);
+            }
+          }
+          if (act == MotionEvent.ACTION_UP || act == MotionEvent.ACTION_CANCEL) {
+            if (playDragging) {
+              playDragging = false;
+              endPlayDrag(act == MotionEvent.ACTION_UP);
+            } else if (playVel != null) {
+              playVel.recycle();
+              playVel = null;
+            }
+          }
+          if (!playDragging) pinchDetector.onTouchEvent(e);
           gestures.onTouchEvent(e);
-          if (e.getActionMasked() == MotionEvent.ACTION_UP) v.performClick();
+          if (act == MotionEvent.ACTION_UP) v.performClick();
           return true;
         });
     return box;
@@ -7576,24 +7680,17 @@ public final class MainActivity extends ComponentActivity
     playZoom = 1f;
     playPanX = 0f;
     playPanY = 0f;
-    playImage.setImageDrawable(null);
-    final ImageView targetView = playImage;
-    final int stamp = ++playStamp;
-    filesUi.execute(
-        () -> {
-          if (stamp != playStamp) return; // already flipped past: don't decode a photo nobody sees
-          Bitmap bitmap = store.thumbnail(p.image, 3200);
-          runOnUiThread(
-              () -> {
-                if (!isDestroyed() && stamp == playStamp
-                    && targetView == playImage && targetView.isAttachedToWindow()) {
-                  targetView.setImageBitmap(bitmap);
-                  applyPlayMatrix();
-                } else if (bitmap != null) {
-                  bitmap.recycle();
-                }
-              });
-        });
+    cancelPlaySettle();
+    playStamp++; // queued decodes from older windows abort, start and completion
+    int delta = playShownIndex >= 0 ? playIndex - playShownIndex : 0;
+    if ((delta == 1 || delta == -1) && playImagePrev != null && playImageNext != null) {
+      rotatePlayWindow(delta); // already-decoded neighbours slide into their new slots
+    }
+    playShownIndex = playIndex;
+    playDragX = 0f;
+    renderPager();
+    ensurePlayWindow(); // fit-size previews for ±1, then the current slot's full upgrade
+    updatePlayStrip();
     JSONObject r = p.metadata.optJSONObject("recipe");
     playBaseInfo =
         (playIndex + 1)
@@ -7657,12 +7754,305 @@ public final class MainActivity extends ComponentActivity
     return s.toString().trim();
   }
 
+  /** Steps one photo (lever, edge taps): animated while the pager is at rest. */
   private void browse(int delta) {
-    if (!"play".equals(mode) || playList.isEmpty()) return;
+    if (!"play".equals(mode) || playList.isEmpty() || playDragging) return;
     int next = Math.max(0, Math.min(playList.size() - 1, playIndex + (delta > 0 ? 1 : -1)));
     if (next == playIndex) return;
-    playIndex = next;
-    showPlayed();
+    animatePlayTo(next);
+  }
+
+  // ───────────────────────── smooth pager internals ─────────────────────────
+
+  private void resetPlayWindow() {
+    playShownIndex = -1;
+    playStripAnchor = -1;
+    playDragX = 0f;
+    for (int i = 0; i < 3; i++) {
+      playBmp[i] = null;
+      playFile[i] = null;
+      playFull[i] = false;
+    }
+  }
+
+  private ImageView playSlotView(int slot) {
+    return slot == 0 ? playImagePrev : slot == 1 ? playImage : playImageNext;
+  }
+
+  private float playXFor(int index) {
+    int w = playImage != null ? playImage.getWidth() : 0;
+    return -index * (float) Math.max(1, w);
+  }
+
+  /** Positions the three pages for the settled index plus the live drag offset. */
+  private void renderPager() {
+    if (playImage == null || playImagePrev == null || playImageNext == null) return;
+    int w = Math.max(1, playImage.getWidth());
+    playImagePrev.setTranslationX(-w + playDragX);
+    playImage.setTranslationX(playDragX);
+    playImageNext.setTranslationX(w + playDragX);
+    playImagePrev.setVisibility(playIndex > 0 ? View.VISIBLE : View.GONE);
+    playImageNext.setVisibility(playIndex < playList.size() - 1 ? View.VISIBLE : View.GONE);
+  }
+
+  private void setTrackPos(float x) {
+    playDragX = x;
+    renderPager();
+  }
+
+  /** Rubber-band past the first/last photo instead of a dead stop. */
+  private float rubberPlay(float raw) {
+    float max = 0f;
+    float min = playXFor(Math.max(0, playList.size() - 1));
+    if (raw > max) return max + (raw - max) * 0.32f;
+    if (raw < min) return min + (raw - min) * 0.32f;
+    return raw;
+  }
+
+  private void animatePlayTo(int target) {
+    if (playList.isEmpty()) return;
+    target = Math.max(0, Math.min(playList.size() - 1, target));
+    cancelPlaySettle();
+    float from = playDragX;
+    float to = playXFor(target);
+    if (playImage == null || playImage.getWidth() <= 1 || Math.abs(from - to) < 0.5f) {
+      finishPlaySettle(target);
+      return;
+    }
+    playSettle = android.animation.ValueAnimator.ofFloat(from, to);
+    playSettle.setDuration(340);
+    playSettle.setInterpolator(new android.view.animation.DecelerateInterpolator(2.1f));
+    playSettle.addUpdateListener(a -> setTrackPos((float) a.getAnimatedValue()));
+    final int end = target;
+    playSettle.addListener(
+        new android.animation.AnimatorListenerAdapter() {
+          @Override
+          public void onAnimationEnd(android.animation.Animator a) {
+            if (playSettle == a) {
+              playSettle = null;
+              finishPlaySettle(end);
+            }
+          }
+        });
+    playSettle.start();
+  }
+
+  private void finishPlaySettle(int target) {
+    playIndex = target;
+    playDragX = 0f;
+    if ("play".equals(mode)) showPlayed();
+    else renderPager();
+  }
+
+  private void cancelPlaySettle() {
+    if (playSettle == null) return;
+    // Listeners first: a cancelled settle must never commit a target the user grabbed.
+    playSettle.removeAllUpdateListeners();
+    playSettle.removeAllListeners();
+    playSettle.cancel();
+    playSettle = null;
+  }
+
+  /** Drag release: project with velocity and commit at most one page (the window holds ±1). */
+  private void endPlayDrag(boolean up) {
+    float v = 0f;
+    if (playVel != null) {
+      playVel.computeCurrentVelocity(1000); // px/s
+      v = playVel.getXVelocity();
+      playVel.recycle();
+      playVel = null;
+    }
+    if (!up || playList.isEmpty()) {
+      animatePlayTo(playIndex); // cancelled mid-drag: spring home
+      return;
+    }
+    float projected = playDragX + v * 0.14f; // where a 140 ms glide would land
+    int w = Math.max(1, playImage != null ? playImage.getWidth() : 1);
+    int target = Math.round(-projected / w);
+    if (target == playIndex) {
+      float rest = playXFor(playIndex);
+      if (Math.abs(playDragX - rest) > dp(2)) {
+        target = playIndex + (playDragX < rest ? 1 : -1); // any real drag commits its direction
+      }
+    }
+    target = Math.max(playIndex - 1, Math.min(playIndex + 1, target));
+    animatePlayTo(target);
+  }
+
+  /**
+   * Steps the decoded bitmaps one slot on a ±1 move. This rotation — not a re-decode — is what
+   * makes a swipe flash-free: the incoming photo is already on screen before the settle ends.
+   */
+  private void rotatePlayWindow(int delta) {
+    if (delta == 1) {
+      playBmp[0] = playBmp[1];
+      playFile[0] = playFile[1];
+      playFull[0] = playFull[1];
+      playBmp[1] = playBmp[2];
+      playFile[1] = playFile[2];
+      playFull[1] = playFull[2];
+      playBmp[2] = null;
+      playFile[2] = null;
+      playFull[2] = false;
+    } else if (delta == -1) {
+      playBmp[2] = playBmp[1];
+      playFile[2] = playFile[1];
+      playFull[2] = playFull[1];
+      playBmp[1] = playBmp[0];
+      playFile[1] = playFile[0];
+      playFull[1] = playFull[0];
+      playBmp[0] = null;
+      playFile[0] = null;
+      playFull[0] = false;
+    }
+    playImagePrev.setImageBitmap(playBmp[0]);
+    playImage.setImageBitmap(playBmp[1]);
+    playImageNext.setImageBitmap(playBmp[2]);
+    applyPlayMatrix();
+  }
+
+  private void clearPlaySlot(int slot) {
+    playBmp[slot] = null;
+    playFile[slot] = null;
+    playFull[slot] = false;
+    ImageView v = playSlotView(slot);
+    if (v != null) v.setImageDrawable(null);
+  }
+
+  /** Fills a slot when the window wants a photo it isn't already showing. */
+  private void wantPlaySlot(int slot, int idx) {
+    File want = idx >= 0 && idx < playList.size() ? playList.get(idx).image : null;
+    if (want == null) {
+      clearPlaySlot(slot);
+      return;
+    }
+    if (want.equals(playFile[slot]) && playBmp[slot] != null) return; // already there
+    clearPlaySlot(slot);
+    playFile[slot] = want;
+    decodePlayPhoto(idx, slot, false); // fit-size preview lands first…
+  }
+
+  /** The ±1 window, plus the current slot's full-resolution upgrade (posted last). */
+  private void ensurePlayWindow() {
+    if (!"play".equals(mode) || playList.isEmpty() || playImage == null) return;
+    int n = playList.size();
+    wantPlaySlot(0, playIndex > 0 ? playIndex - 1 : -1);
+    wantPlaySlot(1, playIndex);
+    wantPlaySlot(2, playIndex < n - 1 ? playIndex + 1 : -1);
+    if (playFile[1] != null && !playFull[1]) {
+      decodePlayPhoto(playIndex, 1, true); // …then the sharp decode upgrades it in place
+    }
+  }
+
+  /**
+   * One decode for the pager window. A task aborts when a newer showPlayed() bumps {@link #playStamp},
+   * so a stale full-size job never queues ahead of the photo on screen.
+   */
+  private void decodePlayPhoto(int idx, int slot, boolean full) {
+    if (idx < 0 || idx >= playList.size()) return;
+    final File want = playList.get(idx).image;
+    final int stamp = playStamp;
+    filesUi.execute(
+        () -> {
+          if (stamp != playStamp) return; // window moved on: decode for nobody
+          Bitmap bitmap = store.thumbnail(want, full ? 3200 : 500);
+          runOnUiThread(
+              () -> {
+                if (bitmap == null) return;
+                ImageView view = playSlotView(slot);
+                boolean keep =
+                    "play".equals(mode)
+                        && stamp == playStamp
+                        && view != null
+                        && view.isAttachedToWindow()
+                        && want.equals(playFile[slot])
+                        && (full || playBmp[slot] == null);
+                if (!keep) {
+                  bitmap.recycle();
+                  return;
+                }
+                playBmp[slot] = bitmap;
+                if (full) playFull[slot] = true;
+                view.setImageBitmap(bitmap);
+                if (slot == 1) {
+                  applyPlayMatrix();
+                  updatePlayHeader();
+                }
+              });
+        });
+  }
+
+  // ───────────────────────────── filmstrip ─────────────────────────────
+
+  private void updatePlayStrip() {
+    if (playStrip == null || playList.isEmpty()) return;
+    boolean stale = false;
+    if (playStrip.getChildCount() > 0) {
+      Object last = playStrip.getChildAt(playStrip.getChildCount() - 1).getTag();
+      stale = last instanceof Integer && (Integer) last >= playList.size();
+    }
+    if (playStripAnchor < 0
+        || stale
+        || playStrip.getChildCount() == 0
+        || Math.abs(playIndex - playStripAnchor) > 6) {
+      rebuildPlayStrip();
+    }
+    for (int i = 0; i < playStrip.getChildCount(); i++) {
+      View c = playStrip.getChildAt(i);
+      Object tag = c.getTag();
+      boolean cur = tag instanceof Integer && (Integer) tag == playIndex;
+      c.setBackground(cur ? bg(0x99000000, 4, PAPER, 1) : bg(0x33000000, 4, 0, 0));
+      if (cur) {
+        int target = c.getLeft() - (playStripScroll.getWidth() - c.getWidth()) / 2;
+        playStripScroll.smoothScrollTo(Math.max(0, target), 0);
+      }
+    }
+  }
+
+  private void rebuildPlayStrip() {
+    if (playStrip == null) return;
+    playStrip.removeAllViews();
+    playStripStamp++;
+    playStripAnchor = playIndex;
+    int lo = Math.max(0, playIndex - 10);
+    int hi = Math.min(playList.size(), playIndex + 11);
+    for (int i = lo; i < hi; i++) {
+      ImageView c = new ImageView(this);
+      c.setScaleType(ImageView.ScaleType.CENTER_CROP);
+      LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(36), dp(36));
+      lp.setMargins(dp(3), dp(3), dp(3), dp(3));
+      c.setLayoutParams(lp);
+      c.setTag(i);
+      c.setOnClickListener(
+          v -> {
+            if (!(v.getTag() instanceof Integer)) return;
+            int j = (Integer) v.getTag();
+            if (j == playIndex) return;
+            if (Math.abs(j - playIndex) == 1) {
+              animatePlayTo(j);
+            } else {
+              playIndex = j; // far jump: cut; the preview decode fills in right away
+              showPlayed();
+            }
+          });
+      playStrip.addView(c);
+      loadPlayStripThumb(c, playList.get(i).image);
+    }
+  }
+
+  private void loadPlayStripThumb(ImageView image, File file) {
+    final int stamp = playStripStamp;
+    files.execute(
+        () -> {
+          if (stamp != playStripStamp || !image.isAttachedToWindow()) return;
+          Bitmap bitmap = store.thumbnail(file, 200);
+          runOnUiThread(
+              () -> {
+                if (!isDestroyed() && stamp == playStripStamp && image.isAttachedToWindow())
+                  image.setImageBitmap(bitmap);
+                else if (bitmap != null) bitmap.recycle();
+              });
+        });
   }
 
   private void deletePlayed() {
