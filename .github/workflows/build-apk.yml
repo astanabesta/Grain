@@ -89,8 +89,11 @@ jobs:
             [ -s "$dst" ] && [ "$(stat -c %s "$dst")" -ge "$minsz" ] && return 0
             for base in "${mirrors[@]}"; do
               for attempt in 1 2 3; do
+                # --speed-* aborts a stalled trickle; --max-time caps a whole attempt
                 if curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
-                    --connect-timeout 20 -o "$dst.part" "$base/$relpath"; then
+                    --connect-timeout 20 --max-time 180 \
+                    --speed-limit 51200 --speed-time 20 \
+                    -o "$dst.part" "$base/$relpath"; then
                   if [ "$minsz" -gt 0 ] && [ "$(stat -c %s "$dst.part")" -lt "$minsz" ]; then
                     echo "truncated from $base/$relpath — retrying"
                   else
