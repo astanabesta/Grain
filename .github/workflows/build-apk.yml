@@ -69,6 +69,26 @@ jobs:
         with:
           path: ~/grain-signing/grain.keystore
           key: grain-signing-v2-${{ github.repository_id }}
+      - name: Prefetch Robolectric android-all jars (IPv4, retried)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The test JVM sometimes fails to fetch these from Maven Central on the runner
+          # (IOException in Robolectric's MavenArtifactFetcher). Pull them ourselves first:
+          # forced IPv4, retries, and a clear error if Central is unreachable.
+          base="https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented"
+          m2="$HOME/.m2/repository/org/robolectric/android-all-instrumented"
+          for ver in 13-robolectric-9030017-i7 14-robolectric-10818077-i7; do
+            mkdir -p "$m2/$ver"
+            for ext in jar pom jar.sha512 pom.sha512; do
+              f="android-all-instrumented-$ver.$ext"
+              if [ -s "$m2/$ver/$f" ]; then continue; fi
+              echo "fetching $f"
+              curl -4 -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+                --connect-timeout 20 -o "$m2/$ver/$f" "$base/$ver/$f"
+            done
+          done
+          ls -la "$m2"/*/*
       - name: Unit tests, lint, and installable release APK
         shell: bash
         env:
