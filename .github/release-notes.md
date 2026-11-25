@@ -3,7 +3,17 @@
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
 
-### What's new in v0.9.44 — smooth gallery swipe
+### What's new in v0.9.45 — swipe inside the gallery too
+
+- **The gallery photo page swipes now.** MENU → gallery → tap a photo: drag that photo left or
+  right to step to the previous/next one — the same drag-follow feel as the viewer (momentum,
+  edge rubber-band, tap the side zones), and neighbours are pre-decoded so the swap never flashes
+  black.
+- The photo's details below the image (name, save/share, receipt, delete) follow the swipe — each
+  step rebinds the page to the new photo.
+- Vertical drags still scroll the page as before; the PLAY viewer keeps its v0.9.44 smooth swipe.
+
+### Previously in v0.9.44 — smooth gallery swipe
 
 - **The photo viewer finally swipes like a gallery should.** The old viewer held a single image:
   a fling cleared the screen to **black**, decoded the next photo, then popped it in — your finger

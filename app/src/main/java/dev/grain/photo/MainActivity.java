@@ -277,6 +277,19 @@ public final class MainActivity extends ComponentActivity
   private boolean counting;
   private boolean gallerySelectMode;
   private final java.util.Set<String> gallerySelectedIds = new java.util.LinkedHashSet<>();
+  // Gallery detail: a three-window swipe pager over galleryList (drag-follow, like PLAY).
+  private final List<PhotoStore.Photo> galleryList = new ArrayList<>();
+  private int galleryIndex = -1;
+  private ImageView detailPrev, detailCur, detailNext;
+  private final Bitmap[] detailBmp = new Bitmap[3]; // 0 prev, 1 current, 2 next
+  private final File[] detailFile = new File[3];
+  private final boolean[] detailFull = new boolean[3];
+  private int detailShownIndex = -1; // photo index whose window is built (-1 = nothing yet)
+  private float detailDragX; // track offset from rest, px
+  private boolean detailDragging, detailAxisDecided, detailAxisVertical;
+  private float detailDragStartX, detailDragStartY, detailDragBase;
+  private VelocityTracker detailVel;
+  private android.animation.ValueAnimator detailSettle;
   private final List<PhotoStore.Photo> pendingDelete = new ArrayList<>();
   private LinearLayout snackbar;
   private Runnable purgeTask;
@@ -3643,6 +3656,15 @@ public final class MainActivity extends ComponentActivity
 
   private void closePanel() {
     galleryStamp++;
+    cancelDetailSettle();
+    if (detailVel != null) {
+      detailVel.recycle();
+      detailVel = null;
+    }
+    detailDragging = false;
+    detailPrev = null;
+    detailCur = null;
+    detailNext = null;
     gallerySelectMode = false;
     gallerySelectedIds.clear();
     setDarkSystemBars(false);
@@ -4223,6 +4245,8 @@ public final class MainActivity extends ComponentActivity
       return;
     }
     java.util.List<PhotoStore.Photo> photos = store.list();
+    galleryList.clear();
+    galleryList.addAll(photos); // order the detail pager steps through
     if (photos.isEmpty()) {
       gallerySelectMode = false;
       gallerySelectedIds.clear();
@@ -4493,6 +4517,12 @@ public final class MainActivity extends ComponentActivity
 
   private void showPhoto(PhotoStore.Photo photo) {
     galleryStamp++;
+    galleryIndex = indexOfGallery(photo);
+    int delta = detailShownIndex >= 0 ? galleryIndex - detailShownIndex : 0;
+    if (delta == 1 || delta == -1) rotateDetailWindow(delta); // neighbours come along for free
+    detailShownIndex = galleryIndex;
+    detailDragX = 0f;
+    cancelDetailSettle();
     openPanel(
         "A moment, kept.",
         photo.metadata.optString("ratio")
@@ -4504,11 +4534,32 @@ public final class MainActivity extends ComponentActivity
     LinearLayout body = column();
     body.setPadding(dp(20), dp(8), dp(20), dp(20));
     panelScroll.addView(body);
-    ImageView image = new ImageView(this);
-    image.setScaleType(ImageView.ScaleType.FIT_CENTER);
-    image.setAdjustViewBounds(true);
-    body.addView(image, new LinearLayout.LayoutParams(-1, dp(420)));
-    loadImage(image, photo.image, 1400);
+    // Three-window swipe stage: prev / current / next, drag-follow like PLAY. At rest it looks
+    // exactly like the old single FIT_CENTER image; the neighbours only matter while dragging.
+    FrameLayout stage =
+        new FrameLayout(this) {
+          @Override
+          public boolean performClick() { // keeps ClickableViewAccessibility quiet
+            return super.performClick();
+          }
+        };
+    detailPrev = new ImageView(this);
+    detailPrev.setScaleType(ImageView.ScaleType.FIT_CENTER);
+    detailNext = new ImageView(this);
+    detailNext.setScaleType(ImageView.ScaleType.FIT_CENTER);
+    detailCur = new ImageView(this);
+    detailCur.setScaleType(ImageView.ScaleType.FIT_CENTER);
+    stage.addView(detailPrev, new FrameLayout.LayoutParams(-1, -1));
+    stage.addView(detailNext, new FrameLayout.LayoutParams(-1, -1));
+    stage.addView(detailCur, new FrameLayout.LayoutParams(-1, -1));
+    detailPrev.setImageBitmap(detailBmp[0]);
+    detailCur.setImageBitmap(detailBmp[1]);
+    detailNext.setImageBitmap(detailBmp[2]);
+    detailCur.addOnLayoutChangeListener(
+        (v, l, t2, r, b, ol, ot, or, ob) -> renderDetailPager());
+    attachDetailGestures(stage);
+    body.addView(stage, new LinearLayout.LayoutParams(-1, dp(420)));
+    ensureDetailWindow();
     JSONObject r = photo.metadata.optJSONObject("recipe");
     TextView name = text(r == null ? "Photo" : r.optString("name"), 27, INK);
     name.setTypeface(Typeface.SERIF);
@@ -4555,6 +4606,288 @@ public final class MainActivity extends ComponentActivity
         button("View capture receipt", 12, () -> showJson("Capture receipt", photo.metadata)));
     body.addView(button("Delete photo", 11, ORANGE, () -> delete(photo)));
     body.addView(button("‹ Back to photos", 12, this::showGallery));
+  }
+
+  // ─────────────────── gallery detail swipe pager ───────────────────
+
+  private int indexOfGallery(PhotoStore.Photo photo) {
+    for (int i = 0; i < galleryList.size(); i++)
+      if (galleryList.get(i).id.equals(photo.id)) return i;
+    // Stale list (first use, or photos changed): rebuild from disk.
+    galleryList.clear();
+    galleryList.addAll(store.list());
+    for (int i = 0; i < galleryList.size(); i++)
+      if (galleryList.get(i).id.equals(photo.id)) return i;
+    return -1;
+  }
+
+  private ImageView detailSlotView(int slot) {
+    return slot == 0 ? detailPrev : slot == 1 ? detailCur : detailNext;
+  }
+
+  private float detailXFor(int index) {
+    int w = detailCur != null ? detailCur.getWidth() : 0;
+    return -index * (float) Math.max(1, w);
+  }
+
+  private void renderDetailPager() {
+    if (detailPrev == null || detailCur == null || detailNext == null) return;
+    int w = Math.max(1, detailCur.getWidth());
+    detailPrev.setTranslationX(-w + detailDragX);
+    detailCur.setTranslationX(detailDragX);
+    detailNext.setTranslationX(w + detailDragX);
+    detailPrev.setVisibility(galleryIndex > 0 ? View.VISIBLE : View.GONE);
+    detailNext.setVisibility(galleryIndex < galleryList.size() - 1 ? View.VISIBLE : View.GONE);
+  }
+
+  private void setDetailTrackPos(float x) {
+    detailDragX = x;
+    renderDetailPager();
+  }
+
+  private float rubberDetail(float raw) {
+    float max = 0f;
+    float min = detailXFor(Math.max(0, galleryList.size() - 1));
+    if (raw > max) return max + (raw - max) * 0.32f;
+    if (raw < min) return min + (raw - min) * 0.32f;
+    return raw;
+  }
+
+  /** Drag / fling / edge-tap / vertical-scroll arbitration for the detail stage. */
+  @android.annotation.SuppressLint("ClickableViewAccessibility") // performClick lives on the stage
+  private void attachDetailGestures(FrameLayout stage) {
+    stage.setOnTouchListener(
+        (v, e) -> {
+          int act = e.getActionMasked();
+          if (act == MotionEvent.ACTION_DOWN) {
+            cancelDetailSettle(); // grab mid-animation where it is
+            detailDragging = false;
+            detailAxisDecided = false;
+            detailAxisVertical = false;
+            detailDragStartX = e.getX();
+            detailDragStartY = e.getY();
+            detailDragBase = detailDragX;
+            if (v.getParent() != null) v.getParent().requestDisallowInterceptTouchEvent(true);
+            if (detailVel == null) detailVel = VelocityTracker.obtain();
+            detailVel.clear();
+            detailVel.addMovement(e);
+            return true;
+          }
+          if (act == MotionEvent.ACTION_MOVE) {
+            if (detailVel != null) detailVel.addMovement(e);
+            if (!detailAxisDecided) {
+              float dx = e.getX() - detailDragStartX;
+              float dy = e.getY() - detailDragStartY;
+              float slop = ViewConfiguration.get(this).getScaledTouchSlop();
+              if (Math.abs(dx) > slop || Math.abs(dy) > slop) {
+                detailAxisDecided = true;
+                if (Math.abs(dx) <= Math.abs(dy)) {
+                  // Vertical: hand the gesture back to the panel scroll.
+                  detailAxisVertical = true;
+                  if (v.getParent() != null)
+                    v.getParent().requestDisallowInterceptTouchEvent(false);
+                }
+              }
+            }
+            if (detailAxisDecided && !detailAxisVertical) {
+              if (e.getPointerCount() > 1) {
+                detailDragging = false;
+                animateDetailTo(galleryIndex);
+                return true;
+              }
+              float dx = e.getX() - detailDragStartX;
+              if (!detailDragging
+                  && Math.abs(dx) > ViewConfiguration.get(this).getScaledTouchSlop()) {
+                detailDragging = true;
+                cancelDetailSettle();
+                detailDragBase = detailDragX;
+              }
+              if (detailDragging) setDetailTrackPos(rubberDetail(detailDragBase + dx));
+            }
+            return true;
+          }
+          // UP / CANCEL
+          boolean up = act == MotionEvent.ACTION_UP;
+          float vx = 0f;
+          if (detailVel != null) {
+            if (up) {
+              detailVel.computeCurrentVelocity(1000); // px/s
+              vx = detailVel.getXVelocity();
+            }
+            detailVel.recycle();
+            detailVel = null;
+          }
+          if (detailDragging) {
+            detailDragging = false;
+            if (up) endDetailDrag(vx);
+            else animateDetailTo(galleryIndex);
+          } else if (up && !detailAxisDecided && galleryIndex >= 0) {
+            // Tap: side zones step prev/next; the middle does nothing (page is full of controls).
+            int w = detailCur != null ? detailCur.getWidth() : 0;
+            if (w > 0 && e.getX() < w * 0.18f) animateDetailTo(galleryIndex - 1);
+            else if (w > 0 && e.getX() > w * 0.82f) animateDetailTo(galleryIndex + 1);
+          }
+          if (up) v.performClick();
+          return true;
+        });
+  }
+
+  /** Drag release: project with velocity, commit at most one page (the window holds ±1). */
+  private void endDetailDrag(float v) {
+    if (galleryList.isEmpty()) return;
+    float projected = detailDragX + v * 0.14f;
+    int w = Math.max(1, detailCur != null ? detailCur.getWidth() : 1);
+    int target = Math.round(-projected / w);
+    if (target == galleryIndex) {
+      float rest = detailXFor(galleryIndex);
+      if (Math.abs(detailDragX - rest) > dp(2)) {
+        target = galleryIndex + (detailDragX < rest ? 1 : -1);
+      }
+    }
+    target = Math.max(galleryIndex - 1, Math.min(galleryIndex + 1, target));
+    animateDetailTo(target);
+  }
+
+  private void animateDetailTo(int target) {
+    if (galleryList.isEmpty()) return;
+    target = Math.max(0, Math.min(galleryList.size() - 1, target));
+    cancelDetailSettle();
+    float from = detailDragX;
+    float to = detailXFor(target);
+    if (detailCur == null || detailCur.getWidth() <= 1 || Math.abs(from - to) < 0.5f) {
+      finishDetailSettle(target);
+      return;
+    }
+    detailSettle = android.animation.ValueAnimator.ofFloat(from, to);
+    detailSettle.setDuration(340);
+    detailSettle.setInterpolator(new android.view.animation.DecelerateInterpolator(2.1f));
+    detailSettle.addUpdateListener(a -> setDetailTrackPos((float) a.getAnimatedValue()));
+    final int end = target;
+    detailSettle.addListener(
+        new android.animation.AnimatorListenerAdapter() {
+          @Override
+          public void onAnimationEnd(android.animation.Animator a) {
+            if (detailSettle == a) {
+              detailSettle = null;
+              finishDetailSettle(end);
+            }
+          }
+        });
+    detailSettle.start();
+  }
+
+  private void finishDetailSettle(int target) {
+    detailDragX = 0f;
+    if (!"detail".equals(page)) {
+      renderDetailPager();
+      return;
+    }
+    if (target != galleryIndex && target >= 0 && target < galleryList.size()) {
+      showPhoto(galleryList.get(target)); // rebuild the page; the rotated window keeps it flash-free
+    } else {
+      renderDetailPager();
+    }
+  }
+
+  private void cancelDetailSettle() {
+    if (detailSettle == null) return;
+    // Listeners first: a cancelled settle must never commit a target the user grabbed.
+    detailSettle.removeAllUpdateListeners();
+    detailSettle.removeAllListeners();
+    detailSettle.cancel();
+    detailSettle = null;
+  }
+
+  /** Steps the decoded bitmaps one slot on a ±1 move so the swipe never re-decodes mid-flight. */
+  private void rotateDetailWindow(int delta) {
+    if (delta == 1) {
+      detailBmp[0] = detailBmp[1];
+      detailFile[0] = detailFile[1];
+      detailFull[0] = detailFull[1];
+      detailBmp[1] = detailBmp[2];
+      detailFile[1] = detailFile[2];
+      detailFull[1] = detailFull[2];
+      detailBmp[2] = null;
+      detailFile[2] = null;
+      detailFull[2] = false;
+    } else if (delta == -1) {
+      detailBmp[2] = detailBmp[1];
+      detailFile[2] = detailFile[1];
+      detailFull[2] = detailFull[1];
+      detailBmp[1] = detailBmp[0];
+      detailFile[1] = detailFile[0];
+      detailFull[1] = detailFull[0];
+      detailBmp[0] = null;
+      detailFile[0] = null;
+      detailFull[0] = false;
+    }
+  }
+
+  private void clearDetailSlot(int slot) {
+    detailBmp[slot] = null;
+    detailFile[slot] = null;
+    detailFull[slot] = false;
+    ImageView v = detailSlotView(slot);
+    if (v != null) v.setImageDrawable(null);
+  }
+
+  /** Fills a slot when the window wants a photo it isn't already showing. */
+  private void wantDetailSlot(int slot, int idx) {
+    File want = idx >= 0 && idx < galleryList.size() ? galleryList.get(idx).image : null;
+    if (want == null) {
+      clearDetailSlot(slot);
+      return;
+    }
+    if (want.equals(detailFile[slot]) && detailBmp[slot] != null) return;
+    clearDetailSlot(slot);
+    detailFile[slot] = want;
+    decodeDetailPhoto(idx, slot, false); // fit-size preview lands first…
+  }
+
+  /** The ±1 window, plus the current slot's full-resolution upgrade (posted last). */
+  private void ensureDetailWindow() {
+    if (!"detail".equals(page) || galleryList.isEmpty() || detailCur == null) return;
+    int n = galleryList.size();
+    wantDetailSlot(0, galleryIndex > 0 ? galleryIndex - 1 : -1);
+    wantDetailSlot(1, galleryIndex);
+    wantDetailSlot(2, galleryIndex < n - 1 ? galleryIndex + 1 : -1);
+    if (detailFile[1] != null && !detailFull[1]) {
+      decodeDetailPhoto(galleryIndex, 1, true); // …then the sharp decode upgrades it in place
+    }
+  }
+
+  /**
+   * One decode for the detail window. A task aborts when a newer showPhoto()/closePanel() bumps
+   * {@link #galleryStamp}, so a stale job never queues ahead of the photo on screen.
+   */
+  private void decodeDetailPhoto(int idx, int slot, boolean full) {
+    if (idx < 0 || idx >= galleryList.size()) return;
+    final File want = galleryList.get(idx).image;
+    final int stamp = galleryStamp;
+    filesUi.execute(
+        () -> {
+          if (stamp != galleryStamp) return; // window moved on: decode for nobody
+          Bitmap bitmap = store.thumbnail(want, full ? 1400 : 700);
+          runOnUiThread(
+              () -> {
+                if (bitmap == null) return;
+                ImageView view = detailSlotView(slot);
+                boolean keep =
+                    "detail".equals(page)
+                        && stamp == galleryStamp
+                        && view != null
+                        && view.isAttachedToWindow()
+                        && want.equals(detailFile[slot])
+                        && (full || detailBmp[slot] == null);
+                if (!keep) {
+                  bitmap.recycle();
+                  return;
+                }
+                detailBmp[slot] = bitmap;
+                if (full) detailFull[slot] = true;
+                view.setImageBitmap(bitmap);
+              });
+        });
   }
 
   private void delete(PhotoStore.Photo photo) {
