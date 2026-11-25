@@ -69,26 +69,54 @@ jobs:
         with:
           path: ~/grain-signing/grain.keystore
           key: grain-signing-v2-${{ github.repository_id }}
-      - name: Prefetch Robolectric android-all jars (IPv4, retried)
+      - name: Prefetch Robolectric android-all jars (mirrors, retried)
         shell: bash
         run: |
-          set -euo pipefail
-          # The test JVM sometimes fails to fetch these from Maven Central on the runner
-          # (IOException in Robolectric's MavenArtifactFetcher). Pull them ourselves first:
-          # forced IPv4, retries, and a clear error if Central is unreachable.
-          base="https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented"
+          set -uo pipefail
+          # The runner's JVM sometimes fails to fetch these from Maven Central (Robolectric's
+          # MavenArtifactFetcher throws IOException), and Central itself has been flaky for
+          # runners. Pull them ourselves first — several mirrors, retries, size sanity — so the
+          # test JVM finds them locally.
+          rel="org/robolectric/android-all-instrumented"
           m2="$HOME/.m2/repository/org/robolectric/android-all-instrumented"
+          mirrors=(
+            "https://repo1.maven.org/maven2"
+            "https://repo.maven.apache.org/maven2"
+            "https://maven-central.storage-download.googleapis.com/maven2"
+          )
+          fetch() { # $1 = relative path under the mirror, $2 = destination, $3 = min size (0 = any)
+            local relpath="$1" dst="$2" minsz="$3" base attempt
+            [ -s "$dst" ] && [ "$(stat -c %s "$dst")" -ge "$minsz" ] && return 0
+            for base in "${mirrors[@]}"; do
+              for attempt in 1 2 3; do
+                if curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
+                    --connect-timeout 20 -o "$dst.part" "$base/$relpath"; then
+                  if [ "$minsz" -gt 0 ] && [ "$(stat -c %s "$dst.part")" -lt "$minsz" ]; then
+                    echo "truncated from $base/$relpath — retrying"
+                  else
+                    mv "$dst.part" "$dst"
+                    return 0
+                  fi
+                fi
+                sleep $((attempt * 3))
+              done
+            done
+            rm -f "$dst.part"
+            return 1
+          }
           for ver in 13-robolectric-9030017-i7 14-robolectric-10818077-i7; do
             mkdir -p "$m2/$ver"
             for ext in jar pom jar.sha512 pom.sha512; do
               f="android-all-instrumented-$ver.$ext"
-              if [ -s "$m2/$ver/$f" ]; then continue; fi
-              echo "fetching $f"
-              curl -4 -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
-                --connect-timeout 20 -o "$m2/$ver/$f" "$base/$ver/$f"
+              # the two jars are ~150 MB each; anything smaller is a truncated download
+              minsz=0; [ "$ext" = jar ] && minsz=100000000
+              if ! fetch "$rel/$ver/$f" "$m2/$ver/$f" "$minsz"; then
+                echo "::error title=Robolectric prefetch::all mirrors failed for $f"
+                exit 1
+              fi
+              echo "have $f ($(stat -c %s "$m2/$ver/$f") bytes)"
             done
           done
-          ls -la "$m2"/*/*
       - name: Unit tests, lint, and installable release APK
         shell: bash
         env:
