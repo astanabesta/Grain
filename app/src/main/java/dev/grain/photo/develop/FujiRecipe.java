@@ -700,14 +700,15 @@ public final class FujiRecipe {
 
   /**
    * Noir: Grain's original high-contrast black and white. Acros with the +R filter for dark skies,
-   * DR400 headroom for bright highlights, strong clarity and heavy large grain.
+   * the menu's maximum-contrast tone (Highlight -2 / Shadow +4) so it never reads as a Tri-X twin,
+   * DR400 headroom for bright highlights, max clarity and heavy large grain.
    */
   public static final FujiRecipe NOIR =
       new Builder("noir", "Noir", "Grain", "an original Grain recipe", "ACROS", "Acros")
           .dynamicRange(DynamicRange.DR400)
           .whiteBalance(WhiteBalance.AUTO, 0, 0)
-          .tone(1, 2)
-          .detail(1, -4, 4)
+          .tone(-2, 4)
+          .detail(1, -4, 5)
           .grain(2, true)
           .colorChrome(2, 0)
           .filter(2)

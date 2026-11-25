@@ -132,11 +132,11 @@ public class ExposureAndRecipeTest {
     assertEquals("ACROS", noir.filmSimulation);
     assertTrue(noir.monochrome());
     assertEquals(FujiRecipe.DynamicRange.DR400, noir.dynamicRange);
-    assertEquals(1.0, noir.highlight, 1e-6);
-    assertEquals(2.0, noir.shadow, 1e-6);
+    assertEquals(-2.0, noir.highlight, 1e-6);
+    assertEquals(4.0, noir.shadow, 1e-6);
     assertEquals(1, noir.sharpness);
     assertEquals(-4, noir.noiseReduction);
-    assertEquals(4, noir.clarity);
+    assertEquals(5, noir.clarity);
     assertEquals(2, noir.grainRoughness);
     assertTrue(noir.grainLarge);
     assertEquals(2, noir.monoFilter); // +R

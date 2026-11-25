@@ -3,7 +3,17 @@
 - **Android (`Grain-vVERSION.apk`):** Install directly via **MENU → SET UP → APP UPDATE** (on `v0.8.9+`) or download **`Grain-vVERSION.apk`** below and tap once to update in-place (keeps all LUTs, recipes, tunings, and photos). Still the lean build — ~5.4 MB, everything fully offline.
 - **iOS (`Grain-iOS-vVERSION.ipa` — Free Sideload):** unchanged this round (sideload instructions as before).
 
-### What's new in v0.9.42 — Noir + Aura recipes, and the black preview on return is fixed
+### What's new in v0.9.43 — Noir gets its own look: maximum-contrast Acros
+
+- **Noir is retuned so it no longer reads as a Tri-X twin.** The first Noir shipped with a tone
+  curve one step away from Kodak Tri-X 400 — and slightly *flatter* in the shadows — so on neutral
+  scenes both black-and-white recipes developed to nearly the same photo. Noir now runs the
+  Fujifilm menu's maximum-contrast grade: **Highlight −2, Shadow +4, Clarity +5** (Tri-X is
+  0 / +3 / +4), on top of its +R filter and DR400 headroom — brighter whites, deeper blacks, and
+  clearly its own look on any scene. All values stay real Fujifilm menu settings; the published
+  Tri-X recipe is untouched.
+
+### Previously in v0.9.42 — Noir + Aura recipes, and the black preview on return is fixed
 
 - **Noir** — Grain's original high-contrast black and white: Acros with the +R filter, DR400
   headroom, crushed blacks, bright highlights and heavy large grain. Developed from RAW with
